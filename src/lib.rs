@@ -1157,6 +1157,21 @@ impl Harness {
         agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
+    /// 主循环要的那份**只读快照**（票 15 的接线用）：这一场叫什么、用哪个模型与档位、
+    /// 有哪些技能、目标是什么。
+    ///
+    /// 会话的 `Harness` 一旦交给宿主表的 task，主循环就不能再直接问它 —— 而解析每一次提交都
+    /// 要这几样。所以装好之后取一份，`/model` 之后重建一份。
+    pub fn front_facts(&self) -> crate::session::FrontFacts {
+        crate::session::FrontFacts {
+            id: self.session.id().clone(),
+            model: self.model().to_owned(),
+            effort: self.effort().map(|effort| effort.as_str().to_owned()),
+            skills: self.skill_names().into_iter().map(str::to_owned).collect(),
+            goal: self.current_goal(),
+        }
+    }
+
     /// 把这场会话**此刻**的五样事实补成一条完整快照（`.scratch/session-tab/spec.md` §2、票 18）。
     ///
     /// 每次装载之后补一条：`SessionStarted` 那五格是开场那一刻的值。

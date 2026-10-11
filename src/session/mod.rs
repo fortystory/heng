@@ -26,7 +26,10 @@ pub mod titles;
 
 pub use attach::{AttachCheck, StreamHealth};
 pub use facts::SessionFacts;
-pub use host::{HostEntry, SessionCommand, SessionHost, SessionState, SessionTurn};
+pub use host::{
+    FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost, SessionState, SessionTurn,
+    TurnActor,
+};
 pub use ledger::DayLedger;
 pub use listing::{SessionListing, SessionMark, SessionRow, sessions};
 pub use store::{SessionStore, StoredSession, new_session_id};

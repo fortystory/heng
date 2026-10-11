@@ -49,6 +49,22 @@ pub enum SessionTurn {
     Injected,
 }
 
+/// 前台会话的**只读快照**：主循环解析一次提交要的那几样。
+///
+/// 它存在的理由：会话的 [`Harness`] 一旦交给宿主表的 task，主循环就不能再直接问它 —— 而
+/// 「这一场叫什么、用哪个模型、有哪些技能、目标是什么」是解析每一次提交都要的。于是装好之后
+/// 取一份快照，需要的时刻（`/model` 之后）再取一次。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontFacts {
+    pub id: SessionId,
+    pub model: String,
+    /// 推理档位；`None` 是「默认」那一档。
+    pub effort: Option<String>,
+    pub skills: Vec<String>,
+    /// 正在推进的目标名。
+    pub goal: Option<String>,
+}
+
 /// 主循环能对一场会话做的事 —— **只有三个**（决策票 04 §3）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionCommand {
@@ -58,6 +74,42 @@ pub enum SessionCommand {
     Cancel,
     /// 关闭并结束 task。
     Close,
+}
+
+/// 每场会话的那个**动作解释器**。
+///
+/// 宿主自己认识 `Cancel` 与 `Close`，其余命令都交给它办 —— 而 `Turn` 只是其中一种。之所以
+/// 要这一层：会话级手势（换模型、装技能正文、撤销、记命令、跑一场讨论、目标循环）都要
+/// `Config`、`ConsoleHandle`、`GoalSetup` 这些**进程级**的东西，而库层不认识它们。于是 task
+/// 拿一个盒子，命令交给它办，而状态转换仍由宿主自己管（它持有 `watch` 的发送端）。
+///
+/// 默认的实现是 [`TurnActor`]：只跑回合。cli 那一侧会换上一个更全的。
+#[async_trait::async_trait]
+pub trait SessionActor: Send {
+    /// 办一条命令。`Cancel` 与 `Close` 不会到达这里。
+    async fn act(&mut self, harness: &mut Harness, command: SessionCommand);
+}
+
+/// 默认的动作解释器：只会跑一次动作（一句提示 / 一个裸技能 / 一次注入）。
+///
+/// 它是单会话今天的全部行为，也是 [`SessionHost::adopt`] 的缺省。
+pub struct TurnActor;
+
+#[async_trait::async_trait]
+impl SessionActor for TurnActor {
+    async fn act(&mut self, harness: &mut Harness, command: SessionCommand) {
+        let SessionCommand::Turn(start) = command else {
+            return;
+        };
+        let outcome = match start {
+            SessionTurn::Prompt(text) => harness.run_turn(&text).await,
+            SessionTurn::Skill(name) => harness.run_skill(&name).await,
+            SessionTurn::Injected => harness.run_injected_turn().await,
+        };
+        if let Err(error) = outcome {
+            harness.notice(&format!("heng: {error}"));
+        }
+    }
 }
 
 /// 宿主表拒绝一次操作的理由。
@@ -109,7 +161,7 @@ impl SessionHost {
     /// `cwd` 由调用方给：表里记的是这一场的工作目录，而它不必等于进程的 cwd（票 18 的装载路径
     /// 会让两者分开）。
     pub fn adopt(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
-        self.adopt_with(harness, cwd, false)
+        self.adopt_with(harness, cwd, false, Box::new(TurnActor))
     }
 
     /// 同上，但这是一场**只读预览**（票 18 的第二档损坏流）。
@@ -117,14 +169,16 @@ impl SessionHost {
     /// 只读不是一个第四态：三态照旧，表里只多一个标志 —— 凡写流的一律禁（提交、所有 `/`
     /// 命令、`Shift+Tab`、页内改名、新建），各回一句。
     pub fn adopt_read_only(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
-        self.adopt_with(harness, cwd, true)
+        self.adopt_with(harness, cwd, true, Box::new(TurnActor))
     }
 
-    fn adopt_with(
+    /// 同上，但换一个动作解释器 —— cli 那一侧走这条（会话级手势都在那边）。
+    pub fn adopt_with(
         &mut self,
         harness: Harness,
         cwd: PathBuf,
         read_only: bool,
+        mut actor: Box<dyn SessionActor>,
     ) -> Result<(), HostError> {
         let id = harness.session_id().clone();
         if self.contains(&id) {
@@ -137,23 +191,17 @@ impl SessionHost {
             let mut harness = harness;
             while let Some(command) = cmd_rx.recv().await {
                 match command {
-                    SessionCommand::Turn(start) => {
+                    // 取消走既有的手势：信号是每场一份的，所以它只停这一场。
+                    SessionCommand::Cancel => harness.cancel_signal().cancel(),
+                    SessionCommand::Close => break,
+                    other => {
+                        // 状态由宿主自己管：解释器只负责把这条命令办完。
                         let _ = state_tx.send(SessionState::RunningTurn);
-                        let outcome = match start {
-                            SessionTurn::Prompt(text) => harness.run_turn(&text).await,
-                            SessionTurn::Skill(name) => harness.run_skill(&name).await,
-                            SessionTurn::Injected => harness.run_injected_turn().await,
-                        };
-                        if let Err(error) = outcome {
-                            harness.notice(&format!("heng: {error}"));
-                        }
+                        actor.act(&mut harness, other).await;
                         // 一场「等在一个人答」的动作（票 22）会在中间把状态置成
                         // `AwaitingHuman`；回到 `Idle` 是它收尾之后的事。
                         let _ = state_tx.send(SessionState::Idle);
                     }
-                    // 取消走既有的手势：信号是每场一份的，所以它只停这一场。
-                    SessionCommand::Cancel => harness.cancel_signal().cancel(),
-                    SessionCommand::Close => break,
                 }
             }
         });

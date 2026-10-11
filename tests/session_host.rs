@@ -8,12 +8,13 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use heng::events::{EventPayload, SessionId, SpeakerId, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::StreamEvent;
 use heng::render::{RenderSinks, Renderer};
-use heng::session::host::{SessionCommand, SessionHost, SessionState, SessionTurn};
+use heng::session::host::{SessionActor, SessionCommand, SessionHost, SessionState, SessionTurn};
 use heng::tools::{PathLocks, builtin};
 use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
@@ -307,4 +308,68 @@ async fn a_loaded_session_can_be_given_a_fresh_facts_snapshot() {
             .any(|event| matches!(event.payload, EventPayload::SessionFactsChanged { .. })),
         "装载之后补的那一条快照落在流上：{events:?}"
     );
+}
+
+/// 一个记账用的解释器：把到达的命令记下来，并且**自己**跑一次 `Turn`
+/// （缺省的 `TurnActor` 干的就是这一件事）。
+struct RecordingActor {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl SessionActor for RecordingActor {
+    async fn act(&mut self, harness: &mut Harness, command: SessionCommand) {
+        let label = match &command {
+            SessionCommand::Turn(_) => "turn".to_owned(),
+            other => format!("{other:?}"),
+        };
+        self.seen
+            .lock()
+            .unwrap()
+            .push(format!("{}:{label}", harness.session_id()));
+        if let SessionCommand::Turn(SessionTurn::Prompt(text)) = command {
+            let _ = harness.run_turn(&text).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_host_hands_commands_to_the_actor_that_owns_the_session() {
+    // 解释器拿到的 harness 就是这一场：它报得出自己的 id，也真的能把回合跑完。
+    let dir = tempfile::tempdir().unwrap();
+    let hosted = session(dir.path(), "s-1", vec![Reply::text("收到")]).await;
+    let log_path = hosted.log_path.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt_with(
+        hosted.harness,
+        hosted.cwd,
+        false,
+        Box::new(RecordingActor {
+            seen: Arc::clone(&seen),
+        }),
+    )
+    .unwrap();
+
+    let id = SessionId::new("s-1");
+    host.get(&id).unwrap().cmd.send(turn("你好")).await.unwrap();
+    wait_for_text(&log_path, "收到").await;
+    assert_eq!(seen.lock().unwrap().as_slice(), ["s-1:turn"]);
+}
+
+#[tokio::test]
+async fn the_front_facts_snapshot_carries_what_the_loop_parses_with() {
+    // 主循环解析每一次提交都要这几样，而装好之后 `Harness` 就归 task 了 —— 于是先取一份。
+    let dir = tempfile::tempdir().unwrap();
+    let hosted = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let facts = hosted.harness.front_facts();
+    assert_eq!(facts.id.as_str(), "s-1");
+    assert_eq!(facts.model, "fake-model");
+    assert_eq!(facts.effort, None, "没给档位就是「默认」那一档");
+    assert!(
+        facts.skills.is_empty(),
+        "临时工作区里没有技能：{:?}",
+        facts.skills
+    );
+    assert_eq!(facts.goal, None);
 }
