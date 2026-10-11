@@ -411,12 +411,15 @@ impl Regions {
     /// 横向与主列左缘对齐 —— 宽度是 [`Self::menu_width`]，所以光标那一列不再左右移动它；跟着光标
     /// 走的是**纵向**。它**向上**开 —— 输入区在屏幕脚下，所以有地方的是那一侧 —— 只有在上面什么
     /// 都放不下时才落到光标下面。两边都放不下时是 `None`，那是在那么小的终端上诚实的答案。
+    ///
+    /// 高度是内容行加上上下那两条边（[`MENU_CHROME_ROWS`]）：两侧没有边，所以左右两端是**列**上
+    /// 满的，文字起在主列左缘那一列上（票 11）。
     pub fn menu(&self, anchor: Placed, rows: u16) -> Option<Rect> {
         let width = self.menu_width();
         if rows == 0 || width < MENU_MIN_WIDTH {
             return None;
         }
-        let height = rows.saturating_add(BORDER_COLUMNS);
+        let height = rows.saturating_add(MENU_CHROME_ROWS);
         let cursor_y = self.input.y.saturating_add(anchor.row);
         let top = self.main.y;
         let y = if cursor_y.saturating_sub(top) >= height {
@@ -760,3 +763,9 @@ pub const MENU_MAX_ROWS: u16 = 12;
 /// 菜单的宽度是整个对话区（[`Regions::menu_width`]），于是这条判的是**终端**有多窄 —— 窄到对话区
 /// 装不下这个形状时，不画比画一个框占满屏幕诚实。
 const MENU_MIN_WIDTH: u16 = 12;
+
+/// `/` 菜单那两条边各占几行：**上下各一行**（票 11 之后两侧没有边）。
+///
+/// 它曾经借 [`BORDER_COLUMNS`]，而那个常数说的是**列** —— 四边各一列。行数与列数碰巧都是 2，
+/// 借来用会把两笔账混成一处，于是这里自己写一个名字。
+const MENU_CHROME_ROWS: u16 = 2;

@@ -8761,6 +8761,25 @@ fn chrome_block() -> WidgetBlock<'static> {
         .border_style(Style::default().fg(palette::CHROME))
 }
 
+/// 记号菜单自己的框：**只有上下两条** `┄`，两侧不画线（票 11，`.scratch/tui-feedback/spec.md` §11）。
+///
+/// 它不是 [`chrome_block`]：那一套四边俱全、四个空角，是问卷覆盖层、详情覆盖层与文件查看器共用的。
+/// 菜单横跨整个对话区之后（票 10），两侧那两列竖线成了整宽里唯一还对不齐的两列 —— 去掉之后，
+/// 候选名起的那一列就是转录与输入区正文起的那一列，菜单读起来是**正文的一段**，不是一个套在
+/// 正文上的盒子。
+///
+/// 上下那两条虚线与框色照旧：它于是仍读作同一种「浮在正文之上」的东西，而不是另一套语法。
+fn menu_block() -> WidgetBlock<'static> {
+    WidgetBlock::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_set(border::Set {
+            horizontal_top: "┄",
+            horizontal_bottom: "┄",
+            ..border::EMPTY
+        })
+        .border_style(Style::default().fg(palette::CHROME))
+}
+
 /// 问题被问出来时所在的覆盖层（spec §9）。
 ///
 /// 它坐在主列中间，这样问题不会被新输出甩在后面，而且它**不是**转录的一部分：流上仍然带着
@@ -10004,10 +10023,10 @@ fn draw_menu(
         .max()
         .unwrap_or(0);
     // 框多宽由布局定，而且是**整个对话区**那么宽（[`layout::Regions::menu_width`]，票 10）——
-    // 菜单于是与它浮着的那一行输入区左右对齐，不再是一块随候选长短漂的浮层。这里只据此算出内容
-    // 宽度：左右各一列边框，行尾那一列「不碰边框」的留白是 [`menu_row`] 自己的事。
+    // 菜单于是与它浮着的那一行输入区左右对齐，不再是一块随候选长短漂的浮层。左右没有边（票 11），
+    // 所以内容宽度就是它整个宽度；[`menu_row`] 自己留行尾那一列，不让字贴着主列右缘。
     let width = panes.menu_width();
-    let inner = width.saturating_sub(2) as usize;
+    let inner = width as usize;
     let Some(area) = panes.menu(anchor, room as u16) else {
         return;
     };
@@ -10022,8 +10041,17 @@ fn draw_menu(
         .collect();
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
-    frame.render_widget(chrome_block(), area);
-    frame.render_widget(Paragraph::new(rows), layout::inner(area));
+    frame.render_widget(menu_block(), area);
+    // 内容那一块：上边之下、下边之上，左右铺满（[`layout::inner`] 会四边各缩一格，而这里两侧没有边）。
+    frame.render_widget(
+        Paragraph::new(rows),
+        Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(2),
+        ),
+    );
 }
 
 /// 一行菜单：`/名字` 或 `@路径`，补齐到名字列宽，然后是描述。
@@ -10053,13 +10081,15 @@ fn menu_row(
     };
     let tail = if fits { entry.description.as_str() } else { "" };
 
-    // 开头一列内边距，然后是这一行，然后是剩下的部分 —— 于是文字永远不碰边框，而高亮盖住整行。
-    let body = truncate_columns(&format!("{head}{tail}"), inner.saturating_sub(1));
+    // 这一行**从菜单那一列起、铺到那一列止**（票 11）：两侧没有边框，于是左右各留一列「不碰边框」
+    // 的空白就失去了它的由来 —— 留着它，候选名会比转录正文右移一列，那正是这一票要消掉的那点
+    // 错位。
+    let body = truncate_columns(&format!("{head}{tail}"), inner);
     // 整行截断之后，名字与描述的分界仍在同一个地方：`head` 没被截断时它整个是 `body` 的前缀，
     // 被截断时它已经把这一行占满、描述一个字都没进来。
-    let shown_head = truncate_columns(&head, inner.saturating_sub(1));
+    let shown_head = truncate_columns(&head, inner);
     let shown_tail = &body[shown_head.len().min(body.len())..];
-    let padding = inner.saturating_sub(1 + text_columns(&body));
+    let padding = inner.saturating_sub(text_columns(&body));
 
     let name_style = if selected {
         Style::default().add_modifier(Modifier::REVERSED)
@@ -10074,7 +10104,7 @@ fn menu_row(
         Style::default().fg(palette::PLAIN)
     };
     Line::from(vec![
-        Span::styled(format!(" {shown_head}"), name_style),
+        Span::styled(shown_head, name_style),
         Span::styled(shown_tail.to_owned(), plain),
         Span::styled(" ".repeat(padding), plain),
     ])

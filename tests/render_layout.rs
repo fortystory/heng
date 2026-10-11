@@ -89,6 +89,31 @@ fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     (0..height).map(|y| row_text(&frame, y, width)).collect()
 }
 
+/// 一条画出 [`buffer`] 与 [`screen`] 两样东西。
+///
+/// 菜单开没开这种判据要读几何（上下那两条虚线），而失败消息仍然要贴一段屏幕文本 —— 于是要几何
+/// 的那些测试拿这一对，而不是先 `screen()` 再画一遍。
+fn framed(width: u16, height: u16, state: &mut TuiState) -> (Buffer, String) {
+    let frame = buffer(width, height, state);
+    let text = screen_text(&frame, width, height);
+    (frame, text)
+}
+
+/// 一帧缓冲的全文，诊断消息里贴它。
+fn screen_text(frame: &Buffer, width: u16, height: u16) -> String {
+    (0..height)
+        .map(|y| row_text(frame, y, width))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 那一帧里记号菜单立着没有：装着 `needle` 的那块区域在不在（见 [`menu_frame`]）。
+///
+/// 它是几何判据，不是「屏幕上还有没有那个名字」—— 候选名也会出现在草稿与转录里。
+fn menu_is_open(frame: &Buffer, width: u16, height: u16, needle: &str) -> bool {
+    menu_frame(frame, width, height, needle).is_some()
+}
+
 /// 某一行的文本，取它在帧里两列之间的那一段。
 ///
 /// 一个宽字素会盖住它后面那一格，而那一格在后端缓冲里是一个空格；
@@ -3946,18 +3971,24 @@ fn every_overlay_shares_one_chrome_frame_with_empty_corners() {
         "按钮行归焦点色"
     );
 
-    // `/` 菜单：同一个框。
+    // `/` 菜单：同一套 `┄` 与同一个框色，但**只有上下两条**（票 11）—— 它横跨整个对话区，
+    // 两侧不画竖线，于是文字起在主列左缘那一列上。
     let mut menu = state();
     install_catalog(&mut menu);
     menu.key(Key::Char('/'));
     let _ = screen(120, 24, &mut menu);
     let frame = buffer(120, 24, &mut menu);
-    let (left, top, _) = overlay_frame(&frame, 120, 24).expect("菜单的框");
-    assert_eq!(frame[(left, top)].symbol(), " ", "角是空的");
+    let (left, top, width, _) = menu_frame(&frame, 120, 24, "/undo").expect("菜单的虚线");
     assert_eq!(
         frame[(left + 1, top)].fg,
         palette::CHROME,
-        "菜单也是同一个框色"
+        "菜单的虚线也是同一个框色"
+    );
+    assert_ne!(frame[(left, top + 1)].symbol(), "┆", "左边没有竖线");
+    assert_ne!(
+        frame[(left + width - 1, top + 1)].symbol(),
+        "┆",
+        "右边也没有竖线"
     );
 }
 
@@ -4929,34 +4960,64 @@ fn awaiting_line(state: &mut TuiState) -> tokio::sync::oneshot::Receiver<Option<
     line
 }
 
-/// `/` 菜单把它的框画在哪：`(x, y, width, height)`。
+/// 那一行上**最长**的一段连续 `┄`（首列与末列）。
 ///
-/// 从缓冲里找，跟上面那些边框断言的做法一样：装着
-/// `needle` 的那一行，在它左边是框的左边框，然后是它的角。
-fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16, u16, u16) {
-    let row = (0..height)
-        .find(|y| row_text(frame, *y, width).contains(needle))
-        .unwrap_or_else(|| panic!("{needle:?} 在屏幕上"));
-    let text = row_text(frame, row, width);
-    // 列号**不是**字节号：这一行里的中文一个字三字节，于是 `find` 的偏移会比它所在的列大出
-    // 一截。菜单变宽之后（票 09）描述整句落进这一行，按字节当列号取坐标会直接跑到屏幕外面。
-    let column = text_columns(&text[..text.find(needle).unwrap()]) as u16;
-    let x = (0..column)
-        .rev()
-        .find(|c| frame[(*c, row)].symbol() == "┆")
-        .expect("菜单的左边框");
+/// 取最长而不是最右：左栏的页签条与菜单铺在**同一屏的同一批行**上 —— 菜单覆盖主列，左栏照旧
+/// 画它自己的横线 —— 于是「这一行最右的一段虚线」在菜单内部那些行上是左栏的，不是菜单的。
+fn dashed_run(frame: &Buffer, y: u16, width: u16) -> Option<(u16, u16)> {
+    fn wider(candidate: (u16, u16), best: (u16, u16)) -> (u16, u16) {
+        if candidate.1 - candidate.0 > best.1 - best.0 {
+            candidate
+        } else {
+            best
+        }
+    }
+    let mut best: Option<(u16, u16)> = None;
+    let mut open: Option<u16> = None;
+    for x in 0..width {
+        if frame[(x, y)].symbol() == "┄" {
+            open.get_or_insert(x);
+        } else if let Some(first) = open.take() {
+            best = Some(best.map_or((first, x - 1), |b| wider((first, x - 1), b)));
+        }
+    }
+    if let Some(first) = open {
+        best = Some(best.map_or((first, width - 1), |b| wider((first, width - 1), b)));
+    }
+    best
+}
+
+/// `/` 菜单那块区域画在哪：`(x, y, width, height)`，它没画时是 `None`。
+///
+/// 判据是两条：**装着 `needle` 的那一行上下各有一条虚线行**，且那两行的虚线**同起同止**。
+///
+/// 它曾经靠「needle 左边那个 `┆`」定位：左右两条竖线一去，竖线与角都没了，`overlay_frame`
+/// 那套「两端是空角」的判据也不再成立（那条 helper 是给带框的覆盖层用的）。
+///
+/// 于是「菜单没开」的那些用例必须挑一个**不在草稿里**的名字当 needle —— 草稿自己也有那个
+/// 名字时，`needle 上面那条虚线` 就是输入区上方的横线，判据会把草稿那一行当成菜单。
+fn menu_frame(
+    frame: &Buffer,
+    width: u16,
+    height: u16,
+    needle: &str,
+) -> Option<(u16, u16, u16, u16)> {
+    let row = (0..height).find(|y| row_text(frame, *y, width).contains(needle))?;
+    // needle 落在**输入区第一行**上时这条判据给不出答案：那正是草稿，而草稿上面那条虚线是输入区
+    // 上方的横线、下面那条是提示行上方的横线 —— 两者同起同止，看起来正像一对菜单的边（菜单关着
+    // 而草稿里恰好有那个名字时就发生）。
+    if row as usize == input_row(width, height) {
+        return None;
+    }
     let top = (0..row)
         .rev()
-        .find(|y| frame[(x + 1, *y)].symbol() == "┄")
-        .expect("菜单的上边框");
-    let bottom = (row..height)
-        .find(|y| frame[(x + 1, *y)].symbol() == "┄")
-        .expect("菜单的下边框");
-    let right = (x..width)
-        .rev()
-        .find(|c| frame[(*c, top)].symbol() == "┄")
-        .expect("菜单的右上角");
-    (x, top, right - x + 2, bottom - top + 1)
+        .find(|y| dashed_run(frame, *y, width).is_some())?;
+    let (first, last) = dashed_run(frame, top, width)?;
+    // 下面那条必须与上面那条**同起同止**，且从下一行开始找：菜单盖住的是主列，同一屏的那些行上
+    // 左栏照旧画它自己的横线（页签条），而左栏那一段比菜单短得多。
+    let bottom =
+        ((row + 1)..height).find(|y| dashed_run(frame, *y, width) == Some((first, last)))?;
+    Some((first, top, last - first + 1, bottom - top + 1))
 }
 
 /// 草稿打在哪一行：输入框的第一行。
@@ -5026,7 +5087,7 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
 
     // 它是浮着的 —— 框、边框全都浮着 —— 在它所属的输入区上面。
     let frame = buffer(120, 24, &mut state);
-    let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
+    let (_, top, _, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     assert!(height >= 3, "是一个框，不是一行：高 {height}");
     assert!(
         top as usize + height as usize <= input_row(120, 24),
@@ -5108,7 +5169,7 @@ fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
         "描述整句都在屏幕上：\n{}",
         rows.join("\n")
     );
-    let (_, _, width, _) = menu_box(&frame, 200, 24, "/demo");
+    let (_, _, width, _) = menu_frame(&frame, 200, 24, "/demo").expect("菜单在屏幕上");
     assert!(
         width > 74,
         "菜单宽过旧上限（74 = 旧上限 72 加两条边框），实际 {width}"
@@ -5135,7 +5196,7 @@ fn the_menu_spans_the_whole_conversation_column() {
 
         // 那一帧自己的输入区 —— 菜单要对齐的是**这一次**排版算出来的那个矩形，不是记住的常数。
         let regions = plan(Rect::new(0, 0, columns, 24), 1, true);
-        let (x, _, width, _) = menu_box(&frame, columns, 24, "/undo");
+        let (x, _, width, _) = menu_frame(&frame, columns, 24, "/undo").expect("菜单在屏幕上");
         assert_eq!(
             x, regions.input.x,
             "{columns} 列下菜单的左边就是对话区的左边"
@@ -5188,8 +5249,11 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
     for ch in "zzz".chars() {
         state.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("┆ /"), "没指到东西的前缀没有菜单：\n{text}");
+    let (frame, text) = framed(120, 24, &mut state);
+    assert!(
+        !menu_is_open(&frame, 120, 24, "/undo"),
+        "没指到东西的前缀没有菜单：\n{text}"
+    );
 }
 
 #[test]
@@ -5220,12 +5284,13 @@ fn the_menu_holds_its_column_and_follows_the_cursor_down() {
     install_catalog(&mut state);
     state.key(Key::Char('/'));
     let frame = buffer(120, 24, &mut state);
-    let (before_x, _, before_width, _) = menu_box(&frame, 120, 24, "/undo");
+    let (before_x, _, before_width, _) =
+        menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     assert_eq!(before_x + before_width, 120, "它先横跨整个对话区");
     // 同一个记号里再打一个字，光标往右走一列 —— 框不动，宽度也不动（宽度是布局给的）。
     state.key(Key::Char('a'));
     let frame = buffer(120, 24, &mut state);
-    let (x, _, width, _) = menu_box(&frame, 120, 24, "/ask-matt");
+    let (x, _, width, _) = menu_frame(&frame, 120, 24, "/ask-matt").expect("菜单在屏幕上");
     assert_eq!(x, before_x, "横向不再跟着光标走");
     assert_eq!(width, before_width, "宽度按对话区量，不随候选变");
     // 高度仍由候选数决定：`/a` 只剩一条，窗口从一窗收成一行。
@@ -5233,7 +5298,7 @@ fn the_menu_holds_its_column_and_follows_the_cursor_down() {
     // 纵向照旧贴着光标：草稿多出一行、光标落到第二行的记号上，框的下缘跟着下移一行。
     state.paste("\n/");
     let frame = buffer(120, 24, &mut state);
-    let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
+    let (_, top, _, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     assert_eq!(
         top as usize + height as usize,
         input_row(120, 24) + 1,
@@ -5254,10 +5319,13 @@ fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
         line.try_recv().is_err(),
         "Tab 只补全；它从不把草稿里的东西发出去"
     );
-    let text = screen(120, 24, &mut state).join("\n");
+    let (frame, text) = framed(120, 24, &mut state);
     assert!(text.contains("┆/ask-matt"), "名字在草稿里：\n{text}");
     // 而且补全把菜单关上了，所以后面还能接着打一个任务名。
-    assert!(!text.contains("┆ /ask-matt"), "菜单结束了：\n{text}");
+    assert!(
+        !menu_is_open(&frame, 120, 24, "/ask-matt"),
+        "菜单结束了：\n{text}"
+    );
 }
 
 #[test]
@@ -5340,9 +5408,12 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
 
     // 草稿活下来：`Esc` 关的是菜单，它没有开始把草稿
     // 扔掉，也没有清掉一行长的草稿（spec §6、§7）。
-    let text = screen(120, 24, &mut state).join("\n");
+    let (frame, text) = framed(120, 24, &mut state);
     assert!(text.contains("┆/"), "草稿还在那儿：\n{text}");
-    assert!(!text.contains("┆ /undo"), "菜单不见了：\n{text}");
+    assert!(
+        !menu_is_open(&frame, 120, 24, "/undo"),
+        "菜单不见了：\n{text}"
+    );
     assert!(!text.contains("清空输入"), "什么都没被问：\n{text}");
 }
 
@@ -5385,20 +5456,23 @@ fn a_question_hides_the_menu_because_it_owns_the_keyboard() {
     let (ask, _rx) = ask_permission();
     state.request(ask);
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let (frame, text) = framed(120, 24, &mut state);
     assert!(text.contains("权限询问"), "问句起来了：\n{text}");
     assert!(
-        !text.contains("┆ /undo"),
+        !menu_is_open(&frame, 120, 24, "/undo"),
         "也没有东西在提供回答别的东西的键位：\n{text}"
     );
 }
 
 #[test]
-fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
+fn the_menu_keeps_its_dashed_edges_over_text_that_is_not_ascii() {
     // 一个宽字形占两格，而把一帧差分到终端时第二格会被跳过，
-    // 所以左边框落在那儿的框，过去会丢掉它的
+    // 所以竖边框落在那儿的框，过去会丢掉它的
     // 左上角。被盖住一半的字形改为抹白 —— 半个字形反正也
-    // 画不出来 —— 而框还是一个框。
+    // 画不出来 —— 而上下那两条虚线一条不少。
+    //
+    // 票 11 之后两侧没有竖线了，于是这一条量的是**虚线的两端**：横跨整个对话区，一格都不许
+    // 短 —— 右端顶到主列右缘。
     let mut state = state();
     install_catalog(&mut state);
     for index in 0..40 {
@@ -5407,29 +5481,59 @@ fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
     state.key(Key::Char('/'));
     let _ = screen(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
-    let (x, top, width, height) = menu_box(&frame, 120, 24, "/undo");
-    let (bottom, right) = (top + height - 1, x + width - 1);
-    for y in top..=bottom {
-        // 四个角是空格，横线是虚线，竖线是虚竖线
-        // （`.scratch/tui-visual-language/spec.md` §25）。
-        let (left, rightmost) = if y == top || y == bottom {
-            (" ", " ")
-        } else {
-            ("┆", "┆")
-        };
-        assert_eq!(frame[(x, y)].symbol(), left, "第 {y} 行，左边框");
-        assert_eq!(frame[(right, y)].symbol(), rightmost, "第 {y} 行，右边框");
+    let (x, top, width, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
+    for y in [top, top + height - 1] {
+        for column in x..x + width {
+            assert_eq!(
+                frame[(column, y)].symbol(),
+                "┄",
+                "第 {y} 行第 {column} 列：虚线一条不少"
+            );
+        }
     }
-    assert_eq!(frame[(x + 1, top)].symbol(), "┄", "上边框是虚线");
-    assert_eq!(frame[(x, top + 1)].symbol(), "┆", "左边框接着往下走");
+    // 内容行：候选名起在菜单那一列上 —— 与转录正文同一列（票 11：两侧那两列「不碰边框」的留白
+    // 跟着边框一起退场）。
+    let row = top + 1;
+    assert_eq!(frame[(x, row)].symbol(), "/", "名字起在第一列");
+    assert!(
+        !matches!(frame[(x + width - 1, row)].symbol(), "┆" | "─" | "┘"),
+        "右边也不画竖线：{:?}",
+        frame[(x + width - 1, row)].symbol()
+    );
+}
+
+/// 菜单那块区域里一格竖线都没有（票 11）。
+///
+/// 逐格扫而不是抽查两端：它是**铺满**对话区的一块，两侧不画线之后，竖线只剩一种来路 —— 盖在
+/// 它下面那条左栏分隔线或者转录里的竖线被漏了出来。左栏分隔线在菜单左缘**之外**那一列。
+#[test]
+fn the_menu_draws_no_vertical_border_anywhere() {
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    let _ = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let (x, top, width, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
+    for y in top..top + height {
+        for column in x..x + width {
+            assert_ne!(
+                frame[(column, y)].symbol(),
+                "┆",
+                "第 {y} 行第 {column} 列不该有竖线"
+            );
+        }
+    }
 }
 
 #[test]
 fn there_is_no_menu_before_the_loop_has_said_what_exists() {
     let mut state = state();
     state.key(Key::Char('/'));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("┆ /"), "空清单什么都提供不了：\n{text}");
+    let (frame, text) = framed(120, 24, &mut state);
+    assert!(
+        !menu_is_open(&frame, 120, 24, "/undo"),
+        "空清单什么都提供不了：\n{text}"
+    );
 }
 
 #[test]
@@ -5441,14 +5545,20 @@ fn an_at_opens_a_menu_only_once_a_character_has_been_typed() {
 
     // 裸 `@` 不列候选：命令表只有几十条，「看全部」成立，而文件有几千个，它没有意义。
     state.key(Key::Char('@'));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("┆ @"), "裸 `@` 不画菜单：\n{text}");
+    let (frame, text) = framed(120, 24, &mut state);
+    assert!(
+        !menu_is_open(&frame, 120, 24, "@src/"),
+        "裸 `@` 不画菜单：\n{text}"
+    );
 
     // 打第一个字符才出现，而且只列前缀匹配上的那些 —— 文件与目录都列。
     state.key(Key::Char('s'));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("┆ @src/"), "候选画在菜单里：\n{text}");
-    assert!(text.contains("┆ @src/main.rs"), "文件也在：\n{text}");
+    let (frame, text) = framed(120, 24, &mut state);
+    assert!(
+        menu_is_open(&frame, 120, 24, "@src/"),
+        "候选画在菜单里：\n{text}"
+    );
+    assert!(text.contains("@src/main.rs"), "文件也在：\n{text}");
     assert!(!text.contains("@README.md"), "别的被滤掉了：\n{text}");
 
     // 索引未就绪时同样什么都不显示 —— 预热让它几乎不可能被看见。
@@ -5456,8 +5566,11 @@ fn an_at_opens_a_menu_only_once_a_character_has_been_typed() {
     for ch in "@s".chars() {
         cold.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut cold).join("\n");
-    assert!(!text.contains("┆ @"), "还没有索引就没有候选：\n{text}");
+    let (frame, text) = framed(120, 24, &mut cold);
+    assert!(
+        !menu_is_open(&frame, 120, 24, "@src/"),
+        "还没有索引就没有候选：\n{text}"
+    );
 }
 
 #[test]
@@ -5472,8 +5585,11 @@ fn the_at_menu_finds_a_file_by_a_later_path_segment() {
     for ch in "@cli".chars() {
         state.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("┆ @src/cli.rs"), "菜单里有它：\n{text}");
+    let (frame, text) = framed(120, 24, &mut state);
+    assert!(
+        menu_is_open(&frame, 120, 24, "@src/cli.rs"),
+        "菜单里有它：\n{text}"
+    );
     assert!(!text.contains("@src/main.rs"), "没指到的不列：\n{text}");
 }
 
@@ -5497,14 +5613,14 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
     // `Tab` 把它补进草稿。
     state.key(Key::Down);
     state.key(Key::Tab);
-    let text = screen(120, 24, &mut state).join("\n");
+    let (frame, text) = framed(120, 24, &mut state);
     assert!(text.contains("┆@src/"), "目录补进了草稿：\n{text}");
     assert!(
-        text.contains("┆ @src/main.rs"),
+        menu_is_open(&frame, 120, 24, "@src/main.rs"),
         "菜单接着列这一层：\n{text}"
     );
     assert!(
-        text.contains("┆ @src/render/"),
+        menu_is_open(&frame, 120, 24, "@src/render/"),
         "子目录也在这一层里：\n{text}"
     );
     assert!(
@@ -5519,9 +5635,12 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
         file.key(Key::Char(ch));
     }
     file.key(Key::Tab);
-    let text = screen(120, 24, &mut file).join("\n");
+    let (frame, text) = framed(120, 24, &mut file);
     assert!(text.contains("┆@src/main.rs"), "文件补进了草稿：\n{text}");
-    assert!(!text.contains("┆ @src/map.md"), "菜单关掉了：\n{text}");
+    assert!(
+        !menu_is_open(&frame, 120, 24, "@src/map.md"),
+        "菜单关掉了：\n{text}"
+    );
 
     // 补完之后自带一个**分隔的空格**：接着打就是下一样东西，不会粘在路径上。
     file.key(Key::Char('x'));
@@ -13062,7 +13181,7 @@ fn the_slash_goes_to_search_on_the_trace_page_and_to_the_menu_while_typing() {
     install_catalog(&mut typing);
     typing.key(Key::Char('/'));
     let frame = buffer(120, 24, &mut typing);
-    let (_, top, _, _) = menu_box(&frame, 120, 24, "/undo");
+    let (_, top, _, _) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     assert!(top > 0, "打字时 `/` 弹的是记号菜单");
 
     let mut state = state_with_roster(&["kimi"]);
