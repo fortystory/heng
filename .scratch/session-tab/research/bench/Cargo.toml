@@ -1,0 +1,13 @@
+# 票 03（research：历史会话聚合与列表数据源的事实与成本）的一次性基准。
+# 故意自成一个 workspace，永不并入产品构建；编译产物写进仓库的 .cache/。
+[package]
+name = "agg-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+heng = { path = "../../../.." }
+serde_json = "1"
