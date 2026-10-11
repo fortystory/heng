@@ -319,3 +319,191 @@ fn a_live_event_from_another_session_still_stays_out() {
     let text = screen(120, 24, &mut state);
     assert!(text.contains(wording::TAB_SESSIONS), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// 票 24 — 列表过滤
+// ---------------------------------------------------------------------------
+
+/// 进会话页、交键盘、按 `/` 进过滤，再打一串字符（实时重筛）。
+fn filter_with(state: &mut TuiState, query: &str) {
+    open_sessions(state, 120, 24);
+    state.key(Key::Char('/'));
+    for ch in query.chars() {
+        state.key(Key::Char(ch));
+    }
+}
+
+#[test]
+fn slash_filters_the_list_live_and_the_head_line_becomes_the_filter_line() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "左栏会话页", "alpha", SessionMark::Idle, 1),
+            row("s-b", "改一下左栏", "beta", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    filter_with(&mut state, "beta");
+    let text = screen(120, 24, &mut state);
+
+    assert!(text.contains("改一下左栏"), "命中的那一行还在：{text}");
+    assert!(!text.contains("左栏会话页"), "没命中的那一行走了：{text}");
+    assert!(
+        text.contains(&wording::hit_count(1)),
+        "过滤行右端是命中读数：{text}"
+    );
+    assert!(
+        !text.contains(wording::SESSION_NEW),
+        "过滤行整行占掉页顶，`新建` 让位：{text}"
+    );
+    assert!(
+        !text.contains(wording::SESSION_CLOSE),
+        "`关闭` 也让位：{text}"
+    );
+    // 过滤行左端是 `会话` + 查询串。
+    assert!(text.contains(wording::TAB_SESSIONS), "{text}");
+}
+
+#[test]
+fn the_criteria_are_title_and_group_case_insensitive_with_and() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "左栏会话页", "alpha", SessionMark::Idle, 1),
+            row("s-b", "改一下左栏", "alpha", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    // 大写 + 两个词：组头（alpha）与标题（会话）各中一个，两条各判一次。
+    filter_with(&mut state, "ALPHA 会话");
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains("左栏会话页"), "两个词都中的那一行在：{text}");
+    assert!(!text.contains("改一下左栏"), "只中一个词的不在：{text}");
+    assert!(text.contains(&wording::hit_count(1)), "{text}");
+}
+
+#[test]
+fn an_empty_result_says_it_twice() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![row("s-a", "左栏会话页", "alpha", SessionMark::Idle, 1)],
+        1,
+    );
+    filter_with(&mut state, "没有这个东西");
+    let text = screen(120, 24, &mut state);
+    assert!(
+        text.contains(&wording::hit_count(0)),
+        "过滤行写 `0 个命中`：{text}"
+    );
+    assert!(
+        text.contains(wording::SESSIONS_NO_HIT),
+        "页区写 `没有命中的会话`：{text}"
+    );
+}
+
+#[test]
+fn groups_survive_the_filter_and_empty_ones_are_not_drawn() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "甲组的一场", "alpha", SessionMark::Idle, 2),
+            row("s-b", "乙组的一场", "beta", SessionMark::Idle, 1),
+        ],
+        2,
+    );
+    filter_with(&mut state, "甲组");
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains("alpha"), "命中行的组头还在：{text}");
+    assert!(!text.contains("beta"), "空组的组头不画：{text}");
+    assert!(!text.contains("乙组的一场"), "{text}");
+}
+
+#[test]
+fn enter_accepts_the_filter_and_escape_unwinds_two_layers() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "左栏会话页", "alpha", SessionMark::Idle, 1),
+            row("s-b", "改一下左栏", "beta", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    filter_with(&mut state, "beta");
+    // `Enter`：接受查询、离开输入态 —— 过滤仍然生效。
+    state.key(Key::Enter);
+    let text = screen(120, 24, &mut state);
+    assert!(!text.contains("左栏会话页"), "过滤还生效：{text}");
+    assert!(text.contains("改一下左栏"), "{text}");
+
+    // 已生效但没在输入：这一下 `Esc` 清过滤，键盘**还留在页里**。
+    state.key(Key::Esc);
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains("左栏会话页"), "清过滤之后两条都回来：{text}");
+    assert!(text.contains(wording::TAB_SESSIONS), "页还在：{text}");
+
+    // 再一下才把键盘还给输入区：那之后打字落进草稿。
+    state.key(Key::Esc);
+    state.key(Key::Char('x'));
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains('x'), "键盘回去了，草稿收下了那个字符：{text}");
+}
+
+#[test]
+fn the_filter_gives_up_the_pinned_top() {
+    // 未过滤：前台所在的组钉组顶。过滤生效之后钉顶让位，排序回到 mtime 降序
+    // （决策票 10 §3）。
+    let mut state = fresh();
+    let mut front = row("s-old", "旧的那一场", "alpha", SessionMark::Idle, 30);
+    front.foreground = true;
+    load(
+        &mut state,
+        vec![
+            front,
+            row("s-new", "新的那一场", "beta", SessionMark::Idle, 1),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 120, 24);
+    let plain = screen(120, 24, &mut state);
+    let old_at = plain.lines().position(|line| line.contains("旧的那一场"));
+    let new_at = plain.lines().position(|line| line.contains("新的那一场"));
+    assert!(old_at < new_at, "没过滤时前台那一组钉在顶上：{plain}");
+
+    filter_with(&mut state, "一场");
+    let filtered = screen(120, 24, &mut state);
+    let old_at = filtered
+        .lines()
+        .position(|line| line.contains("旧的那一场"))
+        .expect("命中");
+    let new_at = filtered
+        .lines()
+        .position(|line| line.contains("新的那一场"))
+        .expect("命中");
+    assert!(
+        new_at < old_at,
+        "过滤态下按 mtime 降序，钉顶让位：{filtered}"
+    );
+}
+
+#[test]
+fn the_more_line_still_counts_what_this_page_holds() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "命中甲", "alpha", SessionMark::Idle, 1),
+            row("s-b", "命中乙", "beta", SessionMark::Idle, 2),
+            row("s-c", "别的一场", "gamma", SessionMark::Idle, 3),
+        ],
+        3,
+    );
+    filter_with(&mut state, "命中");
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains(&wording::hit_count(2)), "命中两句：{text}");
+    assert!(!text.contains("别的一场"), "{text}");
+}

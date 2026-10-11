@@ -4739,10 +4739,18 @@ impl TuiState {
                 // 第一行焦点，于是 `↓` 立刻走得动（`.scratch/files-page/spec.md` §5）。
                 // 切到另外两页则把键盘还回去 —— 它们没有能用方向键走的东西。
                 if !questioning {
-                    self.sidebar_keyboard = matches!(tab, Tab::Files | Tab::Changes);
+                    // `会话` 也在名单里：它拿页内键盘（票 17 的键位表）。
+                    self.sidebar_keyboard =
+                        matches!(tab, Tab::Sessions | Tab::Files | Tab::Changes);
                     if self.sidebar_keyboard {
                         // 键盘交给左栏时轨迹页那一层放下 —— 与点页区同一条归还规矩。
                         self.release_trace_keyboard();
+                    }
+                    if tab == Tab::Sessions
+                        && self.sessions.focus.is_none()
+                        && let Some(first) = self.sessions.shown.first()
+                    {
+                        self.sessions.focus = Some(first.id.clone());
                     }
                     if tab == Tab::Files && self.files_page.focus.is_none() {
                         self.files_page.focus = Some(0);
@@ -5993,12 +6001,35 @@ impl TuiState {
             }
             return true;
         }
+        // 过滤的**输入态**：键盘归查询串（决策票 10 §4）。
+        if self
+            .sessions
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.draft.is_some())
+        {
+            match key {
+                // 接受查询并**离开**过滤态；离开之后 `↑`/`↓` + `Enter` 才是「切过去」。
+                Key::Enter => self.accept_sessions_filter(),
+                // 输入态下的 `Esc`：取消这次过滤（丢查询、还原草稿）。
+                Key::Esc => self.cancel_sessions_filter(),
+                Key::Up => self.sessions_move_focus(-1),
+                Key::Down => self.sessions_move_focus(1),
+                other => {
+                    self.editor_key(other);
+                    self.sync_sessions_query();
+                }
+            }
+            return true;
+        }
         match key {
-            Key::Esc => self.sidebar_keyboard = false,
+            Key::Esc => self.sessions_escape(),
             Key::Up => self.sessions_move_focus(-1),
             Key::Down => self.sessions_move_focus(1),
             // 切过去由票 20 接：这一片只把焦点落下来。
             Key::Enter => {}
+            // 页内 `/`：进过滤。页签条仍只走鼠标 —— 这是**页内**键位。
+            Key::Char('/') => self.begin_sessions_filter(),
             Key::Char('r') => {
                 let target = self
                     .sessions
@@ -6017,10 +6048,92 @@ impl TuiState {
         true
     }
 
+    /// `/`：进过滤（入口是**页内**键位，决策票 10 §1）。
+    ///
+    /// 草稿**整份**收起来 —— 退出时原样还回，一个绘制件都不新造。
+    fn begin_sessions_filter(&mut self) {
+        let draft = std::mem::take(&mut self.editor);
+        let query = self
+            .sessions
+            .filter
+            .as_ref()
+            .map(|filter| filter.query.clone())
+            .unwrap_or_default();
+        self.editor.insert_str(&query);
+        let filter = self
+            .sessions
+            .filter
+            .get_or_insert_with(SessionsFilter::default);
+        filter.draft = Some(draft);
+        filter.query = query;
+        filter.retoken();
+        self.sessions.refilter();
+    }
+
+    /// 查询串跟着编辑器走，并**实时重筛**（没有「按了回车才生效」那一档）。
+    fn sync_sessions_query(&mut self) {
+        let query = self.editor.text().to_owned();
+        let Some(filter) = self.sessions.filter.as_mut() else {
+            return;
+        };
+        filter.query = query;
+        filter.retoken();
+        self.sessions.refilter();
+    }
+
+    /// `Enter`：接受查询、离开输入态 —— 过滤**继续生效**，草稿还回输入区。
+    fn accept_sessions_filter(&mut self) {
+        let Some(filter) = self.sessions.filter.as_mut() else {
+            return;
+        };
+        if let Some(draft) = filter.draft.take() {
+            self.editor = draft;
+        }
+    }
+
+    /// 输入态下的 `Esc`：取消这次过滤 —— 查询串与过滤一起丢掉，草稿原样还原。
+    fn cancel_sessions_filter(&mut self) {
+        let Some(filter) = self.sessions.filter.as_mut() else {
+            return;
+        };
+        filter.query.clear();
+        filter.terms.clear();
+        filter.hits.clear();
+        if let Some(draft) = filter.draft.take() {
+            self.editor = draft;
+        }
+        self.sessions.refilter();
+    }
+
+    /// 过滤已生效但没在输入时的那一下 `Esc`：清掉过滤，回到未过滤的列表。
+    fn clear_sessions_filter(&mut self) {
+        self.sessions.filter = None;
+        self.sessions.refilter();
+    }
+
+    /// 会话页上的 `Esc`：一次手势一层（决策票 10 §4）——
+    /// 输入态 → 取消这次过滤；已生效 → 清过滤；都没有 → 把键盘还给输入区。
+    fn sessions_escape(&mut self) {
+        if self
+            .sessions
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.draft.is_some())
+        {
+            self.cancel_sessions_filter();
+            return;
+        }
+        if self.sessions.filter.is_some() {
+            self.clear_sessions_filter();
+            return;
+        }
+        self.sidebar_keyboard = false;
+    }
+
     /// 会话页的焦点往上下走一格。组头不占行下标（它是画出来的整行，不在 `rows` 里），所以
     /// 「跳过组头」是结构性的，不靠额外规则。
     fn sessions_move_focus(&mut self, step: isize) {
-        if self.sessions.rows.is_empty() {
+        if self.sessions.shown.is_empty() {
             self.sessions.focus = None;
             return;
         }
@@ -6028,14 +6141,14 @@ impl TuiState {
             .sessions
             .focus
             .as_ref()
-            .and_then(|id| self.sessions.rows.iter().position(|row| &row.id == id));
-        let last = self.sessions.rows.len() as isize - 1;
+            .and_then(|id| self.sessions.shown.iter().position(|row| &row.id == id));
+        let last = self.sessions.shown.len() as isize - 1;
         let next = match current {
             Some(index) => (index as isize + step).clamp(0, last),
             None if step < 0 => last,
             None => 0,
         };
-        self.sessions.focus = Some(self.sessions.rows[next as usize].id.clone());
+        self.sessions.focus = Some(self.sessions.shown[next as usize].id.clone());
     }
 
     /// 点会话页上的一行：交键盘 + 落焦点（能不能切由票 20 接）。
@@ -6638,9 +6751,11 @@ impl TuiState {
                 self.sessions.rows = listing.rows;
                 self.sessions.total = listing.total;
                 self.sessions.unreadable = listing.unreadable;
+                // 列表换了，过滤后的那一份要跟着重算。
+                self.sessions.refilter();
                 // 焦点按 **会话 id** 保位：重扫之后按 id 找回，不按下标（票 20）。
                 self.sessions.focus =
-                    focus.filter(|id| self.sessions.rows.iter().any(|row| &row.id == id));
+                    focus.filter(|id| self.sessions.shown.iter().any(|row| &row.id == id));
             }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
@@ -8324,6 +8439,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
     let show_groups = height >= 8;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut drawn_rows = 0usize;
     if show_head {
         lines.push(session_head_line(state, &page, wide));
     }
@@ -8333,7 +8449,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
             Style::default().fg(palette::MUTED),
         )));
     } else {
-        let rows = std::mem::take(&mut state.sessions.rows);
+        let rows = std::mem::take(&mut state.sessions.shown);
         let focus = state.sessions.focus.clone();
         let mut last_group: Option<&str> = None;
         for row in &rows {
@@ -8353,13 +8469,18 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 action: HitAction::SessionRow(line),
             });
             lines.push(session_line(row, focus.as_ref(), title_w, time_w, now));
+            drawn_rows += 1;
         }
-        state.sessions.rows = rows;
+        state.sessions.shown = rows;
     }
-    let missing = state
-        .sessions
-        .total
-        .saturating_sub(state.sessions.rows.len());
+    // 「这一页放下多少」：过滤行的命中读数是**筛出多少**，这一行是**放下多少**
+    // （决策票 10 §3）。没过滤时那份「要画的全部」是 store 的总数。
+    let base = if state.sessions.filter.is_some() {
+        state.sessions.shown.len()
+    } else {
+        state.sessions.total
+    };
+    let missing = base.saturating_sub(drawn_rows);
     if missing > 0 {
         lines.push(Line::from(Span::styled(
             wording::session_more(missing),
@@ -8372,9 +8493,12 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
 
 /// 会话页页顶那一行：左端读数、右端两个入口（都 `ACCENT`、都可点）。
 fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'static> {
+    if state.sessions.filter.is_some() {
+        return session_filter_line(state, page);
+    }
     let running = state
         .sessions
-        .rows
+        .shown
         .iter()
         .filter(|row| row.mark == crate::session::listing::SessionMark::Running)
         .count();
@@ -8413,6 +8537,34 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
     }
     let _ = wide;
     Line::from(spans)
+}
+
+/// 过滤态下页顶那一行：左端 `会话` + 查询串，右端命中读数
+/// （`.scratch/session-tab/spec.md` §3、决策票 10 §1）。
+///
+/// 它**整行**占掉页顶那一行，读数与 `新建` / `关闭` 让位 —— 不额外吃页区行，三级降级阶梯
+/// 一字不动。
+fn session_filter_line(state: &TuiState, page: &Rect) -> Line<'static> {
+    let query = state
+        .sessions
+        .filter
+        .as_ref()
+        .map(|filter| filter.query.clone())
+        .unwrap_or_default();
+    let left = format!("{} {query}", wording::TAB_SESSIONS);
+    let right = wording::hit_count(state.sessions.shown.len());
+    let left_w = text_columns(&left) as u16;
+    let right_w = text_columns(&right) as u16;
+    let at = page.width.saturating_sub(right_w);
+    Line::from(vec![
+        Span::styled(
+            wording::TAB_SESSIONS.to_owned(),
+            Style::default().fg(palette::ACCENT),
+        ),
+        Span::styled(format!(" {query}"), Style::default().fg(palette::PLAIN)),
+        Span::raw(" ".repeat(at.saturating_sub(left_w) as usize)),
+        Span::styled(right, Style::default().fg(palette::MUTED)),
+    ])
 }
 
 /// 会话页的一行：标记列 1 + 标题 T + 间隔 1 + 时间 Tw（spec §3）。
@@ -9073,8 +9225,10 @@ struct SessionsPage {
     unreadable: bool,
     /// 空宿主（票 21 填）：宿主表里一场都没有。
     host_empty: bool,
-    /// 过滤态（票 24 填）：空结果那一句因此换成「没有命中的会话」。
-    filtered: bool,
+    /// 过滤态；`None` 就是没在过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
+    filter: Option<SessionsFilter>,
+    /// 这一页**现在要画**的那些行：没过滤时就是 `rows`，过滤时只剩命中的那些（且不钉顶）。
+    shown: Vec<crate::session::listing::SessionRow>,
     /// 焦点行的会话 id。按 **id** 保位 —— 重扫之后按 id 找回，不按下标（票 20）。
     focus: Option<crate::events::SessionId>,
     /// 这一页画出来的矩形（命中的判据：只认真画出来的东西）。
@@ -9088,11 +9242,76 @@ struct SessionsPage {
     rename_draft: Option<String>,
 }
 
+/// 会话页的过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
+///
+/// 它是**进程级**的渲染器状态：过滤的是同一份全局列表，与会话无关 —— 所以不进票 08 那张
+/// `SessionId → 轻状态` 表（与页签选择同类）。
+#[derive(Default)]
+struct SessionsFilter {
+    /// 查询串原文。
+    query: String,
+    /// 空格切出来、转成小写的词。**空词表 = 没有过滤**（与「命中 0 个」不是一回事）。
+    terms: Vec<String>,
+    /// 命中的那些会话 id。
+    hits: std::collections::HashSet<crate::events::SessionId>,
+    /// 搜索模式里收起来的**整份**草稿 —— `Some` 就是「输入区此刻切在会话页的过滤里」。
+    draft: Option<Input>,
+}
+
+impl SessionsFilter {
+    /// 查询串 → 词表：空格分词、大小写不敏感（决策票 10 §2）。
+    fn retoken(&mut self) {
+        self.terms = self
+            .query
+            .split_whitespace()
+            .map(|term| term.to_lowercase())
+            .collect();
+    }
+
+    fn active(&self) -> bool {
+        !self.terms.is_empty()
+    }
+}
+
+/// 判据 = 标题 + 组头目录名，各词 AND（决策票 10 §2）。**不搜 id、不搜消息正文**。
+fn matches_row(row: &crate::session::listing::SessionRow, terms: &[String]) -> bool {
+    let haystack = format!("{} {}", row.title, row.group).to_lowercase();
+    terms.iter().all(|term| haystack.contains(term))
+}
+
 impl SessionsPage {
+    /// 重算「这一页现在要画哪些行」。列表注入与查询串变化都走它。
+    fn refilter(&mut self) {
+        let Some(filter) = self.filter.as_mut() else {
+            self.shown = self.rows.clone();
+            return;
+        };
+        if filter.active() {
+            filter.hits = self
+                .rows
+                .iter()
+                .filter(|row| matches_row(row, &filter.terms))
+                .map(|row| row.id.clone())
+                .collect();
+        } else {
+            filter.hits.clear();
+        }
+        let active = filter.active();
+        let mut shown: Vec<crate::session::listing::SessionRow> = self
+            .rows
+            .iter()
+            .filter(|row| !active || filter.hits.contains(&row.id))
+            .cloned()
+            .collect();
+        // 过滤态下「前台钉顶」让位：排序回到 mtime 降序 + id 兜底（决策票 10 §3）。
+        crate::session::listing::sort_by_time(&mut shown);
+        self.shown = shown;
+    }
+
     /// 焦点那一行，如果有。
     fn focused_row(&self) -> Option<&crate::session::listing::SessionRow> {
         let id = self.focus.as_ref()?;
-        self.rows.iter().find(|row| &row.id == id)
+        self.shown.iter().find(|row| &row.id == id)
     }
 
     /// 页区该写的那一句；`None` 表示有行要画。
@@ -9103,10 +9322,10 @@ impl SessionsPage {
         if self.host_empty {
             return Some(wording::SESSIONS_NONE);
         }
-        if self.filtered && self.rows.is_empty() {
+        if self.filter.is_some() && self.shown.is_empty() {
             return Some(wording::SESSIONS_NO_HIT);
         }
-        if self.rows.is_empty() {
+        if self.shown.is_empty() {
             return Some(wording::SESSIONS_EMPTY);
         }
         None

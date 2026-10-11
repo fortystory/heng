@@ -214,14 +214,24 @@ fn sort_rows(rows: &mut [SessionRow], foreground: &SessionId) {
         pin(a)
             .cmp(&pin(b))
             .then_with(|| front(a).cmp(&front(b)))
-            .then_with(|| match (a.written, b.written) {
-                (Some(left), Some(right)) => right.cmp(&left),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            })
-            .then_with(|| b.id.cmp(&a.id))
+            .then_with(|| compare_by_time(a, b))
     });
+}
+
+/// 只按时间排：mtime 降序 → id 降序兜底 → 读不出 mtime 的最后。
+///
+/// 过滤态下用的就是它 —— 决策票 10 §3 定了「过滤态下取消钉顶」，排序回到这一档。
+pub fn sort_by_time(rows: &mut [SessionRow]) {
+    rows.sort_by(compare_by_time);
+}
+
+fn compare_by_time(a: &SessionRow, b: &SessionRow) -> std::cmp::Ordering {
+    match (a.written, b.written) {
+        (Some(left), Some(right)) => right.cmp(&left).then_with(|| b.id.cmp(&a.id)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => b.id.cmp(&a.id),
+    }
 }
 
 /// 一个 cwd 落在哪个检出家族里：`--git-common-dir` 的绝对路径就是家族键（同一棵检出的所有
