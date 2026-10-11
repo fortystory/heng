@@ -768,40 +768,20 @@ pub enum Gesture {
     DeclineQuestion,
 }
 
-/// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
-pub struct TuiState {
+/// 一场会话的**投影**：由这一场的事件流累积出来的一切，加上构造时注入的两份事实
+/// （[`SessionFacts`] 与发言者配色）。
+///
+/// 判据是「重放这一场的事件流能不能重建出它」：能重建的住这里，重建不出来的
+/// （键盘、鼠标、终端几何、进程意愿、进程级轻状态）留在 [`TuiState`] 本体。
+///
+/// 分块的用处是切换会话：**整块换**这个值，而不是靠一份容易漏字段的 reset 清单
+/// （`.scratch/session-tab/spec.md` §6）。
+pub struct View {
     /// 左栏与状态行显示什么，组装时注入（spec §8）。
     facts: SessionFacts,
-    /// 会话的工作目录与用户的家目录：终端标题那一段路径的两半
-    /// （`.scratch/terminal-title/spec.md` §1）。`home` 由 [`Tui::run`] 读一次传进来，
-    /// 于是 [`TuiState::title`] 是纯函数、测试能钉死。
-    cwd: std::path::PathBuf,
-    home: Option<std::path::PathBuf>,
     /// 正在推进的目标名：从流上那条 `GoalSelected` 留下，`GoalStopped` / `GoalCompleted`
     /// 到了就清掉（spec §6）。目标名本来就被推到前端，只是转录层把它丢了。
     goal: Option<String>,
-    /// 上一次写进终端的那条标题，用来在绘制路径上比对 —— 有它就不必枚举状态来源
-    /// （spec §5）。
-    last_title: Option<String>,
-    /// 举手槽位：有值 = 正在举手，值是它的截止时刻
-    /// （`.scratch/exit-gesture/spec.md` §1）。纯渲染器状态，不进事件流；`should_quit()`
-    /// 只反映 [`TuiState::quit`]。
-    ///
-    /// 槽位只有一个，所以两把手势（退出、退出这次询问）**互斥**是结构性的
-    /// （`.scratch/questionnaire-keys/spec.md` §5）。
-    exit_deadline: Option<std::time::Instant>,
-    /// 槽位里举着的是哪一把。
-    exit_gesture: Gesture,
-    /// 这一把举手是在**忙碌时**举起的吗（spec §1、§3）。
-    ///
-    /// 第一下 `Ctrl-C` 会取消当前回合，而那次取消可能在第二下之前就落地 —— 那时
-    /// `busy()` 已经为假，但人的意图仍然是「打断这次运行、退出」，退出码不该退回 0。
-    /// 举手的出身记在这里，第二下照它分派。
-    exit_gesture_busy: bool,
-    /// 挂起请求：`Ctrl-Z` 置位，[`Tui::run`] 取走并执行「交还终端 → 停住 → 恢复重绘」
-    /// （`.scratch/suspend-gesture/spec.md` §2、§3）。纯渲染器状态，不进事件流，也不经过
-    /// 任何一次性通道。
-    suspend: bool,
     /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
     /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
     /// （`.scratch/todo-and-modes/spec.md` §1）。
@@ -869,65 +849,12 @@ pub struct TuiState {
     /// 括号的分支还留在 [`prefix_style`] 里（它与共享渲染那条路径共用签名），只是到不了屏幕
     /// （`.scratch/trace-in-main/spec.md` §3）。
     trace_tier_width: u16,
-    /// 上一帧画完之后有没有什么东西变了。
-    dirty: bool,
-    /// 草稿与它的光标。
-    editor: Input,
-    /// 工作区里的文件与目录：`@` 的候选，也是「能兑现」那条判据的出处
-    /// （`.scratch/input-tokens/spec.md` §1）。
-    ///
-    /// 会话级的一个值：进 TUI 预热一次、每次提交一条消息之后再扫一次。遍历本身跑在
-    /// `spawn_blocking` 里，索引从不挡住键盘。
-    files: FileIndex,
-    /// 该发一次遍历了吗。预热与提交各置一次，渲染循环取走并真去起那个 blocking 任务 ——
-    /// 于是「什么时候扫」是状态机的事，「怎么扫」是循环的事，测试不必起任务。
-    file_scan_wanted: bool,
-    /// 开头的 `/` 能变成哪些名字，按循环报上来的样子。在那份报告到达之前是空的，这
-    /// 正是 `/` 菜单要等它到了才开的原因。
-    catalog: Vec<CatalogEntry>,
-    /// `/` 菜单的高亮，以及它属于哪个 token。匹配结果本身不保存：它们是草稿与目录的纯
-    /// 函数，所以这里只留那个选择 —— 那是推不出来的。
-    slash: MenuSelection,
     /// 左栏调用量页显示的那些数字，从流上数出来的。
     panel: Panel,
     /// 待办页与它的闩：当时生效的列表（从渲染器已经见过的调用读出），以及这个页签到底
     /// 给不给（`.scratch/todo-and-modes/spec.md` §4）。是渲染器状态，不是事件 —— 重新
     /// 打开的会话靠重放同样的调用把它重建出来。
     todo: crate::render::TodoPanel,
-    /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
-    /// 它随进程一起死（spec §3）。
-    tab: Tab,
-    /// 文件页那一页自己的状态（`.scratch/files-page/spec.md` §1、§5）。
-    ///
-    /// 与 [`Panel`]、[`TodoPanel`] 同一族：一页的状态收在一个值里，而它整个只活在进程内 ——
-    /// 不进事件流、不落盘。
-    files_page: FilesPage,
-    /// 改动页那一页自己的状态（`.scratch/diff-page/spec.md` §2、§4）。
-    ///
-    /// 数据来自渲染器自己在宿主侧跑的 `git status`：不进事件流、不进 `messages`、不过权限门
-    /// 与沙箱（只读、不写盘）。
-    changes: ChangesPage,
-    /// 该发一次 git 取数了吗。与 `file_scan_wanted` **分开一位** —— 两件事的节奏与失败模式
-    /// 不同，共用一位会让一边的失败拖住另一边（§4）。
-    changes_wanted: bool,
-    /// 上一帧左栏页签条的标签行画在哪 —— 「点左栏」把页签条也算进去
-    /// （`.scratch/files-page/spec.md` §5）。
-    tabs_rect: Option<Rect>,
-    /// 键盘交给左栏了吗。
-    ///
-    /// 它与既有的两个「独占键盘的视图」（详情覆盖层、历史重放）同一族，只是不占满屏：立着
-    /// 的时候走树的那几个键归文件页，`Esc` 把键盘还回输入区
-    /// （`.scratch/files-page/spec.md` §5）。
-    sidebar_keyboard: bool,
-    /// 正在显示主列的哪一页：`对话` 还是 `轨迹`（`.scratch/trace-in-main/spec.md` §2）。
-    /// 与 [`TuiState::tab`] 同级：只活在这一次进程里，不落配置，重开回到对话。
-    main_tab: MainTab,
-    /// 用户想不想看见左栏（`Ctrl-O` 切换，`.scratch/sidebar-toggle/spec.md` §1）。
-    ///
-    /// 与选中的页签同级：只活在这一次进程里，重开回到显示，不落配置、不跨会话。它与宽度是
-    /// 两层 —— 这一位说偏好，[`layout::sidebar_tier`] 说可行性 —— 两者相乘才是屏幕上真的有
-    /// 的那一栏。
-    sidebar_wanted: bool,
     /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
     /// 次出现的名字得保住已经发给它的那个槽位。
     colors: SpeakerColors,
@@ -935,16 +862,6 @@ pub struct TuiState {
     /// 循环推一条 `SessionUpdate` 过来，前端并进它自己的显示，不进事件流 ——
     /// 换档是会话属性，不是这一场会话发生过的一件事。
     effort: Option<crate::config::ReasoningEffort>,
-    /// 会话中途换模型/档位的选择器浮层（spec §10）。
-    ///
-    /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
-    /// 选择器是人发起的会话属性，答完要回循环去改这一场会话
-    /// （`.scratch/model-switching/spec.md` §10）。键盘归属按「谁立着谁拿」判。
-    picker: Option<Picker>,
-    /// 提示行上那一句短的说明（spec §12：讨论会话里点状态行那两格）。
-    ///
-    /// 与复制/打开链接那两句回执同一个机制与同一段寿命：提示行一次只留一句最新的。
-    notice: Option<(std::time::Instant, String)>,
     /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
     /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
     /// 上才有（票 02 §1）。
@@ -959,17 +876,6 @@ pub struct TuiState {
     thinking_done: bool,
     /// 回合条的单位与它们的分段头。
     turn_rail: TurnRail,
-    /// 轨迹页持有键盘吗。
-    ///
-    /// 这是仓库里**第四套**「键盘在谁那里」的机制（前三是左栏那个布尔、两页各自的焦点索引、
-    /// 反显的隐式归属），与左栏那一个同形但方向相反：左栏是「点一下交给我、`Esc` 还回去」，
-    /// 轨迹页是**默认持有**，`Esc` 退完三层把它交还给输入区，点账本任何位置再拿回来
-    /// （`.scratch/trace-ledger/spec.md` §4）。
-    ///
-    /// 两个条件都成立才算持有：**主列当前显示的是轨迹页**（这一层是十六层阶梯里第一个读主列
-    /// 页签的）**且**这一位是 `true`。所以它默认为真 —— 它说的是「不处于已交还状态」，重新成为
-    /// 当前显示页时自然回到持有。
-    trace_keyboard: bool,
     /// 轨迹页里键盘认的那**一个块**（`.scratch/trace-ledger/spec.md` §9）。
     ///
     /// 存的是**块身份**而不是位置下标：宽度变化重放会把整本账重推一遍、`CAP` 会把全体下标
@@ -1012,6 +918,1657 @@ pub struct TuiState {
     /// 上一帧轨迹页把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
     /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
     trace_drawn: Drawn,
+    /// 正在读的那一份 diff：读什么，以及它属于哪一次打开
+    /// （`.scratch/diff-page/spec.md` §6）。
+    ///
+    /// 弹窗**先立起来**、正文后到：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许
+    /// 等它（与那三条「一帧里不 await」同一条纪律）。
+    diff_reading: Option<DiffReading>,
+    /// 正在流的正文属于哪个发言者 —— 等待块与流式正文那一行名字用的就是它（正文一完成，
+    /// 名字改由那条源行自己带）。还没有增量时是 `None`，那时用名册的第一个。
+    live_speaker: Option<crate::events::SpeakerId>,
+    /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
+    /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
+    /// 或一次收尾清掉。
+    running_tool: Option<(String, serde_json::Value)>,
+    /// 轨迹页的搜索与过滤态（票 20）。`None` 是「这个会话里还从来没搜过」。
+    ///
+    /// 它按**块身份**记，不存窗格里 —— 于是宽度变化重放之后过滤集原样还在
+    /// （票 20 第 10 条）。也只活在进程内：切会话 / 恢复会话都不持久。
+    trace_search: Option<TraceSearch>,
+    /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
+    trace_index: TraceIndex,
+    /// 轨迹页的**折叠集合**：哪些块收成了一行（票 21 第 9 条）。
+    ///
+    /// 与过滤集同一条纪律：按**块身份**记、存在 `TuiState` 侧、不存窗格里 —— 于是宽度变化
+    /// 那次重放之后原样还在。三档折行共用这一个集合（单位 / 迭代 / 连续工具调用各是里面的
+    /// 一个身份），因为「谁收起来了」只回答一次。
+    folded: std::collections::HashSet<BlockId>,
+    /// 进入全折之前那一份折叠态 —— `{` 存、`}` 还原（票 21 第 6 条）。
+    ///
+    /// 没有它，全展就只能是「清空折叠集合」，而那会把读者自己折的东西一起抹掉。连按两次
+    /// `{` 不覆盖它：否则 `}` 还原出来的就是全折态本身。
+    fold_before_all: Option<std::collections::HashSet<BlockId>>,
+    /// 当前账本上那些**折叠把手**的身份：组头那几行，以及现在画着的几条折行。
+    ///
+    /// 指针要它：一次点击落在一条源行上时，只有这一行是个把手才翻得动折叠，而「这一行是
+    /// 组头 / 折行，还是一条普通块行」在身份表上读不出来（[`TuiState::trace_block_ids`] 只有
+    /// 身份，没有种类）。它与窗格同进同出 —— 重放开始那一刻清空，推一条行时补一格。
+    fold_handles: std::collections::HashSet<BlockId>,
+}
+
+impl View {
+    /// 一场新会话的空投影。`facts` 是这一场的会话事实，配色由它的发言者名册算出来。
+    pub fn new(facts: SessionFacts) -> Self {
+        let colors = SpeakerColors::new(&facts.speaker_order);
+        let mode = facts.mode;
+        Self {
+            facts,
+            colors,
+            mode,
+            goal: None,
+            transcript: Transcript::new(),
+            conversation: Pane::new(),
+            trace: Pane::new(),
+            live: String::new(),
+            painted: Vec::new(),
+            timeline: Timeline::default(),
+            block_at: std::collections::HashMap::new(),
+            in_call: false,
+            turn_calls: 0,
+            turn_usage: Usage::default(),
+            turn_ordinal: 0,
+            turn_totals: Vec::new(),
+            conversation_width: SHARED_RENDER_WIDTH,
+            trace_width: SHARED_RENDER_WIDTH,
+            conversation_flow: Flow::default(),
+            trace_flow: Flow::default(),
+            trace_tier_width: 0,
+            panel: Panel::new(),
+            todo: crate::render::TodoPanel::default(),
+            effort: None,
+            reasoning: String::new(),
+            thinking_speaker: crate::events::SpeakerId::System,
+            thinking_open: false,
+            thinking_done: false,
+            turn_rail: TurnRail::default(),
+            trace_links: std::collections::VecDeque::new(),
+            trace_block_ids: std::collections::VecDeque::new(),
+            trace_selection: None,
+            anchors: Vec::new(),
+            trace_groups: TraceGroups::default(),
+            next_local_id: 0,
+            trace_drawn: Drawn::default(),
+            diff_reading: None,
+            live_speaker: None,
+            running_tool: None,
+            trace_search: None,
+            trace_index: TraceIndex::default(),
+            folded: std::collections::HashSet::new(),
+            fold_before_all: None,
+            fold_handles: std::collections::HashSet::new(),
+        }
+    }
+    /// 开场那一行的注入计数 +1；返回「要不要重画」。
+    fn bump_injections(&mut self, id: BlockId) -> bool {
+        let Some(header) = self.painted.iter_mut().find_map(|painted| match painted {
+            Painted::SectionHeader(header) if header.id == id => Some(header),
+            _ => None,
+        }) else {
+            return false;
+        };
+        header.injections += 1;
+        true
+    }
+
+    /// 直方图上那个工具名 +1；返回「要不要重画那一行」（第一次见到这个名字要）。
+    fn bump_tool_count(&mut self, id: BlockId, name: &str) -> bool {
+        let Some(header) = self.group_header_mut(id) else {
+            return false;
+        };
+        match header.tools.iter_mut().find(|(known, _)| known == name) {
+            Some(entry) => {
+                entry.1 += 1;
+                false
+            }
+            None => {
+                header.tools.push((name.to_owned(), 1));
+                true
+            }
+        }
+    }
+
+    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、跨块排版状态，以及那一份
+    /// 「哪几行是折叠把手」。
+    ///
+    /// 它们必须一起清 —— 都是「按块序列推出来的」那几份账（票 12、16、18、21）。
+    ///
+    /// 组进度（[`Self::trace_groups`]）是这里唯一的例外：它不是清掉，而是照记录序
+    /// **重建**（[`TraceGroups::rebuilt`]）。它也是最容易被漏掉的一份 —— 清掉它、而重放只
+    /// 把组头与小标题那几行画回去，重放之后再到达的一块开场段就会再开一条 `开场`
+    /// （票 18 记下的那条欠账）。
+    fn clear_trace_for_replay(&mut self) {
+        self.trace.clear();
+        self.trace_links.clear();
+        self.trace_block_ids.clear();
+        self.anchors.clear();
+        self.trace_groups = TraceGroups::rebuilt(&self.painted);
+        self.trace_flow = Flow::default();
+        self.fold_handles.clear();
+    }
+
+    /// 那一组在 `at` 那一刻收尾 —— 跨度从此是定稿值。
+    fn close_group(&mut self, id: BlockId, at: DateTime<Utc>) {
+        if let Some(header) = self.group_header_mut(id) {
+            header.span = at.signed_duration_since(header.at).to_std().ok();
+        }
+    }
+
+    /// 账本上第 `index` 个位置是不是被某个**折着的**组盖着。
+    ///
+    /// 只有就地长出来的那一条（还没定稿的思考行）需要问它：别的块到达之后都会按票 21 那次
+    /// 重放对齐，而那一次重放自己知道该收谁 —— 这一条不走重放（增量每秒几十条），所以它
+    /// 自己问一句，免得从一个折行底下漏出来。
+    ///
+    /// 判据就是 [`fold_scopes`] 那一份范围（与折起、展开用的是同一条「哪几块算一段」）。
+    /// 过滤期间折叠整体让位（[`ledger_plan`] 的 `open_everything`），所以这里也放行。
+    fn covered_by_folded(&self, index: usize) -> bool {
+        if self.filtering() {
+            return false;
+        }
+        fold_scopes(&self.painted).into_iter().any(|(scope, line)| {
+            self.folded.contains(&line.id()) && scope.head < index && index < scope.end
+        })
+    }
+
+    /// 这个会话数的是**轮**而不是回合。
+    ///
+    /// 注入而不是推断：讨论就是一个有不止一个讨论者的会话，而这属于组装已经知道的东西
+    /// （spec §4）。
+    fn discussion(&self) -> bool {
+        self.facts.speaker_order.len() > 1
+    }
+
+    /// 只把块排成行推进窗格，不记它 —— 到达时与重放时走的是同一条路。
+    ///
+    /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
+    /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
+    fn emit_block(
+        &mut self,
+        block: &Block,
+        paint: BlockPaint,
+        targets: Targets,
+        replaying: bool,
+    ) -> usize {
+        let BlockPaint {
+            at,
+            tail,
+            id,
+            usage,
+        } = paint;
+        let mut produced = 0;
+        // 详情入口要的那几笔账：这一块什么时候到的、产生它的那次调用的计时、以及它的用量
+        // （票 13 第 6、7 条、票 15）。两个视口画的是同一块，于是共用同一份。
+        let facts = DetailFacts {
+            at: Some(at),
+            timing: timing_of(block),
+            usage,
+        };
+        // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
+        // 收起左栏就是「过程行暂时看不到」，规则只有一个。
+        if targets.conversation && selects(Viewport::Conversation, block) {
+            let width = self.conversation_width;
+            let style = prefix_style(Viewport::Conversation, width);
+            let speaker = block_speaker(block);
+            let is_message = matches!(block, Block::Message { .. });
+            // 同一个人连着说的几段正文只在**第一段**画名字 —— 后面几段由它们前面那个空行
+            // 分段，名字重复出现在屏幕上只是噪音（2026-10-06 维护者，§23）。
+            let carry_name = !is_message
+                || speaker.is_none()
+                || self.conversation_flow.speaker.as_ref() != speaker
+                || !self.conversation_flow.message;
+            let mut lines = paint_block(
+                block,
+                &mut self.colors,
+                width,
+                style,
+                Viewport::Conversation,
+                carry_name,
+                facts,
+            );
+            // 例外一：用户自己的话在**对话视图**里排成一个气泡（`bubble`）。它只在**这里**
+            // 发生：轨迹视图仍左对齐、`plain` 也仍顶格，因为两边都不走这个窗格。
+            if is_user_message(block) {
+                bubble(&mut lines, width, carry_name);
+            }
+            produced = produced.max(lines.len());
+            // 对话页没有账本行号可记：来源面只长在轨迹页的行上。
+            let _ = self.push_view_lines(
+                Viewport::Conversation,
+                speaker,
+                is_message,
+                lines,
+                Some(is_user_message(block)),
+                id,
+            );
+        }
+        if targets.trace && selects(Viewport::Trace, block) {
+            // 组头**长在组的最前面** —— 它先于成员画出去，读的人先看到这一段的界。
+            // 重画时跳过：它已经在清单里，那一条会被 `emit_painted` 画出来。
+            if !replaying {
+                self.note_section_header(block, at, targets, false);
+                self.open_group_headers(block, at, targets, self.discussion());
+            }
+            // 行首那几列归时间戳，所以轨迹内容的排版宽度是主列内容宽减掉它们
+            // （`.scratch/trace-in-main/spec.md` §5）。
+            let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
+            let style = prefix_style(Viewport::Trace, self.trace_tier_width);
+            // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
+            let mut lines = paint_block(
+                block,
+                &mut self.colors,
+                width,
+                style,
+                Viewport::Trace,
+                true,
+                facts,
+            );
+            // 行尾那几段账目：**这次调用自己花了多久**（只有工具块有这一笔），然后是产生它的
+            // 那次调用的用量、或一次发言的合计。放不下时先丢耗时、保用量 —— 行尾是用量的家，
+            // 而耗时是后来者（ADR 0016、票 17 第 1、2 条）。
+            let duration = tool_duration(block);
+            attach_row_tail(lines.last_mut(), duration, tail, width as usize);
+            produced = produced.max(lines.len());
+            let first = self.push_view_lines(
+                Viewport::Trace,
+                block_speaker(block),
+                matches!(block, Block::Message { .. }),
+                stamp_lines(lines, at),
+                Some(is_user_message(block)),
+                id,
+            );
+            // 来源面那条链的两环长在消息上：用户自己说的那句与一次迭代的回复（票 14）。
+            // 位置取这一块**第一条内容行**的账本行号 —— 链要的是「哪一行」，不是这一块
+            // 后来折出了几行。
+            if let (Some(kind), Some(row)) = (anchor_kind(block), first) {
+                self.note_anchor(kind, row);
+            }
+        }
+        // 这一块让当前开着的那一组发生了什么：工具算进直方图，收尾给跨度盖棺。两者都只
+        // **改写组头那一行**（`.scratch/trace-ledger/spec.md` §5）。
+        if targets.trace && !replaying {
+            self.note_group_progress(block, at, targets);
+        }
+        // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
+        // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。回合条只与对话 pane
+        // 平行，所以这条记账只看对话目标在不在，**不看那个块有没有真的画出来**：边界块在
+        // 对话视图里可能一行都不留，而一格照旧要长出来。
+        if targets.conversation && is_boundary(block, self.discussion()) {
+            self.turn_rail.close_unit();
+        }
+        produced
+    }
+
+    /// 重放一条绘制记录。`targets` 说这一趟要把记录喂给谁 —— 宽度没变的那个视口不在里面，
+    /// 它原样留着自己那份内容。
+    fn emit_painted(&mut self, painted: &Painted, targets: Targets, replaying: bool) {
+        match painted {
+            Painted::Block {
+                block,
+                at,
+                id,
+                tail,
+                usage,
+            } => {
+                self.emit_block(
+                    block,
+                    BlockPaint {
+                        at: *at,
+                        tail: *tail,
+                        id: *id,
+                        usage: *usage,
+                    },
+                    targets,
+                    replaying,
+                );
+            }
+            Painted::Thinking {
+                speaker, at, id, ..
+            } => {
+                self.paint_thinking_line(speaker, *at, targets, *id);
+            }
+            Painted::Thought(settled) => {
+                // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
+                // 就地重写那条「正在思考」）。
+                self.paint_settled_thinking(settled, targets, false);
+            }
+            Painted::GroupHeader(header) => {
+                // 重放同样重画整条组头 —— 用的是这份记录里的**定稿值**，于是它与实时路径
+                // 画出来的是同一行（`.scratch/trace-ledger/spec.md` §5）。
+                self.paint_group_header(header, targets, false);
+            }
+            Painted::SectionHeader(header) => {
+                self.paint_section_header(header, targets, false);
+            }
+        }
+    }
+
+    /// 轨迹页此刻在不在过滤态：查询串切得出词来就是（票 20）。
+    ///
+    /// 「命中 0 个」也是过滤态 —— 那时那一行写 `0 个命中`，账本上一块都不剩。
+    fn filtering(&self) -> bool {
+        self.trace_search
+            .as_ref()
+            .is_some_and(|search| !search.terms.is_empty())
+    }
+
+    /// 那一块的**第一条**来源行；已经被上限裁掉、或者还没有画出来，就 `None`。
+    ///
+    /// 这是「块 → 位置」那一步，而窗格只按来源行下标寻址 —— 于是它是
+    /// [`Self::trace_block_ids`] 上的一次线性查找。那张表与窗格**同长同进同出**（`push`
+    /// 报的丢弃数是唯一权威），所以表在就是窗格在，而查到的那一行就是读者会看到的那一行。
+    ///
+    /// **不做以块为键的反向索引**：那张表每次裁剪都要全体左移一张映射，而查找只在读者按键
+    /// 或绘制选中高亮时发生 —— 那是每帧至多一次、长度有上限的线性扫描。
+    ///
+    /// 它是**公共**的，因为「选中那一块」这件事的验收在集成测试里（屏上那一行亮着），
+    /// 而那是后面几轮账本与检索的接缝（`.scratch/trace-ledger/spec.md` §2）。
+    pub fn first_source_of(&self, id: BlockId) -> Option<usize> {
+        self.trace_block_ids.iter().position(|it| *it == Some(id))
+    }
+
+    /// 一条折行通向哪儿。
+    ///
+    /// **连续工具调用那一档**挂**段首那一次调用**的详情：折行替掉的就是它那一行，所以读者
+    /// 点开看到的是这一段从哪儿开始 —— 与它原来那一行同一份构造，标题、配色与各面都不漂。
+    ///
+    /// **开场那一行挂段内第一条注入**：那一段折叠之后只剩一个入口，而「从这一段的第一条
+    /// 看起」与「一个块的第一条源行才是落点」是同一条读法（票 21 第 8 条）。
+    ///
+    /// **一级与二级那两档挂组内第一条能开详情的成员**：一个单位 / 一次迭代今天本身不是一个
+    /// 可读的对象（没有「一个回合」的详情），而折起来之后那一行就是这一组唯一的入口 ——
+    /// 于是它落到往下第一件读得动的东西上。组里可能先有二级头、小标题这些不是对象的行，
+    /// 所以是「往前找第一条真能开的块」；一条都找不到就仍不挂（那是诚实的结果，不是偷懒）。
+    fn fold_line_link(&mut self, line: &FoldLine, records: &[Painted]) -> Option<Detail> {
+        let id = match line {
+            FoldLine::Run { id, .. } => Some(*id),
+            FoldLine::Preamble { first, .. } => Some(*first),
+            FoldLine::Unit { .. } | FoldLine::Iteration { .. } => None,
+        };
+        if let Some(id) = id {
+            let record = records.iter().find(|record| record.id() == id)?;
+            return self.record_detail(record);
+        }
+        // 剩下的两档各代表**一整组**：先找到那条组头，再在它的范围里找第一条能开的成员。
+        let (id, unit_only) = match line {
+            FoldLine::Unit { id, .. } => (*id, true),
+            FoldLine::Iteration { id, .. } => (*id, false),
+            FoldLine::Run { .. } | FoldLine::Preamble { .. } => return None,
+        };
+        let head = records
+            .iter()
+            .position(|record| matches!(record, Painted::GroupHeader(header) if header.id == id))?;
+        let end = next_header_after(records, head, unit_only);
+        records[head + 1..end]
+            .iter()
+            .find_map(|record| self.record_detail(record))
+    }
+
+    /// 把敞开的那条思考行就地冻住：正文的第一个增量意味着模型已经不思考、开始作答了，
+    /// 于是这行定下来（票 02 §1）。
+    fn freeze_thinking(&mut self, at: DateTime<Utc>) {
+        if !self.thinking_open {
+            return;
+        }
+        let text = std::mem::take(&mut self.reasoning);
+        let recorded = !text.is_empty();
+        // 这一刻这次调用还没完，所以计时先留空 —— 那条 `MessageCompleted` 一到就补齐
+        // （[`View::refresh_settled_thinking`]）。编一个半份的读数不如说「还没到」。
+        self.settle_thinking(recorded.then_some(text), at, CallTiming::default());
+    }
+
+    /// 重放清单里那个组头记录的可变引用。
+    fn group_header_mut(&mut self, id: BlockId) -> Option<&mut GroupHeader> {
+        self.painted.iter_mut().find_map(|painted| match painted {
+            Painted::GroupHeader(header) if header.id == id => Some(header),
+            _ => None,
+        })
+    }
+
+    /// 一条记录的身份：流上的东西取信封的行号，渲染层自己造的没有信封，于是 `index` 由
+    /// 渲染层那条单调计数补（[ADR 0021](../../docs/adr/0021-line-identity-comes-from-the-event-envelope.md)）。
+    ///
+    /// `offset` 是**这一批块里的第几个**（一条事件可以产出零个到多个）。流上的那批用批次内的
+    /// 序号 —— 它跟着事件走，所以重放时哪怕块的产出顺序变了，身份仍然指向同一个块。
+    fn next_block_id(&mut self, seq: Option<u64>, offset: u32) -> BlockId {
+        let index = match seq {
+            Some(_) => offset,
+            None => {
+                let index = self.next_local_id;
+                self.next_local_id += 1;
+                index
+            }
+        };
+        BlockId { seq, index }
+    }
+
+    /// 记下账本上这一条**锚**：能当来源面那一环的记录，以及它在账本上的行号（票 14）。
+    ///
+    /// 它只增：链要往上看好几环，而 `CAP` 只挪窗口不挪行号 —— 所以这张表与窗格是**两条**
+    /// 寿命不同的账，各司其职。
+    fn note_anchor(&mut self, kind: AnchorKind, row: usize) {
+        self.anchors.push(Anchor { kind, row });
+    }
+
+    /// 一个块让**当前开着的那一组**发生了什么：工具算进直方图，而收尾事件给跨度盖棺。
+    ///
+    /// 两者都只**改写组头那一行**（`Pane::replace_at`），不重放整本账 —— 于是读的人看到的是
+    /// 「正在跑的这个回合在干什么」，而它在屏上仍然只占一行。
+    fn note_group_progress(&mut self, block: &Block, at: DateTime<Utc>, targets: Targets) {
+        // 工具直方图：一级组收，同类归并。
+        if let Block::Tool(tool) = block {
+            let name = tool.tool.clone();
+            let touched = self.trace_groups.unit.as_ref().map(|unit| unit.header);
+            if let Some(touched) = touched
+                && self.bump_tool_count(touched, &name)
+            {
+                self.redraw_group_header(touched, targets);
+            }
+        }
+        // 收尾：给开着的那几组各记下它到此为止的跨度，于是重放时画的是同一行。
+        // 一级与二级**都**收 —— 迭代的耗时住在它自己的二级头上。
+        if is_boundary(block, self.discussion()) {
+            let closing: Vec<BlockId> = [
+                self.trace_groups.unit.as_ref().map(|open| open.header),
+                self.trace_groups.iteration.as_ref().map(|open| open.header),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            for id in closing {
+                self.close_group(id, at);
+                self.redraw_group_header(id, targets);
+            }
+        }
+    }
+
+    /// 开场与压缩这两段**不属于任何一级组**，所以它们各有自己的小标题。
+    ///
+    /// 开场那条**随注入数增长而就地改写**（用票 12 那个窗格入口），所以读者不用等开场读完
+    /// 才知道它有多大（`.scratch/trace-ledger/spec.md` §5）。
+    ///
+    /// 「`/clear` 之后的那一段」**判不做**：`SessionStarted` 在转录层不产块，于是新会话的第一条
+    /// 可见块与本会话的第一条在块层面**同形** —— 拿不到判据就不画一条猜出来的界。
+    fn note_section_header(
+        &mut self,
+        block: &Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        replaying: bool,
+    ) {
+        if replaying {
+            return;
+        }
+        if matches!(block, Block::History { .. }) {
+            let id = self.next_block_id(None, 0);
+            let header = SectionHeader {
+                id,
+                kind: SectionKind::Compaction,
+                at,
+                injections: 0,
+            };
+            self.paint_section_header(&header, targets, false);
+            self.push_painted(Painted::SectionHeader(header));
+            return;
+        }
+        // 开场段：一个单位还没开出来之前的那些块。压缩已经在上面处理掉了。
+        if self.trace_groups.unit.is_some() || !Self::is_preamble(block) {
+            return;
+        }
+        let injection = matches!(block, Block::ContextInjected { .. });
+        match self.trace_groups.preamble {
+            Some(id) => {
+                if !injection {
+                    return;
+                }
+                if self.bump_injections(id) {
+                    self.redraw_section_header(id, targets);
+                }
+            }
+            None => {
+                let id = self.next_block_id(None, 0);
+                let header = SectionHeader {
+                    id,
+                    kind: SectionKind::Preamble,
+                    at,
+                    injections: u32::from(injection),
+                };
+                self.paint_section_header(&header, targets, false);
+                self.push_painted(Painted::SectionHeader(header));
+                self.trace_groups.preamble = Some(id);
+            }
+        }
+    }
+
+    /// 一块定稿进共享源那一刻建索引（票 20 第 4 条）。
+    ///
+    /// 过滤激活时它顺手回答「这一块进不进过滤集」：命中就把身份收进去，并记一笔新增 ——
+    /// `· 新增 M` 数的就是它（M 是新到达的**块**数，不是行数）。
+    fn note_trace_index(&mut self, id: BlockId, text: String) {
+        let fresh_hit = match self.trace_search.as_ref() {
+            Some(search) if !search.terms.is_empty() => hits_terms(&search.terms, &text),
+            _ => false,
+        };
+        if fresh_hit && let Some(search) = self.trace_search.as_mut() {
+            search.hits.insert(id);
+            search.fresh += 1;
+        }
+        self.trace_index.note(id, text);
+    }
+
+    /// 从流上留一份「现在在推进哪个目标」，给终端标题用（spec §6）。
+    ///
+    /// 以**正在推进**为准：`events::current_goal` 只认最后一条 `GoalSelected`，目标停下
+    /// 之后它仍会返回名字，所以停下与完成这两条都要清。重放走同一个 `apply`，于是
+    /// `--continue` 的目标名自然重建，不需要第二套路径。
+    fn observe_goal(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        match &event.payload {
+            EventPayload::GoalSelected { goal } => self.goal = Some(goal.clone()),
+            EventPayload::GoalStopped { .. } | EventPayload::GoalCompleted { .. } => {
+                self.goal = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
+    fn observe_running_tool(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } => self.running_tool = Some((tool_name.clone(), args.clone())),
+            // 一次调用结束、一个回合结束、一场会话收尾：都说明没有工具在跑了。
+            EventPayload::ToolCallCompleted { .. }
+            | EventPayload::TurnEnded { .. }
+            | EventPayload::SessionEnded { .. } => self.running_tool = None,
+            _ => {}
+        }
+    }
+
+    /// 把这一条事件记进整趟会话的 span 表（票 22 第 7 条）。
+    ///
+    /// 与 [`Self::observe_running_tool`] 同一处形状：事件 → 渲染层自己那份账，而那笔账每帧
+    /// 只被横带读一遍 —— **不重扫 `painted`**，那里的块数随会话线性长。
+    ///
+    /// 只认带信封的事件：两条泳道的边界事件全在流上，而渲染层自己造的那几条（增量、诊断、
+    /// 通知）没有时刻可言。
+    fn observe_timeline(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        let at = event.at;
+        // 每一条事件都是这一趟里的一刻：轴域的两头由它撑开，而 span 只由下面那几类边界事件
+        // 产生（票 22 第 6 条）。
+        self.timeline.observed(at);
+        // 归属取信封上的发言者，与块那一侧同源（`TurnStarted` 的 payload 里那个 agent 是同一
+        // 个人，两个字段不打架）。
+        match &event.payload {
+            EventPayload::TurnStarted { iteration, .. } => {
+                self.timeline
+                    .turn_started(&event.speaker_id, *iteration, at);
+            }
+            // 一个单位收尾：那一次发言的模型段到此为止。
+            EventPayload::TurnEnded { .. } => self.timeline.turn_ended(&event.speaker_id, at),
+            // 讨论会话那一级的单位是轮次，它的头也画一道边界（票 22 第 4 条）。
+            EventPayload::RoundStarted { .. } => self.timeline.round_started(at),
+            EventPayload::RoundEnded { .. } => self.timeline.round_ended(at),
+            // 首 token 那一刻是这一次模型调用的：**用户自己那条消息**没有调用可归，于是它带的
+            // 那个 `None` 与老流同形（ADR 0020）。
+            EventPayload::MessageCompleted {
+                role,
+                first_token_ms,
+                ..
+            } if *role == Role::Assistant => {
+                self.timeline
+                    .message_completed(&event.speaker_id, *first_token_ms);
+            }
+            EventPayload::ToolCallStarted { tool_call_id, .. } => {
+                self.timeline.tool_started(tool_call_id, at);
+            }
+            EventPayload::ToolCallCompleted { tool_call_id, .. } => {
+                self.timeline.tool_completed(tool_call_id, at);
+            }
+            _ => {}
+        }
+    }
+
+    /// 这一批块里要不要**开一个新的一级组 / 一个新迭代**，以及开的那一个要画成什么样。
+    ///
+    /// 组头**长在组的最前面**：它在成员被推出去之前画，所以读的人先看到这一段的界，再看到
+    /// 里面有什么（`.scratch/trace-ledger/spec.md` §5）。
+    fn open_group_headers(
+        &mut self,
+        block: &Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        discussion: bool,
+    ) -> Option<HeaderLevel> {
+        let level = if self.trace_groups.opens_unit(block, discussion) {
+            Some(HeaderLevel::Unit)
+        } else if self.trace_groups.opens_iteration(block, discussion) {
+            Some(HeaderLevel::Iteration)
+        } else {
+            None
+        };
+        let level = level?;
+        // 上一个迭代到此为止 —— 它的耗时到这一刻（`.scratch/trace-ledger/spec.md` §5：
+        // 一次迭代没有自己的行，二级头就是它的行）。
+        if level == HeaderLevel::Iteration
+            && let Some(previous) = self.trace_groups.iteration.as_ref().map(|open| open.header)
+        {
+            self.close_group(previous, at);
+            self.redraw_group_header(previous, targets);
+        }
+        let ordinal = match level {
+            HeaderLevel::Unit => unit_ordinal(&self.trace_groups),
+            HeaderLevel::Iteration => match block {
+                Block::TurnStarted { iteration, .. } => *iteration,
+                _ => 1,
+            },
+        };
+        let id = self.next_block_id(None, 0);
+        let header = GroupHeader {
+            id,
+            level,
+            ordinal,
+            at,
+            span: None,
+            tools: Vec::new(),
+        };
+        // 画它，然后记住它画在哪一行 —— 直方图每来一条长一格，靠的是这个下标。
+        self.paint_group_header(&header, targets, false);
+        self.push_painted(Painted::GroupHeader(header));
+        let open = OpenGroup { header: id };
+        match level {
+            HeaderLevel::Unit => {
+                self.trace_groups.units += 1;
+                self.trace_groups.unit = Some(open);
+            }
+            HeaderLevel::Iteration => self.trace_groups.iteration = Some(open),
+        }
+        Some(level)
+    }
+
+    /// 开出思考行，除非已经有一条开着。它画出了一行时返回 `true`。
+    ///
+    /// 这一行是普通的转录行 —— 它照算窗格的上限，也跟别的一切一起滚 —— 而且刻意**还**
+    /// 不可点：完整 trace 只在 `MessageCompleted` 上才有（票 02 §1）。
+    fn open_thinking(
+        &mut self,
+        speaker: crate::events::SpeakerId,
+        at: DateTime<Utc>,
+        id: BlockId,
+    ) -> bool {
+        if self.thinking_open {
+            return false;
+        }
+        self.thinking_open = true;
+        self.thinking_speaker = speaker.clone();
+        self.reasoning.clear();
+        // 名字打头，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
+        // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
+        //
+        // 这一行马上要长在**账本末尾**，所以它盖不盖在折起来的组底下按最后那一条记录问
+        // （票 21）：增量不触发重放，这一行是唯一会从一个折行底下漏出来的东西。
+        let last = self.painted.len().saturating_sub(1);
+        if !self.covered_by_folded(last) {
+            self.paint_thinking_line(&speaker, at, self.targets(), id);
+        }
+        // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
+        self.push_painted(Painted::Thinking {
+            speaker,
+            at,
+            id,
+            tail: None,
+        });
+        true
+    }
+
+    /// 把一条折行画进轨迹窗格（票 21 第 2、3 条）：它**占一个源行**，而那一行就是那个块
+    /// —— 可选中、`Enter` 开详情、`Space` 展开，身份照 [`Self::push_line`] 记进身份表。
+    ///
+    /// 顺手把它记成**折叠把手**：指针要按源行回答「这一行点得开吗」，而身份表只记身份、
+    /// 不记种类（见 [`Self::fold_handles`]）。开场那一段收成的一行不入这份账 —— 它点不动
+    /// （票 21 第 8 条）。
+    fn paint_fold_line(&mut self, line: &FoldLine, targets: Targets, records: &[Painted]) {
+        if !targets.trace {
+            return;
+        }
+        let id = line.id();
+        let rendered = fold_line(line, self.trace_width, self.discussion());
+        let link = self.fold_line_link(line, records);
+        self.push_line(Viewport::Trace, rendered, link, None, Some(id));
+        if line.is_toggleable() {
+            self.fold_handles.insert(id);
+        }
+    }
+
+    /// 把一个组头画进轨迹窗格：`in_place` 说它是**就地改写**（直方图长了一格、跨度变了长）
+    /// 还是**追加**（宽度重放时窗格刚被清空）。
+    ///
+    /// 两种形状共用同一个函数，所以实时与重放画出来的那一行逐字相同 —— 而宽度变化不能把一个
+    /// 正在跑的回合的组头「按此刻重算」一遍（`.scratch/trace-ledger/spec.md` §5）。
+    fn paint_group_header(&mut self, header: &GroupHeader, targets: Targets, in_place: bool) {
+        if !targets.trace {
+            return;
+        }
+        let line = group_header_line(header, self.trace_width, self.discussion());
+        if in_place {
+            if let Some(source) = self.first_source_of(header.id) {
+                self.trace.replace_at(source, line);
+            }
+        } else {
+            self.push_line(Viewport::Trace, line, None, None, Some(header.id));
+            // 组头那一行是**折叠把手**：点它就是折 / 展它代表的那个单位 / 迭代（票 21
+            // 第 5 条）。展开态的组头没有 `▸`（票 21 第 7 条），而字形不是热区 —— 整行都算。
+            self.fold_handles.insert(header.id);
+            // 一级组头是来源面那条链的「那一回合」那一环（票 14 第 1 条）。二级（迭代）头不
+            // 记：链上那一环是「迭代的**回复**」，由消息自己记。
+            if header.level == HeaderLevel::Unit {
+                let row = self.trace.pushed();
+                self.note_anchor(AnchorKind::UnitHeader, row);
+            }
+        }
+    }
+
+    /// 把一个无主段落的小标题画进轨迹窗格 —— 与组头同一套形状（`in_place` 是就地改写）。
+    fn paint_section_header(&mut self, header: &SectionHeader, targets: Targets, in_place: bool) {
+        if !targets.trace {
+            return;
+        }
+        let line = section_header_line(header);
+        if in_place {
+            if let Some(source) = self.first_source_of(header.id) {
+                self.trace.replace_at(source, line);
+            }
+        } else {
+            self.push_line(Viewport::Trace, line, None, None, Some(header.id));
+        }
+    }
+
+    /// 把定稿的思考行喂给每条选中的视口，并把它变成通向详情的入口。
+    ///
+    /// `in_place` 说它是**就地重写**还是**追加**：实时路径上那条「正在思考」已经在窗格里，
+    /// 冻住它就是重写最后一行；重放路径上窗格刚被清空，定稿那条要重新画出来
+    /// （票 02 §1、票 09）。只喂轨迹视图 —— 思考行是过程行（票 10）。
+    ///
+    /// 过滤期间那一行**不在窗格最后**（它开出来时就被谓词挡了，而且一次重放会把账本整批
+    /// 换掉），所以这里再问一遍「窗格最后那一条真的是它吗」：问不对就什么都不写，跟着来的
+    /// 那次重放会把定稿这一条安排到它该在的位置上（票 20 第 4 条）。
+    fn paint_settled_thinking(
+        &mut self,
+        settled: &SettledThinking,
+        targets: Targets,
+        in_place: bool,
+    ) {
+        if targets.trace {
+            let (line, detail) = self.thinking_settled_line(settled, Viewport::Trace);
+            let mut line = line;
+            // 尾巴跟着这条行走：定稿是整行重写，丢在这里就等于把那笔用量吞掉。
+            if let Some(tail) = settled.tail {
+                line.spans.push(tail.span());
+            }
+            let line = stamped_line(line, settled.at);
+            let here = self.trace_block_ids.back() == Some(&Some(settled.id));
+            if in_place && here {
+                self.trace.replace_last(line);
+                if let Some(link) = self.trace_links.back_mut() {
+                    *link = Some(detail);
+                }
+            } else if self.trace_admits(settled.id) {
+                self.push_line(Viewport::Trace, line, Some(detail), None, Some(settled.id));
+            }
+        }
+    }
+
+    /// 把「正在思考」那一行推进轨迹视图。
+    ///
+    /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
+    /// 左栏不在时它也不回对话视图（2026-10-05 维护者推翻 §6）。
+    ///
+    /// **未定稿的增量行不在索引里**（票 20 第 4 条），所以这一条在过滤期间直接被谓词挡在
+    /// 账本外：它还在变，而「命中不命中」这一刻还答不出来。它定稿那一刻才进索引，那一下
+    /// 触发一次重放，于是它若命中就出现（见 [`View::settle_thinking`]）。
+    fn paint_thinking_line(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        at: DateTime<Utc>,
+        targets: Targets,
+        id: BlockId,
+    ) {
+        if targets.trace && self.trace_admits(id) {
+            let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
+            // 开着的行也有时刻：思考**开始**那一刻（`.scratch/trace-thought-stamp/spec.md`
+            // §1）。它会在定稿时就地重写成完成那一刻（§2）。
+            self.push_line(
+                Viewport::Trace,
+                stamped_line(line, at),
+                None,
+                None,
+                Some(id),
+            );
+        }
+    }
+
+    /// 这个视口里发言者前缀怎么写。
+    fn prefix_style_of(&self, view: Viewport) -> PrefixStyle {
+        let width = match view {
+            Viewport::Conversation => self.conversation_width,
+            Viewport::Trace => self.trace_tier_width,
+        };
+        prefix_style(view, width)
+    }
+
+    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻与尾巴），好在宽度变化时重放
+    /// （spec §1；尾巴见 ADR 0016）。
+    fn push_block(
+        &mut self,
+        block: Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        tail: Option<Tail>,
+        id: BlockId,
+        replaying: bool,
+    ) -> usize {
+        // 用量账在**到达这一刻**记下：这条记录属于哪一次发言，以及到它为止的会话累计。
+        // 会话累计直接读左栏那一份 —— 两处同源同一个数（票 15 第 3 条）。
+        let usage = UsageScope {
+            turn: Some(self.turn_ordinal),
+            session: self.panel.total(),
+            this: Usage::default(),
+        };
+        let paint = BlockPaint {
+            at,
+            tail,
+            id,
+            usage,
+        };
+        let produced = self.emit_block(&block, paint, targets, replaying);
+        if produced > 0 {
+            // 索引与这一条记录同一步建：**块定稿进共享源那一刻**（票 20 第 4 条）。
+            // 重放不重建 —— 重放换的是窗格的行，不是块。
+            if !replaying {
+                self.note_trace_index(id, block_text(&block));
+            }
+            // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
+            // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
+            self.push_painted(Painted::Block {
+                block,
+                at,
+                id,
+                tail,
+                usage,
+            });
+        }
+        produced
+    }
+
+    /// 把一条来源行推进它那个视图的窗格：折行缓存、链接入口、回合条的纹理，最后按窗格报回来
+    /// 的丢弃数裁掉两边溢出的部分。
+    ///
+    /// `user` 说这条行要不要记进回合条，`None` 是不记 —— 思考行是唯一的这种行：它属于当前
+    /// 单位，但它不是一次新的发言，也不改变单位的划分。回合条只与对话 pane 平行，所以只有
+    /// 那个视口会喂它。
+    fn push_line(
+        &mut self,
+        view: Viewport,
+        line: Line<'static>,
+        link: Option<Detail>,
+        user: Option<bool>,
+        id: Option<BlockId>,
+    ) {
+        // 空行只有分段那一个用途，所以它按内容判：没有字就是空行。它在 `line` 被移进窗格
+        // 之前取出来。
+        let blank = line.spans.iter().all(|span| span.content.trim().is_empty());
+        let dropped = match view {
+            Viewport::Conversation => self.conversation.push(line),
+            Viewport::Trace => {
+                let dropped = self.trace.push(line);
+                // 链接表跟着窗格交回来的丢弃数裁，不自己数 `CAP`：一条来源行在两边要么意思
+                // 相同、要么两边都没有（票 04 §1、票 07）。
+                self.trace_links.push_back(link);
+                // 身份表与它同进同出 —— 「这张表与窗格永远同长」是同一个理由（ADR 0021）。
+                self.trace_block_ids.push_back(id);
+                for _ in 0..dropped {
+                    self.trace_links.pop_front();
+                    self.trace_block_ids.pop_front();
+                }
+                dropped
+            }
+        };
+        if view == Viewport::Conversation {
+            if let Some(user) = user {
+                self.turn_rail.push_line(user, blank);
+            }
+            if dropped > 0 {
+                self.turn_rail.prune(dropped);
+            }
+        }
+    }
+
+    /// 把一条绘制记录推进重放清单，并记下它的身份与它在轴上的落点。
+    ///
+    /// 两张表同进同出：块身份那张（[`Self::block_at`]）是给横带用的（视口区间、选中标记，
+    /// 以及票 23 那两条泳道上的命中底色），而它与 `painted` 一样活过宽度重放 —— 重放走的
+    /// 就是这份清单，所以这里也是重放时重建那张表的地方。
+    fn push_painted(&mut self, painted: Painted) {
+        self.block_at.insert(
+            painted.id(),
+            BlockStamp {
+                at: painted.at(),
+                lane: painted.lane(),
+            },
+        );
+        self.painted.push(painted);
+    }
+
+    /// 把一个视图要的那些行推进窗格，并在**换发言者**时先空一行
+    /// （`.scratch/tui-visual-language/spec.md` §23）。
+    ///
+    /// 插入点是**块序列生成期**、不是绘制期：两个视图各记各的 [`Flow`]（重放时跟着窗格一起清），
+    /// 于是各自的空行也各归各的，而且滚动时不会重排。
+    ///
+    /// 空行的两条规矩：**换发言者**要空（把两个人的话分开）；对话视图里**两条消息之间**也要空
+    /// —— 一条消息是一段（2026-10-06 维护者：同一个人连说几段时，只留一个名字，段与段之间
+    /// 空一行）。同一人连发的**工具行**不空：一组动作读起来是一组。
+    ///
+    /// 返回值是**轨迹页上第一条内容行的账本行号** —— 来源面那条链按它给本行定位（票 14）；
+    /// 没往轨迹页推任何行（这个视口不在收件人里）时是 `None`。
+    fn push_view_lines(
+        &mut self,
+        view: Viewport,
+        speaker: Option<&crate::events::SpeakerId>,
+        is_message: bool,
+        lines: Vec<RenderedLine>,
+        user: Option<bool>,
+        id: BlockId,
+    ) -> Option<usize> {
+        if lines.is_empty() {
+            return None;
+        }
+        let blank = {
+            let flow = match view {
+                Viewport::Conversation => &self.conversation_flow,
+                Viewport::Trace => &self.trace_flow,
+            };
+            let changes_speaker = speaker
+                .is_some_and(|speaker| flow.speaker.as_ref().is_some_and(|last| last != speaker));
+            // 两者都成立时也只空一行。
+            changes_speaker || (view == Viewport::Conversation && is_message && flow.message)
+        };
+        if blank {
+            // 空行也走 `push_line`：回合条的平行表按来源行下标记账，跳过它会把格子指到
+            // 隔壁去。它不是一个用户消息，所以那一格记 `false`。
+            self.push_line(view, Line::default(), None, Some(false), Some(id));
+        }
+        {
+            let flow = match view {
+                Viewport::Conversation => &mut self.conversation_flow,
+                Viewport::Trace => &mut self.trace_flow,
+            };
+            if let Some(speaker) = speaker {
+                flow.speaker = Some(speaker.clone());
+            }
+            // 叙述、诊断这些块不带发言者，也要断开「同一人连续几段」这条线：下一段消息
+            // 因此重新带上名字。
+            flow.message = is_message;
+        }
+        let mut first = None;
+        for rendered in lines {
+            self.push_line(view, rendered.line, rendered.link, user, Some(id));
+            if view == Viewport::Trace && first.is_none() {
+                first = Some(self.trace.pushed());
+            }
+        }
+        first
+    }
+
+    /// 一条绘制记录在账本上那个**可开详情的入口** —— 折行挂「组内第一条能开的成员」用它。
+    ///
+    /// 判据与那一行自己**同源**：块走它自己那一套绘制（轨迹视图那一份），定稿的思考走它
+    /// 那份构造。造不出入口的记录（组头、小标题、还在流的那条思考行、本来就没入口的叙述行）
+    /// 给 `None` —— 屏幕上那一行点不开，折行也就别挂在它上面。
+    fn record_detail(&mut self, record: &Painted) -> Option<Detail> {
+        match record {
+            Painted::Block {
+                block, at, usage, ..
+            } => {
+                let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
+                let style = prefix_style(Viewport::Trace, self.trace_tier_width);
+                let facts = DetailFacts {
+                    at: Some(*at),
+                    timing: timing_of(block),
+                    usage: *usage,
+                };
+                paint_block(
+                    block,
+                    &mut self.colors,
+                    width,
+                    style,
+                    Viewport::Trace,
+                    // 名字照画：这里要的是与轨迹页上那一行**同一份**构造，而那里每一行都带
+                    // 名字（`emit_block` 传的就是 `true`）。
+                    true,
+                    facts,
+                )
+                .into_iter()
+                .find_map(|rendered| rendered.link)
+            }
+            Painted::Thought(settled) => {
+                Some(self.thinking_settled_line(settled, Viewport::Trace).1)
+            }
+            Painted::Thinking { .. } | Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
+        }
+    }
+
+    /// 把组头那一行按它现在的数据重画一遍（就地改写，不动其他行）。
+    fn redraw_group_header(&mut self, id: BlockId, targets: Targets) {
+        let Some(header) = self.painted.iter().find_map(|painted| match painted {
+            Painted::GroupHeader(header) if header.id == id => Some(header.clone()),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.paint_group_header(&header, targets, true);
+    }
+
+    /// 把小标题那一行按它现在的数据重画一遍。
+    fn redraw_section_header(&mut self, id: BlockId, targets: Targets) {
+        let Some(header) = self.painted.iter().find_map(|painted| match painted {
+            Painted::SectionHeader(header) if header.id == id => Some(header.clone()),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.paint_section_header(&header, targets, true);
+    }
+
+    /// 那次模型调用完成了：把**已经落定**的那段思考的计时补齐。
+    ///
+    /// 实时路径上思考是被正文的第一个增量冻住的，那一刻这次调用还没完 —— 首 token 与输出
+    /// token 都还没到（它们随 `MessageCompleted` 来）。不补的话同一条流在实时与重放两条路上
+    /// 会给出两套读数，而那正是 [ADR 0020](../../docs/adr/0020-first-token-time-rides-the-completion.md)
+    /// 否决「只在渲染层记」的原因。重放路径上思考是在那条完成事件上定稿的（标量一开始就是齐
+    /// 的），于是这里是空操作。
+    fn refresh_settled_thinking(&mut self, timing: CallTiming) {
+        let Some(Painted::Thought(settled)) = self.painted.last() else {
+            return;
+        };
+        // 会话累计也在这一刻长了一截（本条调用的那笔用量随同一条完成事件进来）—— 用量面
+        // 那一节读的就是它（票 15）。
+        let session = self.panel.total();
+        if settled.timing == timing && settled.usage.session == session {
+            return;
+        }
+        let mut settled = settled.clone();
+        settled.timing = timing;
+        settled.usage.session = session;
+        // 就地重写那一行，并把它的详情入口一并换成新的 —— 两处同一条记录。
+        self.paint_settled_thinking(&settled, self.targets(), true);
+        if let Some(slot @ Painted::Thought(_)) = self.painted.last_mut() {
+            *slot = Painted::Thought(settled);
+        }
+    }
+
+    /// 按这一刻那份「哪些块在」的判据把轨迹页重推一遍（票 20 第 7 条）。
+    ///
+    /// 与宽度变化重放**同一条路**（取走整份 `painted` → 逐条重推），差别只在中间那一步问
+    /// 了一遍 [`Self::visible_records`]：过滤决定「哪些块在」。折叠（票 21）接在它后面
+    /// —— 一块画几行 —— 所以它接的是同一个入口。
+    ///
+    /// 窗格的视口**意图**保住：`clear` 留着 `follow` / `top` / `top_source`，下一帧照着它
+    /// 重新折行定位。但换掉整份账本之后「原处」得按**来源行**重报一遍 —— 那一份记在
+    /// `TraceSearch::before_filter` 里，由 [`Self::refresh_trace_filter`] 在进出过滤时存取。
+    fn replay_trace(&mut self) {
+        self.clear_trace_for_replay();
+        if self.painted.is_empty() {
+            return;
+        }
+        let visible = self.visible_records();
+        // 折叠接在它的后面：**过滤先决定哪些块在，折叠后决定一块画几行**（票 21 第 10 条）。
+        // 过滤期间 `ledger_plan` 一律不折 —— 命中块必须画开，而折叠集合一个字节都不动。
+        let plan = ledger_plan(&self.painted, &self.folded, self.filtering());
+        let painted = std::mem::take(&mut self.painted);
+        let targets = Targets {
+            conversation: false,
+            trace: true,
+        };
+        for (index, item) in painted.iter().enumerate() {
+            if !visible[index] {
+                continue;
+            }
+            match &plan[index] {
+                Planned::Skip => {}
+                Planned::Fold(line) => self.paint_fold_line(line, targets, &painted),
+                Planned::Record => self.emit_painted(item, targets, true),
+            }
+        }
+        self.painted = painted;
+    }
+
+    /// 把思考行定下来 —— 不管有没有记录下来的 trace —— 并把它变成通向它详情的入口。
+    ///
+    /// `Some` 是记录下来的 trace；`None` 是合成器的形状 —— 增量流过了，事件流里没有整段
+    /// 文本 —— 它的详情会说出来。一个根本没有敞开思考行的回合什么都不加（票 02 §1）。
+    ///
+    /// `at` 是这段思考**到此为止**的那一刻：实时路径上它是正文第一个增量到达的时候，重放
+    /// 路径上它是那条 `MessageCompleted` 的时刻（`.scratch/trace-in-main/spec.md` §5）。
+    ///
+    /// `timing` 是这段思考所属那次模型调用的计时。实时路径上定稿发生时这次调用还没完，所以
+    /// 拿到的是半份 —— 那条 `MessageCompleted` 到达时会把它补齐（[`TuiState::apply`]）。
+    fn settle_thinking(&mut self, text: Option<String>, at: DateTime<Utc>, timing: CallTiming) {
+        if !self.thinking_open {
+            return;
+        }
+        self.reasoning.clear();
+        self.thinking_open = false;
+        self.thinking_done = true;
+        // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
+        let speaker = self.thinking_speaker.clone();
+        // 尾巴若已经挂在还开着的那一条上，定稿是整行重写，得跟着搬过去。
+        let tail = self.painted.last().and_then(Painted::tail);
+        // **身份也搬**：定稿不是一条新记录，是同一行从「正在思考」到「思考完成」的两个阶段
+        // （ADR 0021）—— 所以选中那一行在定稿那一刻不跳。
+        let id = self
+            .painted
+            .last()
+            .map(Painted::id)
+            .unwrap_or_else(|| self.next_block_id(None, 0));
+        let settled = SettledThinking {
+            speaker,
+            trace: text,
+            at,
+            id,
+            tail,
+            timing,
+            // 用量账与计时同一条纪律：随这一行一起记下，打开时那一面读的就是它（票 15）。
+            usage: UsageScope {
+                turn: Some(self.turn_ordinal),
+                session: self.panel.total(),
+                this: Usage::default(),
+            },
+        };
+        self.paint_settled_thinking(&settled, self.targets(), true);
+        // 一段思考到这一刻才算**定稿**，于是它是这一刻才进索引的（票 20 第 4 条）——
+        // 开着的那一段还在变，不建。合成器那种「没记下来」的形状没有文本可搜，也就不进。
+        let text = settled.trace.clone().unwrap_or_default();
+        // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
+        // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
+        match self.painted.last_mut() {
+            Some(slot @ Painted::Thinking { .. }) => *slot = Painted::Thought(settled),
+            _ => self.push_painted(Painted::Thought(settled)),
+        }
+        // 它若命中就出现在过滤视图里：账本此刻是按旧判据推的，所以这里补一次重放。
+        self.note_trace_index(id, text);
+        if self.filtering() {
+            self.replay_trace();
+        }
+    }
+
+    /// 这一刻该把块喂给哪些视图。
+    ///
+    /// 实时事件到达时**不问「现在显示哪一页」**：两个视图都常驻，切页与 `Ctrl-O` 都不会漏
+    /// 内容，发言者配色槽位也不随可见性变（票 09、`.scratch/trace-in-main/spec.md` §3）。
+    fn targets(&self) -> Targets {
+        Targets {
+            conversation: true,
+            // 轨迹视图与对话视图一样常驻：它住在主列里，而主列永远在
+            // （`.scratch/trace-in-main/spec.md` §3）。
+            trace: true,
+        }
+    }
+
+    /// 思考开始那一行：名字加「正在思考」。重放时按同一份构造重建。
+    fn thinking_in_progress_line(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        view: Viewport,
+    ) -> Line<'static> {
+        let style = self.prefix_style_of(view);
+        let color = self.colors.of(speaker);
+        Line::from(vec![
+            Span::styled(style.prefix(speaker), Style::default().fg(color)),
+            Span::styled(
+                wording::thinking_in_progress(),
+                Style::default().fg(palette::MUTED),
+            ),
+        ])
+    }
+
+    /// 思考落定那一行，以及它通向详情的入口。重放时按同一份构造重建。
+    fn thinking_settled_line(
+        &mut self,
+        settled: &SettledThinking,
+        view: Viewport,
+    ) -> (Line<'static>, Detail) {
+        let speaker = &settled.speaker;
+        let style = self.prefix_style_of(view);
+        let color = self.colors.of(speaker);
+        // 名字后面那个 `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以
+        // 「谁在说话」开头（票 03 §Answer，2026-09-23 修正）。
+        let line = Line::from(vec![
+            Span::styled(style.prefix(speaker), Style::default().fg(color)),
+            Span::styled(
+                format!("{} ", wording::FOLDABLE),
+                Style::default().fg(palette::MUTED),
+            ),
+            Span::styled(
+                wording::thinking_finished(),
+                Style::default().fg(palette::MUTED),
+            ),
+        ]);
+        let detail = Detail {
+            // 覆盖层的标题就是被点那一行自己的文字（票 02 §4）。
+            title: line_text(&line),
+            color,
+            speaker: Some(speaker.clone()),
+            at: Some(settled.at),
+            kind: DetailKind::Thinking {
+                text: settled.trace.clone(),
+                timing: settled.timing,
+            },
+            // 链在打开那一刻才定 —— 构造这一行时还不知道账本以后会长成什么样。
+            chain: None,
+            usage: Some(settled.usage),
+        };
+        (line, detail)
+    }
+
+    /// 这一条记录在不在过滤集里（票 20）。没有过滤时每一条都在。
+    ///
+    /// 判据是**过滤集**（那些命中的块身份），不是「有没有命中」—— 一个都没命中时账本上
+    /// 一块都不剩，那正是 `0 个命中` 在屏上的样子。
+    fn trace_admits(&self, id: BlockId) -> bool {
+        match self.trace_search.as_ref() {
+            Some(search) if !search.terms.is_empty() => search.hits.contains(&id),
+            _ => true,
+        }
+    }
+
+    /// 画一个块，并处理它那两种尾巴：一笔用量不再是自己的一条，而是攒着等那次调用收尾；
+    /// `TurnEnded` 在跨 ≥2 次调用时带上合计
+    /// （ADR 0016、`.scratch/trace-usage-tail/spec.md` §1、§5）。
+    fn trace_block(
+        &mut self,
+        block: Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        id: BlockId,
+    ) -> usize {
+        // 新到达的块：它要开组、也要让当前那组长一格。
+        self.trace_block_inner(block, at, targets, id, false)
+    }
+
+    fn trace_block_inner(
+        &mut self,
+        block: Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        id: BlockId,
+        replaying: bool,
+    ) -> usize {
+        // 用量属于产生它的那次调用：贴到**它到达这一刻**那次调用最后画出的那条过程行上。
+        //
+        // 不推迟到那次调用收尾再贴 —— 工具行排在用量之后，消息行也排在它之后，等下去只会
+        // 等到一条内容行，而最常见的纯对话调用就再也贴不上（ADR 0016 的「被否决的替代
+        // 方案」）。
+        if let Block::Usage { usage, .. } = &block {
+            if self.in_call {
+                self.turn_usage.accumulate(*usage);
+                if self.usage_host_exists() {
+                    let tail = Tail::Usage(*usage);
+                    if let Some(slot) = self.painted.last_mut() {
+                        slot.set_tail(tail);
+                    }
+                    // 那一行已经画出去了，所以这一段是补在它尾巴上，不是另起一行 —— 它的
+                    // 时刻戳、名字配色与详情入口都留在原地。
+                    self.trace.append_to_last(tail.span());
+                    return 0;
+                }
+            }
+            return self.push_block(block, at, targets, None, id, replaying);
+        }
+        let tail = if matches!(&block, Block::TurnEnded { .. }) {
+            self.in_call = false;
+            let total = (self.turn_calls >= 2).then_some(Tail::Total(self.turn_usage));
+            // 这一次发言收尾了：合计进账，用量面的「本次」那一节按它回答（票 15 第 3 条）。
+            self.turn_totals.push(self.turn_usage);
+            self.turn_calls = 0;
+            self.turn_usage = Usage::default();
+            total
+        } else {
+            None
+        };
+        self.push_block(block, at, targets, tail, id, replaying)
+    }
+
+    /// 窗格最后那条来源行能不能承载一笔用量。
+    ///
+    /// 用量到达这一刻，那次调用最后画出来的那条正是它 —— 有推理时是思考行，没推理时是回合
+    /// 开始那行。消息行与一条独立的用量行都不承载：前者在轨迹页是「首行 + `…`」的内容入口，
+    /// 把数字挂上去读不出归属（§1、§4）。
+    fn usage_host_exists(&self) -> bool {
+        match self.painted.last() {
+            Some(Painted::Thinking { .. } | Painted::Thought { .. }) => true,
+            Some(Painted::Block { block, .. }) => {
+                !matches!(block, Block::Message { .. } | Block::Usage { .. })
+            }
+            // 组头与小标题是一次调用的**摘要**或一个段落标题，而用量属于产生它的那次调用
+            // —— 挂到它们行尾会把数字摆在一个读不出归属的位置上（ADR 0016）。
+            Some(Painted::GroupHeader(_)) | Some(Painted::SectionHeader(_)) => false,
+            None => false,
+        }
+    }
+
+    /// 这一趟重放推哪些记录（票 20）。
+    ///
+    /// **过滤先**决定「哪些块在」；组头与小标题跟着它们的成员 —— 一个组里一个可见的成员
+    /// 都没有，那个头也收起来，否则过滤视图里会留下一串没有成员的空头（票 20 第 7 条：
+    /// 组头保留，但它保留的是**有成员的组**的那个头，而它自己不因过滤改写）。
+    /// 折叠（票 21）改的是「一块画几行」，接在这一层之后。
+    fn visible_records(&self) -> Vec<bool> {
+        let mut visible: Vec<bool> = self
+            .painted
+            .iter()
+            .map(|painted| self.trace_admits(painted.id()))
+            .collect();
+        if !self.filtering() {
+            return visible;
+        }
+        for index in 0..self.painted.len() {
+            let end = match &self.painted[index] {
+                // 一级组头管到下一个一级组头（或一个无主段落的小标题）为止 —— 这中间那些
+                // 二级头与成员都是它的成员。
+                Painted::GroupHeader(header) if header.level == HeaderLevel::Unit => {
+                    next_header_after(&self.painted, index, true)
+                }
+                // 二级组头与小标题管到下一个组头或小标题为止。
+                Painted::GroupHeader(_) | Painted::SectionHeader(_) => {
+                    next_header_after(&self.painted, index, false)
+                }
+                _ => continue,
+            };
+            if (index + 1..end).any(|other| visible[other]) {
+                visible[index] = true;
+            }
+        }
+        visible
+    }
+
+    /// 一个块是不是**开场段**里的一块。
+    ///
+    /// 开场是第一个单位之前那一段：身份注入、技能注入、命令、诊断与回执。
+    ///
+    /// 判据是**列出那几类**，而不是「不在组边界事件里」—— 后者会把一条落在组外的工具行
+    /// 也算成开场，而工具行永远属于某次调用（真实流里它总在一个 `TurnStarted` 之后）。
+    fn is_preamble(block: &Block) -> bool {
+        matches!(
+            block,
+            Block::ContextInjected { .. }
+                | Block::CommandRun { .. }
+                | Block::Notice(_)
+                | Block::Diagnostic(_)
+        )
+    }
+    /// 把一条事件并进这一场会话的投影，并回答它画了多少条转录来源行。
+    ///
+    /// 它只管投影里面的事；「工作区变了」那条静默信号与整帧的 `dirty` 账留在
+    /// [`TuiState::apply`] 那一层（它们不属于任何一场会话）。
+    pub fn apply(&mut self, event: RenderEvent) -> usize {
+        // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
+        // （`.scratch/trace-in-main/spec.md` §5）。
+        let at = event_at(&event);
+        // 增量事件在过滤期间不触发重放（见这个方法末尾那一支）。
+        let incremental = matches!(event, RenderEvent::Delta { .. });
+        // 身份的一半：流上的事件带信封，所以它的行号就是这一批块的来源（ADR 0021）。
+        // 渲染层自己造的那几条（增量 / 诊断 / 通知 / 身份注入）没有信封，于是是 `None`。
+        let seq = match &event {
+            RenderEvent::Logged(event) => Some(event.seq),
+            _ => None,
+        };
+        self.observe_goal(&event);
+        self.observe_running_tool(&event);
+        self.observe_timeline(&event);
+        // 这一整趟的收件人（两个视图都常驻，所以通常两个都在）。
+        let targets = self.targets();
+        let mut produced = 0usize;
+        for (offset, block) in self.transcript.push(event).into_iter().enumerate() {
+            let id = self.next_block_id(seq, offset as u32);
+            // 思考行的生命周期跑在块被画出来之前：一个推理增量开出它，正文的第一个增量把它
+            // 就地冻住，而 `MessageCompleted` 把还开着的那条定下来（票 02 §1）。
+            if let Block::Delta {
+                speaker,
+                kind,
+                text,
+            } = &block
+            {
+                match kind {
+                    DeltaKind::Reasoning => {
+                        // `at` 就是收到这条增量的时候：推理增量没有信封，所以「思考开始那一刻」
+                        // 只能是它（`.scratch/trace-thought-stamp/spec.md` §1）。
+                        produced += usize::from(self.open_thinking(speaker.clone(), at, id));
+                        self.reasoning.push_str(text);
+                    }
+                    DeltaKind::Text => self.freeze_thinking(at),
+                }
+            }
+            if let Block::Message {
+                speaker,
+                role,
+                reasoning,
+                timing,
+                ..
+            } = &block
+            {
+                if matches!(role, Role::Assistant) {
+                    // 消息的整段 trace 把还开着的定下来。provider 一个增量都没发时，这行改在
+                    // 这里开出来、且已经完成；已经开过并定过的那条（正文在流中途把它冻住了）
+                    // 不再加新的，因为一段思考就是一行（票 02 §1）。trace 缺席时把开着的行按
+                    // 「未记录」定下来 —— 那是合成器的形状，增量流过了，什么都没记下来。
+                    match reasoning {
+                        Some(text) => {
+                            let text = text.clone();
+                            if !self.thinking_open && !self.thinking_done {
+                                produced +=
+                                    usize::from(self.open_thinking(speaker.clone(), at, id));
+                            }
+                            self.settle_thinking(Some(text), at, *timing);
+                        }
+                        None => {
+                            if self.thinking_open {
+                                self.settle_thinking(None, at, *timing);
+                            }
+                        }
+                    }
+                    // 已经落定的那一段是同一次调用的一部分：把它那份计时补齐（实时路径上它是
+                    // 被第一个正文增量冻住的，那时首 token 与用量都还没到）。
+                    self.refresh_settled_thinking(*timing);
+                    self.thinking_done = true;
+                }
+            }
+            // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
+            if matches!(&block, Block::TurnStarted { .. }) {
+                self.thinking_done = false;
+                // 一次发言的第一迭代开一次新的发言：用量面的「本次」按它认领（票 15）。
+                if matches!(&block, Block::TurnStarted { iteration: 1, .. }) {
+                    self.turn_ordinal += 1;
+                }
+                // 每一次迭代 = 一次模型调用，也就是一笔用量的归属单位（§5）。
+                self.turn_calls += 1;
+                self.in_call = true;
+            }
+            match &block {
+                // 推理不是消息正文的一部分：它被折进自己那一行，所以永远不加入正文流过的那条
+                // 活尾巴（票 02 §3）。
+                Block::Delta {
+                    kind: DeltaKind::Reasoning,
+                    ..
+                } => {}
+                Block::Delta { speaker, text, .. } => {
+                    self.live_speaker = Some(speaker.clone());
+                    self.live.push_str(text);
+                    if self.live.len() > LIVE_BUFFER {
+                        let cut = self.live.len() - LIVE_BUFFER;
+                        // 按字符边界裁。
+                        let cut = (cut..self.live.len())
+                            .find(|index| self.live.is_char_boundary(*index))
+                            .unwrap_or(self.live.len());
+                        self.live.drain(..cut);
+                    }
+                }
+                Block::Message { .. } => {
+                    // 增量是那一版实时的视图；块才是永久的那一版，所以尾巴可以走了。
+                    self.live.clear();
+                    self.live_speaker = None;
+                }
+                _ => {}
+            }
+            // 面板数的是这个块就会话说了什么；窗格显示的是它向读者说了什么。名字在进来的路上
+            // 就上了色，所以发言者的第一行就是给注入名册没列到的名字定色的那一下（票 07）。
+            self.panel.observe(&block);
+            // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
+            self.todo.observe(&block);
+            produced += self.trace_block(block, at, targets, id);
+        }
+        // 过滤激活时，这一趟推出去的行要按新的「哪些块在」再对齐一次：未命中的那些刚被推
+        // 进了账本，而账本上只剩命中块（票 20 第 7 条）。重放是那句判据的唯一权威，所以
+        // 这里不清账、只重推一遍。
+        //
+        // 折起来的东西也一样：新块与**挂着它的那一组**都长在折行底下，而组头那一行此刻画的
+        // 是折行 —— 一次重放把账本按新的折叠态重推一遍，是这里唯一能对齐它的东西（票 21）。
+        //
+        // 增量事件两边都跳过：一条流式输出每秒几十条，而它唯一画出来的东西是那条**还没
+        // 定稿**的思考行 —— 那一行进不了过滤视图（`paint_thinking_line` 那里已经挡了），
+        // 也进不了折起来的那一组（那里也挡了）。它定稿那一下（`settle_thinking`）自己带
+        // 一次重放。
+        if (self.filtering() || !self.folded.is_empty()) && !incremental {
+            self.replay_trace();
+        }
+        produced
+    }
+}
+
+/// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
+pub struct TuiState {
+    /// 这一场会话的投影。切换会话就是**整块换掉**它（`.scratch/session-tab/spec.md` §6）。
+    view: View,
+    /// 会话的工作目录与用户的家目录：终端标题那一段路径的两半
+    /// （`.scratch/terminal-title/spec.md` §1）。`home` 由 [`Tui::run`] 读一次传进来，
+    /// 于是 [`TuiState::title`] 是纯函数、测试能钉死。
+    cwd: std::path::PathBuf,
+    home: Option<std::path::PathBuf>,
+    /// 上一次写进终端的那条标题，用来在绘制路径上比对 —— 有它就不必枚举状态来源
+    /// （spec §5）。
+    last_title: Option<String>,
+    /// 举手槽位：有值 = 正在举手，值是它的截止时刻
+    /// （`.scratch/exit-gesture/spec.md` §1）。纯渲染器状态，不进事件流；`should_quit()`
+    /// 只反映 [`TuiState::quit`]。
+    ///
+    /// 槽位只有一个，所以两把手势（退出、退出这次询问）**互斥**是结构性的
+    /// （`.scratch/questionnaire-keys/spec.md` §5）。
+    exit_deadline: Option<std::time::Instant>,
+    /// 槽位里举着的是哪一把。
+    exit_gesture: Gesture,
+    /// 这一把举手是在**忙碌时**举起的吗（spec §1、§3）。
+    ///
+    /// 第一下 `Ctrl-C` 会取消当前回合，而那次取消可能在第二下之前就落地 —— 那时
+    /// `busy()` 已经为假，但人的意图仍然是「打断这次运行、退出」，退出码不该退回 0。
+    /// 举手的出身记在这里，第二下照它分派。
+    exit_gesture_busy: bool,
+    /// 挂起请求：`Ctrl-Z` 置位，[`Tui::run`] 取走并执行「交还终端 → 停住 → 恢复重绘」
+    /// （`.scratch/suspend-gesture/spec.md` §2、§3）。纯渲染器状态，不进事件流，也不经过
+    /// 任何一次性通道。
+    suspend: bool,
+    /// 上一帧画完之后有没有什么东西变了。
+    dirty: bool,
+    /// 草稿与它的光标。
+    editor: Input,
+    /// 工作区里的文件与目录：`@` 的候选，也是「能兑现」那条判据的出处
+    /// （`.scratch/input-tokens/spec.md` §1）。
+    ///
+    /// 会话级的一个值：进 TUI 预热一次、每次提交一条消息之后再扫一次。遍历本身跑在
+    /// `spawn_blocking` 里，索引从不挡住键盘。
+    files: FileIndex,
+    /// 该发一次遍历了吗。预热与提交各置一次，渲染循环取走并真去起那个 blocking 任务 ——
+    /// 于是「什么时候扫」是状态机的事，「怎么扫」是循环的事，测试不必起任务。
+    file_scan_wanted: bool,
+    /// 开头的 `/` 能变成哪些名字，按循环报上来的样子。在那份报告到达之前是空的，这
+    /// 正是 `/` 菜单要等它到了才开的原因。
+    catalog: Vec<CatalogEntry>,
+    /// `/` 菜单的高亮，以及它属于哪个 token。匹配结果本身不保存：它们是草稿与目录的纯
+    /// 函数，所以这里只留那个选择 —— 那是推不出来的。
+    slash: MenuSelection,
+    /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
+    /// 它随进程一起死（spec §3）。
+    tab: Tab,
+    /// 文件页那一页自己的状态（`.scratch/files-page/spec.md` §1、§5）。
+    ///
+    /// 与 [`Panel`]、[`TodoPanel`] 同一族：一页的状态收在一个值里，而它整个只活在进程内 ——
+    /// 不进事件流、不落盘。
+    files_page: FilesPage,
+    /// 改动页那一页自己的状态（`.scratch/diff-page/spec.md` §2、§4）。
+    ///
+    /// 数据来自渲染器自己在宿主侧跑的 `git status`：不进事件流、不进 `messages`、不过权限门
+    /// 与沙箱（只读、不写盘）。
+    changes: ChangesPage,
+    /// 该发一次 git 取数了吗。与 `file_scan_wanted` **分开一位** —— 两件事的节奏与失败模式
+    /// 不同，共用一位会让一边的失败拖住另一边（§4）。
+    changes_wanted: bool,
+    /// 上一帧左栏页签条的标签行画在哪 —— 「点左栏」把页签条也算进去
+    /// （`.scratch/files-page/spec.md` §5）。
+    tabs_rect: Option<Rect>,
+    /// 键盘交给左栏了吗。
+    ///
+    /// 它与既有的两个「独占键盘的视图」（详情覆盖层、历史重放）同一族，只是不占满屏：立着
+    /// 的时候走树的那几个键归文件页，`Esc` 把键盘还回输入区
+    /// （`.scratch/files-page/spec.md` §5）。
+    sidebar_keyboard: bool,
+    /// 正在显示主列的哪一页：`对话` 还是 `轨迹`（`.scratch/trace-in-main/spec.md` §2）。
+    /// 与 [`TuiState::tab`] 同级：只活在这一次进程里，不落配置，重开回到对话。
+    main_tab: MainTab,
+    /// 用户想不想看见左栏（`Ctrl-O` 切换，`.scratch/sidebar-toggle/spec.md` §1）。
+    ///
+    /// 与选中的页签同级：只活在这一次进程里，重开回到显示，不落配置、不跨会话。它与宽度是
+    /// 两层 —— 这一位说偏好，[`layout::sidebar_tier`] 说可行性 —— 两者相乘才是屏幕上真的有
+    /// 的那一栏。
+    sidebar_wanted: bool,
+    /// 会话中途换模型/档位的选择器浮层（spec §10）。
+    ///
+    /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
+    /// 选择器是人发起的会话属性，答完要回循环去改这一场会话
+    /// （`.scratch/model-switching/spec.md` §10）。键盘归属按「谁立着谁拿」判。
+    picker: Option<Picker>,
+    /// 提示行上那一句短的说明（spec §12：讨论会话里点状态行那两格）。
+    ///
+    /// 与复制/打开链接那两句回执同一个机制与同一段寿命：提示行一次只留一句最新的。
+    notice: Option<(std::time::Instant, String)>,
+    /// 轨迹页持有键盘吗。
+    ///
+    /// 这是仓库里**第四套**「键盘在谁那里」的机制（前三是左栏那个布尔、两页各自的焦点索引、
+    /// 反显的隐式归属），与左栏那一个同形但方向相反：左栏是「点一下交给我、`Esc` 还回去」，
+    /// 轨迹页是**默认持有**，`Esc` 退完三层把它交还给输入区，点账本任何位置再拿回来
+    /// （`.scratch/trace-ledger/spec.md` §4）。
+    ///
+    /// 两个条件都成立才算持有：**主列当前显示的是轨迹页**（这一层是十六层阶梯里第一个读主列
+    /// 页签的）**且**这一位是 `true`。所以它默认为真 —— 它说的是「不处于已交还状态」，重新成为
+    /// 当前显示页时自然回到持有。
+    trace_keyboard: bool,
     /// 上一帧把轨迹页画在哪里，好让滚轮与点击按指针落在哪个视口分派。没画轨迹页就是
     /// `None`（与 [`TuiState::detail_rect`] 同一条「记住读的人真看到了什么」的纪律）。
     ///
@@ -1039,12 +2596,6 @@ pub struct TuiState {
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
     /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
-    /// 正在读的那一份 diff：读什么，以及它属于哪一次打开
-    /// （`.scratch/diff-page/spec.md` §6）。
-    ///
-    /// 弹窗**先立起来**、正文后到：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许
-    /// 等它（与那三条「一帧里不 await」同一条纪律）。
-    diff_reading: Option<DiffReading>,
     /// 打开过多少次详情弹窗。给在飞的那次取数对号：结果回来时弹窗已经换成别的文件、或者
     /// 干脆关掉了，那一次结果就直接丢掉。
     detail_serial: u64,
@@ -1098,13 +2649,6 @@ pub struct TuiState {
     /// 就是零 —— 推动它的是循环的定时器，所以空闲的会话把它原样留在上次运行留下的位置，
     /// 也就是零（`.scratch/tui-input-pulse/spec.md` §2）。
     pulse: u64,
-    /// 正在流的正文属于哪个发言者 —— 等待块与流式正文那一行名字用的就是它（正文一完成，
-    /// 名字改由那条源行自己带）。还没有增量时是 `None`，那时用名册的第一个。
-    live_speaker: Option<crate::events::SpeakerId>,
-    /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
-    /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
-    /// 或一次收尾清掉。
-    running_tool: Option<(String, serde_json::Value)>,
     /// 一个等着按键的问题。
     pending: Option<Pending>,
     /// 要交回给循环的手势。
@@ -1113,30 +2657,6 @@ pub struct TuiState {
     indicator: Option<Rect>,
     /// 轨迹页的同一份矩形（票 09）。
     trace_indicator: Option<Rect>,
-    /// 轨迹页的搜索与过滤态（票 20）。`None` 是「这个会话里还从来没搜过」。
-    ///
-    /// 它按**块身份**记，不存窗格里 —— 于是宽度变化重放之后过滤集原样还在
-    /// （票 20 第 10 条）。也只活在进程内：切会话 / 恢复会话都不持久。
-    trace_search: Option<TraceSearch>,
-    /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
-    trace_index: TraceIndex,
-    /// 轨迹页的**折叠集合**：哪些块收成了一行（票 21 第 9 条）。
-    ///
-    /// 与过滤集同一条纪律：按**块身份**记、存在 `TuiState` 侧、不存窗格里 —— 于是宽度变化
-    /// 那次重放之后原样还在。三档折行共用这一个集合（单位 / 迭代 / 连续工具调用各是里面的
-    /// 一个身份），因为「谁收起来了」只回答一次。
-    folded: std::collections::HashSet<BlockId>,
-    /// 进入全折之前那一份折叠态 —— `{` 存、`}` 还原（票 21 第 6 条）。
-    ///
-    /// 没有它，全展就只能是「清空折叠集合」，而那会把读者自己折的东西一起抹掉。连按两次
-    /// `{` 不覆盖它：否则 `}` 还原出来的就是全折态本身。
-    fold_before_all: Option<std::collections::HashSet<BlockId>>,
-    /// 当前账本上那些**折叠把手**的身份：组头那几行，以及现在画着的几条折行。
-    ///
-    /// 指针要它：一次点击落在一条源行上时，只有这一行是个把手才翻得动折叠，而「这一行是
-    /// 组头 / 折行，还是一条普通块行」在身份表上读不出来（[`TuiState::trace_block_ids`] 只有
-    /// 身份，没有种类）。它与窗格同进同出 —— 重放开始那一刻清空，推一条行时补一格。
-    fold_handles: std::collections::HashSet<BlockId>,
     /// 进行中的那次历史重放，有的话。`Some` 是一个一次性的启动状态：在它排空之前，键盘、
     /// 指针与循环的行为都不一样（`.scratch/tui-history-replay/spec.md` §2）。
     replay: Option<Replay>,
@@ -2373,38 +3893,17 @@ impl TuiState {
         cwd: std::path::PathBuf,
         home: Option<std::path::PathBuf>,
     ) -> Self {
-        let colors = SpeakerColors::new(&facts.speaker_order);
-        let mode = facts.mode;
         Self {
-            facts,
+            view: View::new(facts),
             cwd,
             home,
-            goal: None,
             last_title: None,
             exit_deadline: None,
             exit_gesture: Gesture::Exit,
             exit_gesture_busy: false,
             suspend: false,
-            mode,
-            transcript: Transcript::new(),
-            conversation: Pane::new(),
-            trace: Pane::new(),
-            live: String::new(),
-            painted: Vec::new(),
-            timeline: Timeline::default(),
-            block_at: std::collections::HashMap::new(),
-            in_call: false,
-            turn_calls: 0,
-            turn_usage: Usage::default(),
-            turn_ordinal: 0,
-            turn_totals: Vec::new(),
             // 第一帧之前没有真正的宽度；先用共享渲染那个缺省把行排出来，首帧一画出来就会
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
-            conversation_width: SHARED_RENDER_WIDTH,
-            trace_width: SHARED_RENDER_WIDTH,
-            conversation_flow: Flow::default(),
-            trace_flow: Flow::default(),
-            trace_tier_width: 0,
             dirty: true,
             editor: Input::new(),
             files: FileIndex::new(),
@@ -2413,8 +3912,6 @@ impl TuiState {
             file_scan_wanted: true,
             catalog: Vec::new(),
             slash: MenuSelection::default(),
-            panel: Panel::new(),
-            todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
             files_page: FilesPage::default(),
             // 进 TUI 就取一次数：打开就有东西看（§4）。
@@ -2424,28 +3921,9 @@ impl TuiState {
             sidebar_keyboard: false,
             main_tab: MainTab::Conversation,
             sidebar_wanted: true,
-            colors,
-            effort: None,
             picker: None,
             notice: None,
-            reasoning: String::new(),
-            thinking_speaker: crate::events::SpeakerId::System,
-            thinking_open: false,
-            thinking_done: false,
-            turn_rail: TurnRail::default(),
-            trace_links: std::collections::VecDeque::new(),
-            trace_block_ids: std::collections::VecDeque::new(),
             trace_keyboard: true,
-            trace_selection: None,
-            trace_search: None,
-            trace_index: TraceIndex::default(),
-            folded: std::collections::HashSet::new(),
-            fold_before_all: None,
-            fold_handles: std::collections::HashSet::new(),
-            anchors: Vec::new(),
-            trace_groups: TraceGroups::default(),
-            next_local_id: 0,
-            trace_drawn: Drawn::default(),
             trace_rect: None,
             detail: None,
             file_viewer: None,
@@ -2453,7 +3931,6 @@ impl TuiState {
             viewer_wake: None,
             detail_opener: None,
             detail_rect: None,
-            diff_reading: None,
             detail_serial: 0,
             modal_rect: None,
             questionnaire_bottom: None,
@@ -2471,8 +3948,6 @@ impl TuiState {
             // 这个样子（spec §6）。
             running: false,
             pulse: 0,
-            live_speaker: None,
-            running_tool: None,
             pending: None,
             events: Vec::new(),
             indicator: None,
@@ -2491,7 +3966,7 @@ impl TuiState {
             &self.cwd,
             self.home.as_deref(),
             wording::title_state(self.replay.is_some(), self.pending.is_some(), self.busy()),
-            self.goal.as_deref(),
+            self.view.goal.as_deref(),
         )
     }
 
@@ -2685,388 +4160,7 @@ impl TuiState {
             return 0;
         }
         self.dirty = true;
-        // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
-        // （`.scratch/trace-in-main/spec.md` §5）。
-        let at = event_at(&event);
-        // 增量事件在过滤期间不触发重放（见这个方法末尾那一支）。
-        let incremental = matches!(event, RenderEvent::Delta { .. });
-        // 身份的一半：流上的事件带信封，所以它的行号就是这一批块的来源（ADR 0021）。
-        // 渲染层自己造的那几条（增量 / 诊断 / 通知 / 身份注入）没有信封，于是是 `None`。
-        let seq = match &event {
-            RenderEvent::Logged(event) => Some(event.seq),
-            _ => None,
-        };
-        self.observe_goal(&event);
-        self.observe_running_tool(&event);
-        self.observe_timeline(&event);
-        // 这一整趟的收件人（两个视图都常驻，所以通常两个都在）。
-        let targets = self.targets();
-        let mut produced = 0usize;
-        for (offset, block) in self.transcript.push(event).into_iter().enumerate() {
-            let id = self.next_block_id(seq, offset as u32);
-            // 思考行的生命周期跑在块被画出来之前：一个推理增量开出它，正文的第一个增量把它
-            // 就地冻住，而 `MessageCompleted` 把还开着的那条定下来（票 02 §1）。
-            if let Block::Delta {
-                speaker,
-                kind,
-                text,
-            } = &block
-            {
-                match kind {
-                    DeltaKind::Reasoning => {
-                        // `at` 就是收到这条增量的时候：推理增量没有信封，所以「思考开始那一刻」
-                        // 只能是它（`.scratch/trace-thought-stamp/spec.md` §1）。
-                        produced += usize::from(self.open_thinking(speaker.clone(), at, id));
-                        self.reasoning.push_str(text);
-                    }
-                    DeltaKind::Text => self.freeze_thinking(at),
-                }
-            }
-            if let Block::Message {
-                speaker,
-                role,
-                reasoning,
-                timing,
-                ..
-            } = &block
-            {
-                if matches!(role, Role::Assistant) {
-                    // 消息的整段 trace 把还开着的定下来。provider 一个增量都没发时，这行改在
-                    // 这里开出来、且已经完成；已经开过并定过的那条（正文在流中途把它冻住了）
-                    // 不再加新的，因为一段思考就是一行（票 02 §1）。trace 缺席时把开着的行按
-                    // 「未记录」定下来 —— 那是合成器的形状，增量流过了，什么都没记下来。
-                    match reasoning {
-                        Some(text) => {
-                            let text = text.clone();
-                            if !self.thinking_open && !self.thinking_done {
-                                produced +=
-                                    usize::from(self.open_thinking(speaker.clone(), at, id));
-                            }
-                            self.settle_thinking(Some(text), at, *timing);
-                        }
-                        None => {
-                            if self.thinking_open {
-                                self.settle_thinking(None, at, *timing);
-                            }
-                        }
-                    }
-                    // 已经落定的那一段是同一次调用的一部分：把它那份计时补齐（实时路径上它是
-                    // 被第一个正文增量冻住的，那时首 token 与用量都还没到）。
-                    self.refresh_settled_thinking(*timing);
-                    self.thinking_done = true;
-                }
-            }
-            // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
-            if matches!(&block, Block::TurnStarted { .. }) {
-                self.thinking_done = false;
-                // 一次发言的第一迭代开一次新的发言：用量面的「本次」按它认领（票 15）。
-                if matches!(&block, Block::TurnStarted { iteration: 1, .. }) {
-                    self.turn_ordinal += 1;
-                }
-                // 每一次迭代 = 一次模型调用，也就是一笔用量的归属单位（§5）。
-                self.turn_calls += 1;
-                self.in_call = true;
-            }
-            match &block {
-                // 推理不是消息正文的一部分：它被折进自己那一行，所以永远不加入正文流过的那条
-                // 活尾巴（票 02 §3）。
-                Block::Delta {
-                    kind: DeltaKind::Reasoning,
-                    ..
-                } => {}
-                Block::Delta { speaker, text, .. } => {
-                    self.live_speaker = Some(speaker.clone());
-                    self.live.push_str(text);
-                    if self.live.len() > LIVE_BUFFER {
-                        let cut = self.live.len() - LIVE_BUFFER;
-                        // 按字符边界裁。
-                        let cut = (cut..self.live.len())
-                            .find(|index| self.live.is_char_boundary(*index))
-                            .unwrap_or(self.live.len());
-                        self.live.drain(..cut);
-                    }
-                }
-                Block::Message { .. } => {
-                    // 增量是那一版实时的视图；块才是永久的那一版，所以尾巴可以走了。
-                    self.live.clear();
-                    self.live_speaker = None;
-                }
-                _ => {}
-            }
-            // 面板数的是这个块就会话说了什么；窗格显示的是它向读者说了什么。名字在进来的路上
-            // 就上了色，所以发言者的第一行就是给注入名册没列到的名字定色的那一下（票 07）。
-            self.panel.observe(&block);
-            // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
-            self.todo.observe(&block);
-            produced += self.trace_block(block, at, targets, id);
-        }
-        // 过滤激活时，这一趟推出去的行要按新的「哪些块在」再对齐一次：未命中的那些刚被推
-        // 进了账本，而账本上只剩命中块（票 20 第 7 条）。重放是那句判据的唯一权威，所以
-        // 这里不清账、只重推一遍。
-        //
-        // 折起来的东西也一样：新块与**挂着它的那一组**都长在折行底下，而组头那一行此刻画的
-        // 是折行 —— 一次重放把账本按新的折叠态重推一遍，是这里唯一能对齐它的东西（票 21）。
-        //
-        // 增量事件两边都跳过：一条流式输出每秒几十条，而它唯一画出来的东西是那条**还没
-        // 定稿**的思考行 —— 那一行进不了过滤视图（`paint_thinking_line` 那里已经挡了），
-        // 也进不了折起来的那一组（那里也挡了）。它定稿那一下（`settle_thinking`）自己带
-        // 一次重放。
-        if (self.filtering() || !self.folded.is_empty()) && !incremental {
-            self.replay_trace();
-        }
-        produced
-    }
-
-    /// 这一刻该把块喂给哪些视图。
-    ///
-    /// 实时事件到达时**不问「现在显示哪一页」**：两个视图都常驻，切页与 `Ctrl-O` 都不会漏
-    /// 内容，发言者配色槽位也不随可见性变（票 09、`.scratch/trace-in-main/spec.md` §3）。
-    fn targets(&self) -> Targets {
-        Targets {
-            conversation: true,
-            // 轨迹视图与对话视图一样常驻：它住在主列里，而主列永远在
-            // （`.scratch/trace-in-main/spec.md` §3）。
-            trace: true,
-        }
-    }
-
-    /// 画一个块，并处理它那两种尾巴：一笔用量不再是自己的一条，而是攒着等那次调用收尾；
-    /// `TurnEnded` 在跨 ≥2 次调用时带上合计
-    /// （ADR 0016、`.scratch/trace-usage-tail/spec.md` §1、§5）。
-    fn trace_block(
-        &mut self,
-        block: Block,
-        at: DateTime<Utc>,
-        targets: Targets,
-        id: BlockId,
-    ) -> usize {
-        // 新到达的块：它要开组、也要让当前那组长一格。
-        self.trace_block_inner(block, at, targets, id, false)
-    }
-
-    fn trace_block_inner(
-        &mut self,
-        block: Block,
-        at: DateTime<Utc>,
-        targets: Targets,
-        id: BlockId,
-        replaying: bool,
-    ) -> usize {
-        // 用量属于产生它的那次调用：贴到**它到达这一刻**那次调用最后画出的那条过程行上。
-        //
-        // 不推迟到那次调用收尾再贴 —— 工具行排在用量之后，消息行也排在它之后，等下去只会
-        // 等到一条内容行，而最常见的纯对话调用就再也贴不上（ADR 0016 的「被否决的替代
-        // 方案」）。
-        if let Block::Usage { usage, .. } = &block {
-            if self.in_call {
-                self.turn_usage.accumulate(*usage);
-                if self.usage_host_exists() {
-                    let tail = Tail::Usage(*usage);
-                    if let Some(slot) = self.painted.last_mut() {
-                        slot.set_tail(tail);
-                    }
-                    // 那一行已经画出去了，所以这一段是补在它尾巴上，不是另起一行 —— 它的
-                    // 时刻戳、名字配色与详情入口都留在原地。
-                    self.trace.append_to_last(tail.span());
-                    return 0;
-                }
-            }
-            return self.push_block(block, at, targets, None, id, replaying);
-        }
-        let tail = if matches!(&block, Block::TurnEnded { .. }) {
-            self.in_call = false;
-            let total = (self.turn_calls >= 2).then_some(Tail::Total(self.turn_usage));
-            // 这一次发言收尾了：合计进账，用量面的「本次」那一节按它回答（票 15 第 3 条）。
-            self.turn_totals.push(self.turn_usage);
-            self.turn_calls = 0;
-            self.turn_usage = Usage::default();
-            total
-        } else {
-            None
-        };
-        self.push_block(block, at, targets, tail, id, replaying)
-    }
-
-    /// 窗格最后那条来源行能不能承载一笔用量。
-    ///
-    /// 用量到达这一刻，那次调用最后画出来的那条正是它 —— 有推理时是思考行，没推理时是回合
-    /// 开始那行。消息行与一条独立的用量行都不承载：前者在轨迹页是「首行 + `…`」的内容入口，
-    /// 把数字挂上去读不出归属（§1、§4）。
-    fn usage_host_exists(&self) -> bool {
-        match self.painted.last() {
-            Some(Painted::Thinking { .. } | Painted::Thought { .. }) => true,
-            Some(Painted::Block { block, .. }) => {
-                !matches!(block, Block::Message { .. } | Block::Usage { .. })
-            }
-            // 组头与小标题是一次调用的**摘要**或一个段落标题，而用量属于产生它的那次调用
-            // —— 挂到它们行尾会把数字摆在一个读不出归属的位置上（ADR 0016）。
-            Some(Painted::GroupHeader(_)) | Some(Painted::SectionHeader(_)) => false,
-            None => false,
-        }
-    }
-
-    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻与尾巴），好在宽度变化时重放
-    /// （spec §1；尾巴见 ADR 0016）。
-    fn push_block(
-        &mut self,
-        block: Block,
-        at: DateTime<Utc>,
-        targets: Targets,
-        tail: Option<Tail>,
-        id: BlockId,
-        replaying: bool,
-    ) -> usize {
-        // 用量账在**到达这一刻**记下：这条记录属于哪一次发言，以及到它为止的会话累计。
-        // 会话累计直接读左栏那一份 —— 两处同源同一个数（票 15 第 3 条）。
-        let usage = UsageScope {
-            turn: Some(self.turn_ordinal),
-            session: self.panel.total(),
-            this: Usage::default(),
-        };
-        let paint = BlockPaint {
-            at,
-            tail,
-            id,
-            usage,
-        };
-        let produced = self.emit_block(&block, paint, targets, replaying);
-        if produced > 0 {
-            // 索引与这一条记录同一步建：**块定稿进共享源那一刻**（票 20 第 4 条）。
-            // 重放不重建 —— 重放换的是窗格的行，不是块。
-            if !replaying {
-                self.note_trace_index(id, block_text(&block));
-            }
-            // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
-            // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
-            self.push_painted(Painted::Block {
-                block,
-                at,
-                id,
-                tail,
-                usage,
-            });
-        }
-        produced
-    }
-
-    /// 只把块排成行推进窗格，不记它 —— 到达时与重放时走的是同一条路。
-    ///
-    /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
-    /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
-    fn emit_block(
-        &mut self,
-        block: &Block,
-        paint: BlockPaint,
-        targets: Targets,
-        replaying: bool,
-    ) -> usize {
-        let BlockPaint {
-            at,
-            tail,
-            id,
-            usage,
-        } = paint;
-        let mut produced = 0;
-        // 详情入口要的那几笔账：这一块什么时候到的、产生它的那次调用的计时、以及它的用量
-        // （票 13 第 6、7 条、票 15）。两个视口画的是同一块，于是共用同一份。
-        let facts = DetailFacts {
-            at: Some(at),
-            timing: timing_of(block),
-            usage,
-        };
-        // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
-        // 收起左栏就是「过程行暂时看不到」，规则只有一个。
-        if targets.conversation && selects(Viewport::Conversation, block) {
-            let width = self.conversation_width;
-            let style = prefix_style(Viewport::Conversation, width);
-            let speaker = block_speaker(block);
-            let is_message = matches!(block, Block::Message { .. });
-            // 同一个人连着说的几段正文只在**第一段**画名字 —— 后面几段由它们前面那个空行
-            // 分段，名字重复出现在屏幕上只是噪音（2026-10-06 维护者，§23）。
-            let carry_name = !is_message
-                || speaker.is_none()
-                || self.conversation_flow.speaker.as_ref() != speaker
-                || !self.conversation_flow.message;
-            let mut lines = paint_block(
-                block,
-                &mut self.colors,
-                width,
-                style,
-                Viewport::Conversation,
-                carry_name,
-                facts,
-            );
-            // 例外一：用户自己的话在**对话视图**里排成一个气泡（`bubble`）。它只在**这里**
-            // 发生：轨迹视图仍左对齐、`plain` 也仍顶格，因为两边都不走这个窗格。
-            if is_user_message(block) {
-                bubble(&mut lines, width, carry_name);
-            }
-            produced = produced.max(lines.len());
-            // 对话页没有账本行号可记：来源面只长在轨迹页的行上。
-            let _ = self.push_view_lines(
-                Viewport::Conversation,
-                speaker,
-                is_message,
-                lines,
-                Some(is_user_message(block)),
-                id,
-            );
-        }
-        if targets.trace && selects(Viewport::Trace, block) {
-            // 组头**长在组的最前面** —— 它先于成员画出去，读的人先看到这一段的界。
-            // 重画时跳过：它已经在清单里，那一条会被 `emit_painted` 画出来。
-            if !replaying {
-                self.note_section_header(block, at, targets, false);
-                self.open_group_headers(block, at, targets, self.discussion());
-            }
-            // 行首那几列归时间戳，所以轨迹内容的排版宽度是主列内容宽减掉它们
-            // （`.scratch/trace-in-main/spec.md` §5）。
-            let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
-            let style = prefix_style(Viewport::Trace, self.trace_tier_width);
-            // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
-            let mut lines = paint_block(
-                block,
-                &mut self.colors,
-                width,
-                style,
-                Viewport::Trace,
-                true,
-                facts,
-            );
-            // 行尾那几段账目：**这次调用自己花了多久**（只有工具块有这一笔），然后是产生它的
-            // 那次调用的用量、或一次发言的合计。放不下时先丢耗时、保用量 —— 行尾是用量的家，
-            // 而耗时是后来者（ADR 0016、票 17 第 1、2 条）。
-            let duration = tool_duration(block);
-            attach_row_tail(lines.last_mut(), duration, tail, width as usize);
-            produced = produced.max(lines.len());
-            let first = self.push_view_lines(
-                Viewport::Trace,
-                block_speaker(block),
-                matches!(block, Block::Message { .. }),
-                stamp_lines(lines, at),
-                Some(is_user_message(block)),
-                id,
-            );
-            // 来源面那条链的两环长在消息上：用户自己说的那句与一次迭代的回复（票 14）。
-            // 位置取这一块**第一条内容行**的账本行号 —— 链要的是「哪一行」，不是这一块
-            // 后来折出了几行。
-            if let (Some(kind), Some(row)) = (anchor_kind(block), first) {
-                self.note_anchor(kind, row);
-            }
-        }
-        // 这一块让当前开着的那一组发生了什么：工具算进直方图，收尾给跨度盖棺。两者都只
-        // **改写组头那一行**（`.scratch/trace-ledger/spec.md` §5）。
-        if targets.trace && !replaying {
-            self.note_group_progress(block, at, targets);
-        }
-        // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
-        // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。回合条只与对话 pane
-        // 平行，所以这条记账只看对话目标在不在，**不看那个块有没有真的画出来**：边界块在
-        // 对话视图里可能一行都不留，而一格照旧要长出来。
-        if targets.conversation && is_boundary(block, self.discussion()) {
-            self.turn_rail.close_unit();
-        }
-        produced
+        self.view.apply(event)
     }
 
     /// 某个视图的内容宽度变了：清空它，按新宽度把绘制记录整批重放一遍（spec §1）。
@@ -3078,34 +4172,34 @@ impl TuiState {
     /// pane 再放一遍会把它整份推第二遍。两个视图都常驻，所以这里不再有「宽度为零 = 不物化」
     /// 那一支（`.scratch/trace-in-main/spec.md` §3）。
     fn rerender_if_width_changed(&mut self, conversation_width: u16, trace_width: u16) {
-        let conversation = conversation_width != self.conversation_width;
-        let trace = trace_width != self.trace_width;
+        let conversation = conversation_width != self.view.conversation_width;
+        let trace = trace_width != self.view.trace_width;
         if !conversation && !trace {
             return;
         }
-        self.conversation_width = conversation_width;
-        self.trace_width = trace_width;
+        self.view.conversation_width = conversation_width;
+        self.view.trace_width = trace_width;
         if conversation {
-            self.conversation.clear();
+            self.view.conversation.clear();
             // 跨块排版的记账与窗格平行，所以它也跟着一起清。
-            self.conversation_flow = Flow::default();
+            self.view.conversation_flow = Flow::default();
             // 回合条的源行下标与对话 pane 平行，所以它跟着对话 pane 一起重建。
-            self.turn_rail.clear();
+            self.view.turn_rail.clear();
         }
         if trace {
             // 与过滤那一次重放共用同一份清账（票 20）。
-            self.clear_trace_for_replay();
+            self.view.clear_trace_for_replay();
         }
-        if self.painted.is_empty() {
+        if self.view.painted.is_empty() {
             self.dirty = true;
             return;
         }
         // 过滤（票 20）先决定「哪些块在」；折叠（票 21）接在它后面，管「一块画几行」。
         // 宽度变化本身不动那两份判据，所以重放出来的还是同一批块、折的还是那几块 ——
         // 过滤集与折叠集合都留在原处。
-        let visible = self.visible_records();
-        let plan = ledger_plan(&self.painted, &self.folded, self.filtering());
-        let painted = std::mem::take(&mut self.painted);
+        let visible = self.view.visible_records();
+        let plan = ledger_plan(&self.view.painted, &self.view.folded, self.view.filtering());
+        let painted = std::mem::take(&mut self.view.painted);
         let replay = Targets {
             conversation,
             trace,
@@ -3119,7 +4213,7 @@ impl TuiState {
                 match &plan[index] {
                     Planned::Skip => continue,
                     Planned::Fold(line) => {
-                        self.paint_fold_line(line, replay, &painted);
+                        self.view.paint_fold_line(line, replay, &painted);
                         continue;
                     }
                     Planned::Record => {}
@@ -3127,238 +4221,10 @@ impl TuiState {
             }
             // `true` = 这是**重画**：组头已经在那份清单里，重画它而不是再开一个
             // （`.scratch/trace-ledger/spec.md` §5）。新到达的块才走开组那半边。
-            self.emit_painted(item, replay, true);
+            self.view.emit_painted(item, replay, true);
         }
-        self.painted = painted;
+        self.view.painted = painted;
         self.dirty = true;
-    }
-
-    /// 重放一条绘制记录。`targets` 说这一趟要把记录喂给谁 —— 宽度没变的那个视口不在里面，
-    /// 它原样留着自己那份内容。
-    fn emit_painted(&mut self, painted: &Painted, targets: Targets, replaying: bool) {
-        match painted {
-            Painted::Block {
-                block,
-                at,
-                id,
-                tail,
-                usage,
-            } => {
-                self.emit_block(
-                    block,
-                    BlockPaint {
-                        at: *at,
-                        tail: *tail,
-                        id: *id,
-                        usage: *usage,
-                    },
-                    targets,
-                    replaying,
-                );
-            }
-            Painted::Thinking {
-                speaker, at, id, ..
-            } => {
-                self.paint_thinking_line(speaker, *at, targets, *id);
-            }
-            Painted::Thought(settled) => {
-                // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
-                // 就地重写那条「正在思考」）。
-                self.paint_settled_thinking(settled, targets, false);
-            }
-            Painted::GroupHeader(header) => {
-                // 重放同样重画整条组头 —— 用的是这份记录里的**定稿值**，于是它与实时路径
-                // 画出来的是同一行（`.scratch/trace-ledger/spec.md` §5）。
-                self.paint_group_header(header, targets, false);
-            }
-            Painted::SectionHeader(header) => {
-                self.paint_section_header(header, targets, false);
-            }
-        }
-    }
-
-    /// 把一条绘制记录推进重放清单，并记下它的身份与它在轴上的落点。
-    ///
-    /// 两张表同进同出：块身份那张（[`Self::block_at`]）是给横带用的（视口区间、选中标记，
-    /// 以及票 23 那两条泳道上的命中底色），而它与 `painted` 一样活过宽度重放 —— 重放走的
-    /// 就是这份清单，所以这里也是重放时重建那张表的地方。
-    fn push_painted(&mut self, painted: Painted) {
-        self.block_at.insert(
-            painted.id(),
-            BlockStamp {
-                at: painted.at(),
-                lane: painted.lane(),
-            },
-        );
-        self.painted.push(painted);
-    }
-
-    /// 把一条来源行推进它那个视图的窗格：折行缓存、链接入口、回合条的纹理，最后按窗格报回来
-    /// 的丢弃数裁掉两边溢出的部分。
-    ///
-    /// `user` 说这条行要不要记进回合条，`None` 是不记 —— 思考行是唯一的这种行：它属于当前
-    /// 单位，但它不是一次新的发言，也不改变单位的划分。回合条只与对话 pane 平行，所以只有
-    /// 那个视口会喂它。
-    fn push_line(
-        &mut self,
-        view: Viewport,
-        line: Line<'static>,
-        link: Option<Detail>,
-        user: Option<bool>,
-        id: Option<BlockId>,
-    ) {
-        // 空行只有分段那一个用途，所以它按内容判：没有字就是空行。它在 `line` 被移进窗格
-        // 之前取出来。
-        let blank = line.spans.iter().all(|span| span.content.trim().is_empty());
-        let dropped = match view {
-            Viewport::Conversation => self.conversation.push(line),
-            Viewport::Trace => {
-                let dropped = self.trace.push(line);
-                // 链接表跟着窗格交回来的丢弃数裁，不自己数 `CAP`：一条来源行在两边要么意思
-                // 相同、要么两边都没有（票 04 §1、票 07）。
-                self.trace_links.push_back(link);
-                // 身份表与它同进同出 —— 「这张表与窗格永远同长」是同一个理由（ADR 0021）。
-                self.trace_block_ids.push_back(id);
-                for _ in 0..dropped {
-                    self.trace_links.pop_front();
-                    self.trace_block_ids.pop_front();
-                }
-                dropped
-            }
-        };
-        if view == Viewport::Conversation {
-            if let Some(user) = user {
-                self.turn_rail.push_line(user, blank);
-            }
-            if dropped > 0 {
-                self.turn_rail.prune(dropped);
-            }
-        }
-    }
-
-    /// 把一个视图要的那些行推进窗格，并在**换发言者**时先空一行
-    /// （`.scratch/tui-visual-language/spec.md` §23）。
-    ///
-    /// 插入点是**块序列生成期**、不是绘制期：两个视图各记各的 [`Flow`]（重放时跟着窗格一起清），
-    /// 于是各自的空行也各归各的，而且滚动时不会重排。
-    ///
-    /// 空行的两条规矩：**换发言者**要空（把两个人的话分开）；对话视图里**两条消息之间**也要空
-    /// —— 一条消息是一段（2026-10-06 维护者：同一个人连说几段时，只留一个名字，段与段之间
-    /// 空一行）。同一人连发的**工具行**不空：一组动作读起来是一组。
-    ///
-    /// 返回值是**轨迹页上第一条内容行的账本行号** —— 来源面那条链按它给本行定位（票 14）；
-    /// 没往轨迹页推任何行（这个视口不在收件人里）时是 `None`。
-    fn push_view_lines(
-        &mut self,
-        view: Viewport,
-        speaker: Option<&crate::events::SpeakerId>,
-        is_message: bool,
-        lines: Vec<RenderedLine>,
-        user: Option<bool>,
-        id: BlockId,
-    ) -> Option<usize> {
-        if lines.is_empty() {
-            return None;
-        }
-        let blank = {
-            let flow = match view {
-                Viewport::Conversation => &self.conversation_flow,
-                Viewport::Trace => &self.trace_flow,
-            };
-            let changes_speaker = speaker
-                .is_some_and(|speaker| flow.speaker.as_ref().is_some_and(|last| last != speaker));
-            // 两者都成立时也只空一行。
-            changes_speaker || (view == Viewport::Conversation && is_message && flow.message)
-        };
-        if blank {
-            // 空行也走 `push_line`：回合条的平行表按来源行下标记账，跳过它会把格子指到
-            // 隔壁去。它不是一个用户消息，所以那一格记 `false`。
-            self.push_line(view, Line::default(), None, Some(false), Some(id));
-        }
-        {
-            let flow = match view {
-                Viewport::Conversation => &mut self.conversation_flow,
-                Viewport::Trace => &mut self.trace_flow,
-            };
-            if let Some(speaker) = speaker {
-                flow.speaker = Some(speaker.clone());
-            }
-            // 叙述、诊断这些块不带发言者，也要断开「同一人连续几段」这条线：下一段消息
-            // 因此重新带上名字。
-            flow.message = is_message;
-        }
-        let mut first = None;
-        for rendered in lines {
-            self.push_line(view, rendered.line, rendered.link, user, Some(id));
-            if view == Viewport::Trace && first.is_none() {
-                first = Some(self.trace.pushed());
-            }
-        }
-        first
-    }
-
-    /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
-    fn observe_running_tool(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
-            return;
-        };
-        match &event.payload {
-            EventPayload::ToolCallStarted {
-                tool_name, args, ..
-            } => self.running_tool = Some((tool_name.clone(), args.clone())),
-            // 一次调用结束、一个回合结束、一场会话收尾：都说明没有工具在跑了。
-            EventPayload::ToolCallCompleted { .. }
-            | EventPayload::TurnEnded { .. }
-            | EventPayload::SessionEnded { .. } => self.running_tool = None,
-            _ => {}
-        }
-    }
-
-    /// 把这一条事件记进整趟会话的 span 表（票 22 第 7 条）。
-    ///
-    /// 与 [`Self::observe_running_tool`] 同一处形状：事件 → 渲染层自己那份账，而那笔账每帧
-    /// 只被横带读一遍 —— **不重扫 `painted`**，那里的块数随会话线性长。
-    ///
-    /// 只认带信封的事件：两条泳道的边界事件全在流上，而渲染层自己造的那几条（增量、诊断、
-    /// 通知）没有时刻可言。
-    fn observe_timeline(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
-            return;
-        };
-        let at = event.at;
-        // 每一条事件都是这一趟里的一刻：轴域的两头由它撑开，而 span 只由下面那几类边界事件
-        // 产生（票 22 第 6 条）。
-        self.timeline.observed(at);
-        // 归属取信封上的发言者，与块那一侧同源（`TurnStarted` 的 payload 里那个 agent 是同一
-        // 个人，两个字段不打架）。
-        match &event.payload {
-            EventPayload::TurnStarted { iteration, .. } => {
-                self.timeline
-                    .turn_started(&event.speaker_id, *iteration, at);
-            }
-            // 一个单位收尾：那一次发言的模型段到此为止。
-            EventPayload::TurnEnded { .. } => self.timeline.turn_ended(&event.speaker_id, at),
-            // 讨论会话那一级的单位是轮次，它的头也画一道边界（票 22 第 4 条）。
-            EventPayload::RoundStarted { .. } => self.timeline.round_started(at),
-            EventPayload::RoundEnded { .. } => self.timeline.round_ended(at),
-            // 首 token 那一刻是这一次模型调用的：**用户自己那条消息**没有调用可归，于是它带的
-            // 那个 `None` 与老流同形（ADR 0020）。
-            EventPayload::MessageCompleted {
-                role,
-                first_token_ms,
-                ..
-            } if *role == Role::Assistant => {
-                self.timeline
-                    .message_completed(&event.speaker_id, *first_token_ms);
-            }
-            EventPayload::ToolCallStarted { tool_call_id, .. } => {
-                self.timeline.tool_started(tool_call_id, at);
-            }
-            EventPayload::ToolCallCompleted { tool_call_id, .. } => {
-                self.timeline.tool_completed(tool_call_id, at);
-            }
-            _ => {}
-        }
     }
 
     /// 一段正在流的文字折行之前的样子：每个逻辑行一条。
@@ -3382,32 +4248,33 @@ impl TuiState {
     /// 等待阶段（正文尾巴还空着）：名字下面那行是它**在做什么** —— 有工具在跑就说那个工具，
     /// 否则说它在想。流式阶段：名字下面是正在流的那几行正文。
     fn conversation_live(&mut self) -> Vec<Line<'static>> {
-        if self.live.is_empty() && !self.running {
+        if self.view.live.is_empty() && !self.running {
             return Vec::new();
         }
         // 谁在答：正在流的那条正文的发言者；还没有增量时退回名册的第一个（讨论里几轮之间会
         // 换人，而这一刻流上还没有归属）。
-        let speaker = self.live_speaker.clone().unwrap_or_else(|| {
-            self.facts
+        let speaker = self.view.live_speaker.clone().unwrap_or_else(|| {
+            self.view
+                .facts
                 .speaker_order
                 .first()
                 .map(|name| crate::events::SpeakerId::Debater(name.as_str().into()))
                 .unwrap_or(crate::events::SpeakerId::System)
         });
-        let continues = self.conversation_flow.message
-            && self.conversation_flow.speaker.as_ref() == Some(&speaker);
+        let continues = self.view.conversation_flow.message
+            && self.view.conversation_flow.speaker.as_ref() == Some(&speaker);
         let mut rows = Vec::new();
         if continues {
             rows.push(Line::default());
         } else {
-            let colour = self.colors.of(&speaker);
+            let colour = self.view.colors.of(&speaker);
             rows.push(Line::from(Span::styled(
                 wording::speaker_label(&speaker),
                 Style::default().fg(colour),
             )));
         }
-        if self.live.is_empty() {
-            let text = match &self.running_tool {
+        if self.view.live.is_empty() {
+            let text = match &self.view.running_tool {
                 Some((tool, args)) => wording::working(tool, args),
                 None => wording::waiting(self.pulse),
             };
@@ -3416,17 +4283,9 @@ impl TuiState {
                 Style::default().fg(palette::MUTED),
             )));
         } else {
-            rows.extend(Self::live_rows(&self.live));
+            rows.extend(Self::live_rows(&self.view.live));
         }
         rows
-    }
-
-    /// 这个会话数的是**轮**而不是回合。
-    ///
-    /// 注入而不是推断：讨论就是一个有不止一个讨论者的会话，而这属于组装已经知道的东西
-    /// （spec §4）。
-    fn discussion(&self) -> bool {
-        self.facts.speaker_order.len() > 1
     }
 
     /// 喂进一个**实时**渲染事件：渲染器跑着的时候到达的事件，相对于历史重放正在铺下的那种。
@@ -3497,8 +4356,8 @@ impl TuiState {
         }
         // 读的人追上来了：转录就是历史，视口在它的末尾，而一个刚开出来的会话本来就该在那里。
         // 两个视口都回到末尾：历史重放长出来的内容两边都有（票 09）。
-        self.conversation.to_bottom();
-        self.trace.to_bottom();
+        self.view.conversation.to_bottom();
+        self.view.trace.to_bottom();
         self.dirty = true;
     }
 
@@ -3558,635 +4417,6 @@ impl TuiState {
         self.sync_tokens();
     }
 
-    /// 开出思考行，除非已经有一条开着。它画出了一行时返回 `true`。
-    ///
-    /// 这一行是普通的转录行 —— 它照算窗格的上限，也跟别的一切一起滚 —— 而且刻意**还**
-    /// 不可点：完整 trace 只在 `MessageCompleted` 上才有（票 02 §1）。
-    fn open_thinking(
-        &mut self,
-        speaker: crate::events::SpeakerId,
-        at: DateTime<Utc>,
-        id: BlockId,
-    ) -> bool {
-        if self.thinking_open {
-            return false;
-        }
-        self.thinking_open = true;
-        self.thinking_speaker = speaker.clone();
-        self.reasoning.clear();
-        // 名字打头，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
-        // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
-        //
-        // 这一行马上要长在**账本末尾**，所以它盖不盖在折起来的组底下按最后那一条记录问
-        // （票 21）：增量不触发重放，这一行是唯一会从一个折行底下漏出来的东西。
-        let last = self.painted.len().saturating_sub(1);
-        if !self.covered_by_folded(last) {
-            self.paint_thinking_line(&speaker, at, self.targets(), id);
-        }
-        // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
-        self.push_painted(Painted::Thinking {
-            speaker,
-            at,
-            id,
-            tail: None,
-        });
-        true
-    }
-
-    /// 把「正在思考」那一行推进轨迹视图。
-    ///
-    /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
-    /// 左栏不在时它也不回对话视图（2026-10-05 维护者推翻 §6）。
-    ///
-    /// **未定稿的增量行不在索引里**（票 20 第 4 条），所以这一条在过滤期间直接被谓词挡在
-    /// 账本外：它还在变，而「命中不命中」这一刻还答不出来。它定稿那一刻才进索引，那一下
-    /// 触发一次重放，于是它若命中就出现（见 [`TuiState::settle_thinking`]）。
-    fn paint_thinking_line(
-        &mut self,
-        speaker: &crate::events::SpeakerId,
-        at: DateTime<Utc>,
-        targets: Targets,
-        id: BlockId,
-    ) {
-        if targets.trace && self.trace_admits(id) {
-            let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
-            // 开着的行也有时刻：思考**开始**那一刻（`.scratch/trace-thought-stamp/spec.md`
-            // §1）。它会在定稿时就地重写成完成那一刻（§2）。
-            self.push_line(
-                Viewport::Trace,
-                stamped_line(line, at),
-                None,
-                None,
-                Some(id),
-            );
-        }
-    }
-
-    /// 把定稿的思考行喂给每条选中的视口，并把它变成通向详情的入口。
-    ///
-    /// `in_place` 说它是**就地重写**还是**追加**：实时路径上那条「正在思考」已经在窗格里，
-    /// 冻住它就是重写最后一行；重放路径上窗格刚被清空，定稿那条要重新画出来
-    /// （票 02 §1、票 09）。只喂轨迹视图 —— 思考行是过程行（票 10）。
-    ///
-    /// 过滤期间那一行**不在窗格最后**（它开出来时就被谓词挡了，而且一次重放会把账本整批
-    /// 换掉），所以这里再问一遍「窗格最后那一条真的是它吗」：问不对就什么都不写，跟着来的
-    /// 那次重放会把定稿这一条安排到它该在的位置上（票 20 第 4 条）。
-    fn paint_settled_thinking(
-        &mut self,
-        settled: &SettledThinking,
-        targets: Targets,
-        in_place: bool,
-    ) {
-        if targets.trace {
-            let (line, detail) = self.thinking_settled_line(settled, Viewport::Trace);
-            let mut line = line;
-            // 尾巴跟着这条行走：定稿是整行重写，丢在这里就等于把那笔用量吞掉。
-            if let Some(tail) = settled.tail {
-                line.spans.push(tail.span());
-            }
-            let line = stamped_line(line, settled.at);
-            let here = self.trace_block_ids.back() == Some(&Some(settled.id));
-            if in_place && here {
-                self.trace.replace_last(line);
-                if let Some(link) = self.trace_links.back_mut() {
-                    *link = Some(detail);
-                }
-            } else if self.trace_admits(settled.id) {
-                self.push_line(Viewport::Trace, line, Some(detail), None, Some(settled.id));
-            }
-        }
-    }
-
-    /// 这一批块里要不要**开一个新的一级组 / 一个新迭代**，以及开的那一个要画成什么样。
-    ///
-    /// 组头**长在组的最前面**：它在成员被推出去之前画，所以读的人先看到这一段的界，再看到
-    /// 里面有什么（`.scratch/trace-ledger/spec.md` §5）。
-    fn open_group_headers(
-        &mut self,
-        block: &Block,
-        at: DateTime<Utc>,
-        targets: Targets,
-        discussion: bool,
-    ) -> Option<HeaderLevel> {
-        let level = if self.trace_groups.opens_unit(block, discussion) {
-            Some(HeaderLevel::Unit)
-        } else if self.trace_groups.opens_iteration(block, discussion) {
-            Some(HeaderLevel::Iteration)
-        } else {
-            None
-        };
-        let level = level?;
-        // 上一个迭代到此为止 —— 它的耗时到这一刻（`.scratch/trace-ledger/spec.md` §5：
-        // 一次迭代没有自己的行，二级头就是它的行）。
-        if level == HeaderLevel::Iteration
-            && let Some(previous) = self.trace_groups.iteration.as_ref().map(|open| open.header)
-        {
-            self.close_group(previous, at);
-            self.redraw_group_header(previous, targets);
-        }
-        let ordinal = match level {
-            HeaderLevel::Unit => unit_ordinal(&self.trace_groups),
-            HeaderLevel::Iteration => match block {
-                Block::TurnStarted { iteration, .. } => *iteration,
-                _ => 1,
-            },
-        };
-        let id = self.next_block_id(None, 0);
-        let header = GroupHeader {
-            id,
-            level,
-            ordinal,
-            at,
-            span: None,
-            tools: Vec::new(),
-        };
-        // 画它，然后记住它画在哪一行 —— 直方图每来一条长一格，靠的是这个下标。
-        self.paint_group_header(&header, targets, false);
-        self.push_painted(Painted::GroupHeader(header));
-        let open = OpenGroup { header: id };
-        match level {
-            HeaderLevel::Unit => {
-                self.trace_groups.units += 1;
-                self.trace_groups.unit = Some(open);
-            }
-            HeaderLevel::Iteration => self.trace_groups.iteration = Some(open),
-        }
-        Some(level)
-    }
-
-    /// 一个块让**当前开着的那一组**发生了什么：工具算进直方图，而收尾事件给跨度盖棺。
-    ///
-    /// 两者都只**改写组头那一行**（`Pane::replace_at`），不重放整本账 —— 于是读的人看到的是
-    /// 「正在跑的这个回合在干什么」，而它在屏上仍然只占一行。
-    fn note_group_progress(&mut self, block: &Block, at: DateTime<Utc>, targets: Targets) {
-        // 工具直方图：一级组收，同类归并。
-        if let Block::Tool(tool) = block {
-            let name = tool.tool.clone();
-            let touched = self.trace_groups.unit.as_ref().map(|unit| unit.header);
-            if let Some(touched) = touched
-                && self.bump_tool_count(touched, &name)
-            {
-                self.redraw_group_header(touched, targets);
-            }
-        }
-        // 收尾：给开着的那几组各记下它到此为止的跨度，于是重放时画的是同一行。
-        // 一级与二级**都**收 —— 迭代的耗时住在它自己的二级头上。
-        if is_boundary(block, self.discussion()) {
-            let closing: Vec<BlockId> = [
-                self.trace_groups.unit.as_ref().map(|open| open.header),
-                self.trace_groups.iteration.as_ref().map(|open| open.header),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            for id in closing {
-                self.close_group(id, at);
-                self.redraw_group_header(id, targets);
-            }
-        }
-    }
-
-    /// 直方图上那个工具名 +1；返回「要不要重画那一行」（第一次见到这个名字要）。
-    fn bump_tool_count(&mut self, id: BlockId, name: &str) -> bool {
-        let Some(header) = self.group_header_mut(id) else {
-            return false;
-        };
-        match header.tools.iter_mut().find(|(known, _)| known == name) {
-            Some(entry) => {
-                entry.1 += 1;
-                false
-            }
-            None => {
-                header.tools.push((name.to_owned(), 1));
-                true
-            }
-        }
-    }
-
-    /// 那一组在 `at` 那一刻收尾 —— 跨度从此是定稿值。
-    fn close_group(&mut self, id: BlockId, at: DateTime<Utc>) {
-        if let Some(header) = self.group_header_mut(id) {
-            header.span = at.signed_duration_since(header.at).to_std().ok();
-        }
-    }
-
-    /// 重放清单里那个组头记录的可变引用。
-    fn group_header_mut(&mut self, id: BlockId) -> Option<&mut GroupHeader> {
-        self.painted.iter_mut().find_map(|painted| match painted {
-            Painted::GroupHeader(header) if header.id == id => Some(header),
-            _ => None,
-        })
-    }
-
-    /// 把组头那一行按它现在的数据重画一遍（就地改写，不动其他行）。
-    fn redraw_group_header(&mut self, id: BlockId, targets: Targets) {
-        let Some(header) = self.painted.iter().find_map(|painted| match painted {
-            Painted::GroupHeader(header) if header.id == id => Some(header.clone()),
-            _ => None,
-        }) else {
-            return;
-        };
-        self.paint_group_header(&header, targets, true);
-    }
-
-    /// 把一个无主段落的小标题画进轨迹窗格 —— 与组头同一套形状（`in_place` 是就地改写）。
-    fn paint_section_header(&mut self, header: &SectionHeader, targets: Targets, in_place: bool) {
-        if !targets.trace {
-            return;
-        }
-        let line = section_header_line(header);
-        if in_place {
-            if let Some(source) = self.first_source_of(header.id) {
-                self.trace.replace_at(source, line);
-            }
-        } else {
-            self.push_line(Viewport::Trace, line, None, None, Some(header.id));
-        }
-    }
-
-    /// 把一条折行画进轨迹窗格（票 21 第 2、3 条）：它**占一个源行**，而那一行就是那个块
-    /// —— 可选中、`Enter` 开详情、`Space` 展开，身份照 [`Self::push_line`] 记进身份表。
-    ///
-    /// 顺手把它记成**折叠把手**：指针要按源行回答「这一行点得开吗」，而身份表只记身份、
-    /// 不记种类（见 [`Self::fold_handles`]）。开场那一段收成的一行不入这份账 —— 它点不动
-    /// （票 21 第 8 条）。
-    fn paint_fold_line(&mut self, line: &FoldLine, targets: Targets, records: &[Painted]) {
-        if !targets.trace {
-            return;
-        }
-        let id = line.id();
-        let rendered = fold_line(line, self.trace_width, self.discussion());
-        let link = self.fold_line_link(line, records);
-        self.push_line(Viewport::Trace, rendered, link, None, Some(id));
-        if line.is_toggleable() {
-            self.fold_handles.insert(id);
-        }
-    }
-
-    /// 一条折行通向哪儿。
-    ///
-    /// **连续工具调用那一档**挂**段首那一次调用**的详情：折行替掉的就是它那一行，所以读者
-    /// 点开看到的是这一段从哪儿开始 —— 与它原来那一行同一份构造，标题、配色与各面都不漂。
-    ///
-    /// **开场那一行挂段内第一条注入**：那一段折叠之后只剩一个入口，而「从这一段的第一条
-    /// 看起」与「一个块的第一条源行才是落点」是同一条读法（票 21 第 8 条）。
-    ///
-    /// **一级与二级那两档挂组内第一条能开详情的成员**：一个单位 / 一次迭代今天本身不是一个
-    /// 可读的对象（没有「一个回合」的详情），而折起来之后那一行就是这一组唯一的入口 ——
-    /// 于是它落到往下第一件读得动的东西上。组里可能先有二级头、小标题这些不是对象的行，
-    /// 所以是「往前找第一条真能开的块」；一条都找不到就仍不挂（那是诚实的结果，不是偷懒）。
-    fn fold_line_link(&mut self, line: &FoldLine, records: &[Painted]) -> Option<Detail> {
-        let id = match line {
-            FoldLine::Run { id, .. } => Some(*id),
-            FoldLine::Preamble { first, .. } => Some(*first),
-            FoldLine::Unit { .. } | FoldLine::Iteration { .. } => None,
-        };
-        if let Some(id) = id {
-            let record = records.iter().find(|record| record.id() == id)?;
-            return self.record_detail(record);
-        }
-        // 剩下的两档各代表**一整组**：先找到那条组头，再在它的范围里找第一条能开的成员。
-        let (id, unit_only) = match line {
-            FoldLine::Unit { id, .. } => (*id, true),
-            FoldLine::Iteration { id, .. } => (*id, false),
-            FoldLine::Run { .. } | FoldLine::Preamble { .. } => return None,
-        };
-        let head = records
-            .iter()
-            .position(|record| matches!(record, Painted::GroupHeader(header) if header.id == id))?;
-        let end = next_header_after(records, head, unit_only);
-        records[head + 1..end]
-            .iter()
-            .find_map(|record| self.record_detail(record))
-    }
-
-    /// 一条绘制记录在账本上那个**可开详情的入口** —— 折行挂「组内第一条能开的成员」用它。
-    ///
-    /// 判据与那一行自己**同源**：块走它自己那一套绘制（轨迹视图那一份），定稿的思考走它
-    /// 那份构造。造不出入口的记录（组头、小标题、还在流的那条思考行、本来就没入口的叙述行）
-    /// 给 `None` —— 屏幕上那一行点不开，折行也就别挂在它上面。
-    fn record_detail(&mut self, record: &Painted) -> Option<Detail> {
-        match record {
-            Painted::Block {
-                block, at, usage, ..
-            } => {
-                let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
-                let style = prefix_style(Viewport::Trace, self.trace_tier_width);
-                let facts = DetailFacts {
-                    at: Some(*at),
-                    timing: timing_of(block),
-                    usage: *usage,
-                };
-                paint_block(
-                    block,
-                    &mut self.colors,
-                    width,
-                    style,
-                    Viewport::Trace,
-                    // 名字照画：这里要的是与轨迹页上那一行**同一份**构造，而那里每一行都带
-                    // 名字（`emit_block` 传的就是 `true`）。
-                    true,
-                    facts,
-                )
-                .into_iter()
-                .find_map(|rendered| rendered.link)
-            }
-            Painted::Thought(settled) => {
-                Some(self.thinking_settled_line(settled, Viewport::Trace).1)
-            }
-            Painted::Thinking { .. } | Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
-        }
-    }
-
-    /// 一个块是不是**开场段**里的一块。
-    ///
-    /// 开场是第一个单位之前那一段：身份注入、技能注入、命令、诊断与回执。
-    ///
-    /// 判据是**列出那几类**，而不是「不在组边界事件里」—— 后者会把一条落在组外的工具行
-    /// 也算成开场，而工具行永远属于某次调用（真实流里它总在一个 `TurnStarted` 之后）。
-    fn is_preamble(block: &Block) -> bool {
-        matches!(
-            block,
-            Block::ContextInjected { .. }
-                | Block::CommandRun { .. }
-                | Block::Notice(_)
-                | Block::Diagnostic(_)
-        )
-    }
-
-    /// 开场与压缩这两段**不属于任何一级组**，所以它们各有自己的小标题。
-    ///
-    /// 开场那条**随注入数增长而就地改写**（用票 12 那个窗格入口），所以读者不用等开场读完
-    /// 才知道它有多大（`.scratch/trace-ledger/spec.md` §5）。
-    ///
-    /// 「`/clear` 之后的那一段」**判不做**：`SessionStarted` 在转录层不产块，于是新会话的第一条
-    /// 可见块与本会话的第一条在块层面**同形** —— 拿不到判据就不画一条猜出来的界。
-    fn note_section_header(
-        &mut self,
-        block: &Block,
-        at: DateTime<Utc>,
-        targets: Targets,
-        replaying: bool,
-    ) {
-        if replaying {
-            return;
-        }
-        if matches!(block, Block::History { .. }) {
-            let id = self.next_block_id(None, 0);
-            let header = SectionHeader {
-                id,
-                kind: SectionKind::Compaction,
-                at,
-                injections: 0,
-            };
-            self.paint_section_header(&header, targets, false);
-            self.push_painted(Painted::SectionHeader(header));
-            return;
-        }
-        // 开场段：一个单位还没开出来之前的那些块。压缩已经在上面处理掉了。
-        if self.trace_groups.unit.is_some() || !Self::is_preamble(block) {
-            return;
-        }
-        let injection = matches!(block, Block::ContextInjected { .. });
-        match self.trace_groups.preamble {
-            Some(id) => {
-                if !injection {
-                    return;
-                }
-                if self.bump_injections(id) {
-                    self.redraw_section_header(id, targets);
-                }
-            }
-            None => {
-                let id = self.next_block_id(None, 0);
-                let header = SectionHeader {
-                    id,
-                    kind: SectionKind::Preamble,
-                    at,
-                    injections: u32::from(injection),
-                };
-                self.paint_section_header(&header, targets, false);
-                self.push_painted(Painted::SectionHeader(header));
-                self.trace_groups.preamble = Some(id);
-            }
-        }
-    }
-
-    /// 开场那一行的注入计数 +1；返回「要不要重画」。
-    fn bump_injections(&mut self, id: BlockId) -> bool {
-        let Some(header) = self.painted.iter_mut().find_map(|painted| match painted {
-            Painted::SectionHeader(header) if header.id == id => Some(header),
-            _ => None,
-        }) else {
-            return false;
-        };
-        header.injections += 1;
-        true
-    }
-
-    /// 把小标题那一行按它现在的数据重画一遍。
-    fn redraw_section_header(&mut self, id: BlockId, targets: Targets) {
-        let Some(header) = self.painted.iter().find_map(|painted| match painted {
-            Painted::SectionHeader(header) if header.id == id => Some(header.clone()),
-            _ => None,
-        }) else {
-            return;
-        };
-        self.paint_section_header(&header, targets, true);
-    }
-
-    /// 把一个组头画进轨迹窗格：`in_place` 说它是**就地改写**（直方图长了一格、跨度变了长）
-    /// 还是**追加**（宽度重放时窗格刚被清空）。
-    ///
-    /// 两种形状共用同一个函数，所以实时与重放画出来的那一行逐字相同 —— 而宽度变化不能把一个
-    /// 正在跑的回合的组头「按此刻重算」一遍（`.scratch/trace-ledger/spec.md` §5）。
-    fn paint_group_header(&mut self, header: &GroupHeader, targets: Targets, in_place: bool) {
-        if !targets.trace {
-            return;
-        }
-        let line = group_header_line(header, self.trace_width, self.discussion());
-        if in_place {
-            if let Some(source) = self.first_source_of(header.id) {
-                self.trace.replace_at(source, line);
-            }
-        } else {
-            self.push_line(Viewport::Trace, line, None, None, Some(header.id));
-            // 组头那一行是**折叠把手**：点它就是折 / 展它代表的那个单位 / 迭代（票 21
-            // 第 5 条）。展开态的组头没有 `▸`（票 21 第 7 条），而字形不是热区 —— 整行都算。
-            self.fold_handles.insert(header.id);
-            // 一级组头是来源面那条链的「那一回合」那一环（票 14 第 1 条）。二级（迭代）头不
-            // 记：链上那一环是「迭代的**回复**」，由消息自己记。
-            if header.level == HeaderLevel::Unit {
-                let row = self.trace.pushed();
-                self.note_anchor(AnchorKind::UnitHeader, row);
-            }
-        }
-    }
-
-    /// 这个视口里发言者前缀怎么写。
-    fn prefix_style_of(&self, view: Viewport) -> PrefixStyle {
-        let width = match view {
-            Viewport::Conversation => self.conversation_width,
-            Viewport::Trace => self.trace_tier_width,
-        };
-        prefix_style(view, width)
-    }
-
-    /// 思考开始那一行：名字加「正在思考」。重放时按同一份构造重建。
-    fn thinking_in_progress_line(
-        &mut self,
-        speaker: &crate::events::SpeakerId,
-        view: Viewport,
-    ) -> Line<'static> {
-        let style = self.prefix_style_of(view);
-        let color = self.colors.of(speaker);
-        Line::from(vec![
-            Span::styled(style.prefix(speaker), Style::default().fg(color)),
-            Span::styled(
-                wording::thinking_in_progress(),
-                Style::default().fg(palette::MUTED),
-            ),
-        ])
-    }
-
-    /// 思考落定那一行，以及它通向详情的入口。重放时按同一份构造重建。
-    fn thinking_settled_line(
-        &mut self,
-        settled: &SettledThinking,
-        view: Viewport,
-    ) -> (Line<'static>, Detail) {
-        let speaker = &settled.speaker;
-        let style = self.prefix_style_of(view);
-        let color = self.colors.of(speaker);
-        // 名字后面那个 `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以
-        // 「谁在说话」开头（票 03 §Answer，2026-09-23 修正）。
-        let line = Line::from(vec![
-            Span::styled(style.prefix(speaker), Style::default().fg(color)),
-            Span::styled(
-                format!("{} ", wording::FOLDABLE),
-                Style::default().fg(palette::MUTED),
-            ),
-            Span::styled(
-                wording::thinking_finished(),
-                Style::default().fg(palette::MUTED),
-            ),
-        ]);
-        let detail = Detail {
-            // 覆盖层的标题就是被点那一行自己的文字（票 02 §4）。
-            title: line_text(&line),
-            color,
-            speaker: Some(speaker.clone()),
-            at: Some(settled.at),
-            kind: DetailKind::Thinking {
-                text: settled.trace.clone(),
-                timing: settled.timing,
-            },
-            // 链在打开那一刻才定 —— 构造这一行时还不知道账本以后会长成什么样。
-            chain: None,
-            usage: Some(settled.usage),
-        };
-        (line, detail)
-    }
-
-    /// 把敞开的那条思考行就地冻住：正文的第一个增量意味着模型已经不思考、开始作答了，
-    /// 于是这行定下来（票 02 §1）。
-    fn freeze_thinking(&mut self, at: DateTime<Utc>) {
-        if !self.thinking_open {
-            return;
-        }
-        let text = std::mem::take(&mut self.reasoning);
-        let recorded = !text.is_empty();
-        // 这一刻这次调用还没完，所以计时先留空 —— 那条 `MessageCompleted` 一到就补齐
-        // （[`TuiState::refresh_settled_thinking`]）。编一个半份的读数不如说「还没到」。
-        self.settle_thinking(recorded.then_some(text), at, CallTiming::default());
-    }
-
-    /// 把思考行定下来 —— 不管有没有记录下来的 trace —— 并把它变成通向它详情的入口。
-    ///
-    /// `Some` 是记录下来的 trace；`None` 是合成器的形状 —— 增量流过了，事件流里没有整段
-    /// 文本 —— 它的详情会说出来。一个根本没有敞开思考行的回合什么都不加（票 02 §1）。
-    ///
-    /// `at` 是这段思考**到此为止**的那一刻：实时路径上它是正文第一个增量到达的时候，重放
-    /// 路径上它是那条 `MessageCompleted` 的时刻（`.scratch/trace-in-main/spec.md` §5）。
-    ///
-    /// `timing` 是这段思考所属那次模型调用的计时。实时路径上定稿发生时这次调用还没完，所以
-    /// 拿到的是半份 —— 那条 `MessageCompleted` 到达时会把它补齐（[`TuiState::apply`]）。
-    fn settle_thinking(&mut self, text: Option<String>, at: DateTime<Utc>, timing: CallTiming) {
-        if !self.thinking_open {
-            return;
-        }
-        self.reasoning.clear();
-        self.thinking_open = false;
-        self.thinking_done = true;
-        // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
-        let speaker = self.thinking_speaker.clone();
-        // 尾巴若已经挂在还开着的那一条上，定稿是整行重写，得跟着搬过去。
-        let tail = self.painted.last().and_then(Painted::tail);
-        // **身份也搬**：定稿不是一条新记录，是同一行从「正在思考」到「思考完成」的两个阶段
-        // （ADR 0021）—— 所以选中那一行在定稿那一刻不跳。
-        let id = self
-            .painted
-            .last()
-            .map(Painted::id)
-            .unwrap_or_else(|| self.next_block_id(None, 0));
-        let settled = SettledThinking {
-            speaker,
-            trace: text,
-            at,
-            id,
-            tail,
-            timing,
-            // 用量账与计时同一条纪律：随这一行一起记下，打开时那一面读的就是它（票 15）。
-            usage: UsageScope {
-                turn: Some(self.turn_ordinal),
-                session: self.panel.total(),
-                this: Usage::default(),
-            },
-        };
-        self.paint_settled_thinking(&settled, self.targets(), true);
-        // 一段思考到这一刻才算**定稿**，于是它是这一刻才进索引的（票 20 第 4 条）——
-        // 开着的那一段还在变，不建。合成器那种「没记下来」的形状没有文本可搜，也就不进。
-        let text = settled.trace.clone().unwrap_or_default();
-        // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
-        // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
-        match self.painted.last_mut() {
-            Some(slot @ Painted::Thinking { .. }) => *slot = Painted::Thought(settled),
-            _ => self.push_painted(Painted::Thought(settled)),
-        }
-        // 它若命中就出现在过滤视图里：账本此刻是按旧判据推的，所以这里补一次重放。
-        self.note_trace_index(id, text);
-        if self.filtering() {
-            self.replay_trace();
-        }
-    }
-
-    /// 那次模型调用完成了：把**已经落定**的那段思考的计时补齐。
-    ///
-    /// 实时路径上思考是被正文的第一个增量冻住的，那一刻这次调用还没完 —— 首 token 与输出
-    /// token 都还没到（它们随 `MessageCompleted` 来）。不补的话同一条流在实时与重放两条路上
-    /// 会给出两套读数，而那正是 [ADR 0020](../../docs/adr/0020-first-token-time-rides-the-completion.md)
-    /// 否决「只在渲染层记」的原因。重放路径上思考是在那条完成事件上定稿的（标量一开始就是齐
-    /// 的），于是这里是空操作。
-    fn refresh_settled_thinking(&mut self, timing: CallTiming) {
-        let Some(Painted::Thought(settled)) = self.painted.last() else {
-            return;
-        };
-        // 会话累计也在这一刻长了一截（本条调用的那笔用量随同一条完成事件进来）—— 用量面
-        // 那一节读的就是它（票 15）。
-        let session = self.panel.total();
-        if settled.timing == timing && settled.usage.session == session {
-            return;
-        }
-        let mut settled = settled.clone();
-        settled.timing = timing;
-        settled.usage.session = session;
-        // 就地重写那一行，并把它的详情入口一并换成新的 —— 两处同一条记录。
-        self.paint_settled_thinking(&settled, self.targets(), true);
-        if let Some(slot @ Painted::Thought(_)) = self.painted.last_mut() {
-            *slot = Painted::Thought(settled);
-        }
-    }
-
     /// 处理一个鼠标事件。
     ///
     /// 有五样东西可以回应指针，它们之间的顺序就是谁占着它：开着的详情覆盖层，然后是问题，
@@ -4196,24 +4426,24 @@ impl TuiState {
     /// （`.scratch/trace-in-main/spec.md` §4）。
     fn wheel_current(&mut self, up: bool) {
         match self.main_tab {
-            MainTab::Conversation => self.conversation.wheel(up),
-            MainTab::Trace => self.trace.wheel(up),
+            MainTab::Conversation => self.view.conversation.wheel(up),
+            MainTab::Trace => self.view.trace.wheel(up),
         }
     }
 
     /// 翻页两键：翻的是**当前显示的那一页**（§4）。
     fn page_current(&mut self, up: bool) {
         match self.main_tab {
-            MainTab::Conversation => self.conversation.page(up),
-            MainTab::Trace => self.trace.page(up),
+            MainTab::Conversation => self.view.conversation.page(up),
+            MainTab::Trace => self.view.trace.page(up),
         }
     }
 
     /// 回底键：回的是**当前显示的那一页**的底（§4）。
     fn current_page_to_bottom(&mut self) {
         match self.main_tab {
-            MainTab::Conversation => self.conversation.to_bottom(),
-            MainTab::Trace => self.trace.to_bottom(),
+            MainTab::Conversation => self.view.conversation.to_bottom(),
+            MainTab::Trace => self.view.trace.to_bottom(),
         }
     }
 
@@ -4484,9 +4714,9 @@ impl TuiState {
             //
             // 落在热区里之前键盘已经拿回来了（上面那一步），所以点完立刻能用 `↑` / `↓` 走。
             Some(HitAction::Fold(id)) => self.toggle_fold(id),
-            _ if self.indicator_hit(Viewport::Trace, column, row) => self.trace.to_bottom(),
+            _ if self.indicator_hit(Viewport::Trace, column, row) => self.view.trace.to_bottom(),
             _ if self.indicator_hit(Viewport::Conversation, column, row) => {
-                self.conversation.to_bottom()
+                self.view.conversation.to_bottom()
             }
             _ => {
                 // 文件页上的点击先于转录：左栏页区里的一行是这一页自己的东西
@@ -4529,7 +4759,7 @@ impl TuiState {
                     // 也算空白 —— 它们本来就没有可点开的东西，所以「点一行」那一支接不住它们。
                     // 点一行**不顺手选中**：详情盖住那一行之后读者多半按 `Esc` 关掉，而关掉
                     // 那一刻凭空多出一个高亮是能感觉到的跳动（票 10 §7）。
-                    self.trace_selection = None;
+                    self.view.trace_selection = None;
                 }
             }
         }
@@ -4541,10 +4771,10 @@ impl TuiState {
     /// 这一页没有焦点行，所以这里**不需要**「屏幕行 → 行下标」那套换算：落在这块矩形里就是
     /// 落在这一页上。列表空着时开不出一个空弹窗，于是这一次归 `false`，指针继续往下走。
     fn todo_click(&mut self, column: u16, row: u16) -> bool {
-        if self.tab != Tab::Todo || !self.todo.page_contains((column, row)) {
+        if self.tab != Tab::Todo || !self.view.todo.page_contains((column, row)) {
             return false;
         }
-        if self.todo.is_empty() {
+        if self.view.todo.is_empty() {
             return false;
         }
         self.open_todo_detail();
@@ -4561,7 +4791,11 @@ impl TuiState {
         let detail = Detail {
             // 标题说清这一份**是谁提交的** —— 讨论会话里各方各有一份（§1）。
             title: wording::detail_todo_title(
-                self.todo.speaker().map(wording::speaker_name).as_deref(),
+                self.view
+                    .todo
+                    .speaker()
+                    .map(wording::speaker_name)
+                    .as_deref(),
             ),
             // 一份计划不是谁说的话：标题用正文档那一档，与文件页那个内容弹窗同一个颜色。
             color: palette::PLAIN,
@@ -4569,7 +4803,7 @@ impl TuiState {
             speaker: None,
             at: None,
             kind: DetailKind::Todo {
-                items: self.todo.all().to_vec(),
+                items: self.view.todo.all().to_vec(),
             },
             chain: None,
             usage: None,
@@ -4645,7 +4879,7 @@ impl TuiState {
     /// 不可能走岔。
     fn open_file(&mut self, path: &str) {
         use crate::config::FileViewer;
-        match self.facts.file_viewer.kind {
+        match self.view.facts.file_viewer.kind {
             FileViewer::Builtin => self.open_file_detail(path),
             FileViewer::Nvim => self.open_file_viewer(path),
         }
@@ -4665,7 +4899,7 @@ impl TuiState {
         // 两块浮层互斥：开着详情时点开文件查看器，先把详情收掉。
         self.close_detail();
         let panes = layout::plan(self.area, 1, self.sidebar_wanted);
-        let Some(area) = panes.overlay_area(panes.viewer_width(self.facts.file_viewer.width))
+        let Some(area) = panes.overlay_area(panes.viewer_width(self.view.facts.file_viewer.width))
         else {
             // 没地方画：与详情覆盖层给同一个诚实答案 —— 不开，而不是开成两行。
             return;
@@ -4827,8 +5061,8 @@ impl TuiState {
             // 否则同一个物理键永远被菜单先抓走（票 20 第 1 条）。没在筛的时候 `n` / `N`
             // 什么都不做，照旧落进输入区：它们是普通字符。
             Key::Char('/') => self.begin_trace_search(),
-            Key::Char('n') if self.filtering() => self.step_trace_hit(true),
-            Key::Char('N') if self.filtering() => self.step_trace_hit(false),
+            Key::Char('n') if self.view.filtering() => self.step_trace_hit(true),
+            Key::Char('N') if self.view.filtering() => self.step_trace_hit(false),
             Key::Esc => self.trace_escape(),
             _ => return false,
         }
@@ -4882,11 +5116,11 @@ impl TuiState {
             self.cancel_trace_search();
             return;
         }
-        if self.filtering() {
+        if self.view.filtering() {
             self.clear_trace_filter();
             return;
         }
-        if self.trace_selection.take().is_none() {
+        if self.view.trace_selection.take().is_none() {
             self.release_trace_keyboard();
         }
     }
@@ -4895,29 +5129,10 @@ impl TuiState {
 
     /// 输入区此刻切在搜索模式吗（票 20 第 2 条）。判据就是「草稿被收起来了」。
     fn trace_searching(&self) -> bool {
-        self.trace_search
+        self.view
+            .trace_search
             .as_ref()
             .is_some_and(|search| search.draft.is_some())
-    }
-
-    /// 轨迹页此刻在不在过滤态：查询串切得出词来就是（票 20）。
-    ///
-    /// 「命中 0 个」也是过滤态 —— 那时那一行写 `0 个命中`，账本上一块都不剩。
-    fn filtering(&self) -> bool {
-        self.trace_search
-            .as_ref()
-            .is_some_and(|search| !search.terms.is_empty())
-    }
-
-    /// 这一条记录在不在过滤集里（票 20）。没有过滤时每一条都在。
-    ///
-    /// 判据是**过滤集**（那些命中的块身份），不是「有没有命中」—— 一个都没命中时账本上
-    /// 一块都不剩，那正是 `0 个命中` 在屏上的样子。
-    fn trace_admits(&self, id: BlockId) -> bool {
-        match self.trace_search.as_ref() {
-            Some(search) if !search.terms.is_empty() => search.hits.contains(&id),
-            _ => true,
-        }
     }
 
     /// `/`：进搜索 —— 输入区切到搜索模式，查询串打在它里面（票 20 第 1、2 条）。
@@ -4927,12 +5142,16 @@ impl TuiState {
     fn begin_trace_search(&mut self) {
         let draft = std::mem::take(&mut self.editor);
         let query = self
+            .view
             .trace_search
             .as_ref()
             .map(|search| search.query.clone())
             .unwrap_or_default();
         self.editor.insert_str(&query);
-        let search = self.trace_search.get_or_insert_with(TraceSearch::default);
+        let search = self
+            .view
+            .trace_search
+            .get_or_insert_with(TraceSearch::default);
         search.draft = Some(draft);
     }
 
@@ -4940,7 +5159,7 @@ impl TuiState {
     ///
     /// 过滤留着（它正是刚打进去的那条查询），草稿原样还回输入区。
     fn accept_trace_search(&mut self) {
-        let Some(search) = self.trace_search.as_mut() else {
+        let Some(search) = self.view.trace_search.as_mut() else {
             return;
         };
         if let Some(draft) = search.draft.take() {
@@ -4951,7 +5170,7 @@ impl TuiState {
     /// `Esc` 在搜索模式里：取消这次搜索 —— 查询串与过滤一起丢掉，草稿原样还原
     /// （票 20 第 2 条、第 10 条）。
     fn cancel_trace_search(&mut self) {
-        let Some(search) = self.trace_search.as_mut() else {
+        let Some(search) = self.view.trace_search.as_mut() else {
             return;
         };
         search.query.clear();
@@ -4963,7 +5182,7 @@ impl TuiState {
 
     /// `Esc` 的第二层：清掉这条过滤，账本回到全量（票 20 第 10 条）。
     fn clear_trace_filter(&mut self) {
-        let Some(search) = self.trace_search.as_mut() else {
+        let Some(search) = self.view.trace_search.as_mut() else {
             return;
         };
         search.query.clear();
@@ -4974,7 +5193,7 @@ impl TuiState {
     /// （票 20 第 2 条）。
     fn refresh_trace_query(&mut self) {
         let query = self.editor.text().to_owned();
-        if let Some(search) = self.trace_search.as_mut() {
+        if let Some(search) = self.view.trace_search.as_mut() {
             search.query = query;
         }
         self.refresh_trace_filter();
@@ -4987,158 +5206,54 @@ impl TuiState {
     /// 所以窗格自己那份锚兜不住它）。账本那一边由一次重放兑现：过滤集变了，账本上「哪些块
     /// 在」就变了。
     fn refresh_trace_filter(&mut self) {
-        let Some(search) = self.trace_search.as_ref() else {
+        let Some(search) = self.view.trace_search.as_ref() else {
             return;
         };
         let terms = query_terms(&search.query);
         let active = !terms.is_empty();
-        let was = self.filtering();
-        let hits = self.trace_index.hits(&terms);
-        if let Some(search) = self.trace_search.as_mut() {
+        let was = self.view.filtering();
+        let hits = self.view.trace_index.hits(&terms);
+        if let Some(search) = self.view.trace_search.as_mut() {
             search.terms = terms;
             search.hits = hits;
         }
         if active && !was {
             let here = (
-                self.trace.source_at(self.trace.top()).unwrap_or(0),
-                self.trace.following(),
+                self.view
+                    .trace
+                    .source_at(self.view.trace.top())
+                    .unwrap_or(0),
+                self.view.trace.following(),
             );
-            if let Some(search) = self.trace_search.as_mut() {
+            if let Some(search) = self.view.trace_search.as_mut() {
                 search.before_filter = Some(here);
             }
-            self.trace.set_following(false);
+            self.view.trace.set_following(false);
         } else if !active && was {
             let before = self
+                .view
                 .trace_search
                 .as_ref()
                 .and_then(|search| search.before_filter);
             match before {
                 // 那时贴着底：还到底部就是原处。
-                Some((_, true)) => self.trace.to_bottom(),
+                Some((_, true)) => self.view.trace.to_bottom(),
                 // 账本刚刚被重放成全量，所以这个位置按**来源行**报 —— 下一帧重新折行之后
                 // 它才落得下来。
                 Some((source, false)) => {
-                    self.trace.anchor_to_source(source);
-                    self.trace.set_following(false);
+                    self.view.trace.anchor_to_source(source);
+                    self.view.trace.set_following(false);
                 }
                 None => {}
             }
         }
-        if let Some(search) = self.trace_search.as_mut() {
+        if let Some(search) = self.view.trace_search.as_mut() {
             // 换了一条查询，之前数的那几个「新增」就作废了。
             search.fresh = 0;
         }
         if active || was {
-            self.replay_trace();
+            self.view.replay_trace();
         }
-    }
-
-    /// 一块定稿进共享源那一刻建索引（票 20 第 4 条）。
-    ///
-    /// 过滤激活时它顺手回答「这一块进不进过滤集」：命中就把身份收进去，并记一笔新增 ——
-    /// `· 新增 M` 数的就是它（M 是新到达的**块**数，不是行数）。
-    fn note_trace_index(&mut self, id: BlockId, text: String) {
-        let fresh_hit = match self.trace_search.as_ref() {
-            Some(search) if !search.terms.is_empty() => hits_terms(&search.terms, &text),
-            _ => false,
-        };
-        if fresh_hit && let Some(search) = self.trace_search.as_mut() {
-            search.hits.insert(id);
-            search.fresh += 1;
-        }
-        self.trace_index.note(id, text);
-    }
-
-    /// 按这一刻那份「哪些块在」的判据把轨迹页重推一遍（票 20 第 7 条）。
-    ///
-    /// 与宽度变化重放**同一条路**（取走整份 `painted` → 逐条重推），差别只在中间那一步问
-    /// 了一遍 [`Self::visible_records`]：过滤决定「哪些块在」。折叠（票 21）接在它后面
-    /// —— 一块画几行 —— 所以它接的是同一个入口。
-    ///
-    /// 窗格的视口**意图**保住：`clear` 留着 `follow` / `top` / `top_source`，下一帧照着它
-    /// 重新折行定位。但换掉整份账本之后「原处」得按**来源行**重报一遍 —— 那一份记在
-    /// `TraceSearch::before_filter` 里，由 [`Self::refresh_trace_filter`] 在进出过滤时存取。
-    fn replay_trace(&mut self) {
-        self.clear_trace_for_replay();
-        if self.painted.is_empty() {
-            self.dirty = true;
-            return;
-        }
-        let visible = self.visible_records();
-        // 折叠接在它的后面：**过滤先决定哪些块在，折叠后决定一块画几行**（票 21 第 10 条）。
-        // 过滤期间 `ledger_plan` 一律不折 —— 命中块必须画开，而折叠集合一个字节都不动。
-        let plan = ledger_plan(&self.painted, &self.folded, self.filtering());
-        let painted = std::mem::take(&mut self.painted);
-        let targets = Targets {
-            conversation: false,
-            trace: true,
-        };
-        for (index, item) in painted.iter().enumerate() {
-            if !visible[index] {
-                continue;
-            }
-            match &plan[index] {
-                Planned::Skip => {}
-                Planned::Fold(line) => self.paint_fold_line(line, targets, &painted),
-                Planned::Record => self.emit_painted(item, targets, true),
-            }
-        }
-        self.painted = painted;
-        self.dirty = true;
-    }
-
-    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、跨块排版状态，以及那一份
-    /// 「哪几行是折叠把手」。
-    ///
-    /// 它们必须一起清 —— 都是「按块序列推出来的」那几份账（票 12、16、18、21）。
-    ///
-    /// 组进度（[`Self::trace_groups`]）是这里唯一的例外：它不是清掉，而是照记录序
-    /// **重建**（[`TraceGroups::rebuilt`]）。它也是最容易被漏掉的一份 —— 清掉它、而重放只
-    /// 把组头与小标题那几行画回去，重放之后再到达的一块开场段就会再开一条 `开场`
-    /// （票 18 记下的那条欠账）。
-    fn clear_trace_for_replay(&mut self) {
-        self.trace.clear();
-        self.trace_links.clear();
-        self.trace_block_ids.clear();
-        self.anchors.clear();
-        self.trace_groups = TraceGroups::rebuilt(&self.painted);
-        self.trace_flow = Flow::default();
-        self.fold_handles.clear();
-    }
-
-    /// 这一趟重放推哪些记录（票 20）。
-    ///
-    /// **过滤先**决定「哪些块在」；组头与小标题跟着它们的成员 —— 一个组里一个可见的成员
-    /// 都没有，那个头也收起来，否则过滤视图里会留下一串没有成员的空头（票 20 第 7 条：
-    /// 组头保留，但它保留的是**有成员的组**的那个头，而它自己不因过滤改写）。
-    /// 折叠（票 21）改的是「一块画几行」，接在这一层之后。
-    fn visible_records(&self) -> Vec<bool> {
-        let mut visible: Vec<bool> = self
-            .painted
-            .iter()
-            .map(|painted| self.trace_admits(painted.id()))
-            .collect();
-        if !self.filtering() {
-            return visible;
-        }
-        for index in 0..self.painted.len() {
-            let end = match &self.painted[index] {
-                // 一级组头管到下一个一级组头（或一个无主段落的小标题）为止 —— 这中间那些
-                // 二级头与成员都是它的成员。
-                Painted::GroupHeader(header) if header.level == HeaderLevel::Unit => {
-                    next_header_after(&self.painted, index, true)
-                }
-                // 二级组头与小标题管到下一个组头或小标题为止。
-                Painted::GroupHeader(_) | Painted::SectionHeader(_) => {
-                    next_header_after(&self.painted, index, false)
-                }
-                _ => continue,
-            };
-            if (index + 1..end).any(|other| visible[other]) {
-                visible[index] = true;
-            }
-        }
-        visible
     }
 
     /// `n` / `N`：沿命中走一个，并把选中移到那个块（票 20 第 6 条）。
@@ -5146,19 +5261,21 @@ impl TuiState {
     /// 顺序取**账本的顺序**（`painted` 的记录序）：命中集是个集合，而「下一个」要有一个确定
     /// 的顺序。走到头就停在原地 —— 与 `[` / `]` 同一条「不循环」。
     fn step_trace_hit(&mut self, forward: bool) {
-        let Some(search) = self.trace_search.as_ref() else {
+        let Some(search) = self.view.trace_search.as_ref() else {
             return;
         };
         if search.terms.is_empty() {
             return;
         }
         let hits: Vec<BlockId> = self
+            .view
             .painted
             .iter()
             .map(Painted::id)
             .filter(|id| search.hits.contains(id))
             .collect();
         let current = self
+            .view
             .trace_selection
             .and_then(|id| hits.iter().position(|it| *it == id));
         let target = match (current, forward) {
@@ -5178,7 +5295,7 @@ impl TuiState {
     ///
     /// `None` 就是「不是过滤态，那一行照旧」。
     fn trace_hit_readout(&self) -> Option<String> {
-        let search = self.trace_search.as_ref()?;
+        let search = self.view.trace_search.as_ref()?;
         if search.terms.is_empty() {
             return None;
         }
@@ -5194,29 +5311,12 @@ impl TuiState {
     /// 它与新内容指示器那一套同一条节奏，只是数的是**命中块**；过滤期间那个位置让给了
     /// 命中读法，所以清零这件事由这里管。
     fn settle_trace_fresh(&mut self) {
-        let Some(search) = self.trace_search.as_mut() else {
+        let Some(search) = self.view.trace_search.as_mut() else {
             return;
         };
-        if search.fresh > 0 && self.trace.following() {
+        if search.fresh > 0 && self.view.trace.following() {
             search.fresh = 0;
         }
-    }
-
-    /// 账本上第 `index` 个位置是不是被某个**折着的**组盖着。
-    ///
-    /// 只有就地长出来的那一条（还没定稿的思考行）需要问它：别的块到达之后都会按票 21 那次
-    /// 重放对齐，而那一次重放自己知道该收谁 —— 这一条不走重放（增量每秒几十条），所以它
-    /// 自己问一句，免得从一个折行底下漏出来。
-    ///
-    /// 判据就是 [`fold_scopes`] 那一份范围（与折起、展开用的是同一条「哪几块算一段」）。
-    /// 过滤期间折叠整体让位（[`ledger_plan`] 的 `open_everything`），所以这里也放行。
-    fn covered_by_folded(&self, index: usize) -> bool {
-        if self.filtering() {
-            return false;
-        }
-        fold_scopes(&self.painted).into_iter().any(|(scope, line)| {
-            self.folded.contains(&line.id()) && scope.head < index && index < scope.end
-        })
     }
 
     /// 一条源行属于哪一块。`None` 是「这条行不属于任何块」（单位之间的分隔线那类）。
@@ -5224,7 +5324,7 @@ impl TuiState {
     /// 这是票 12 那份身份账的**反向查询**（票 12 的落地记录里写着「需要时再加，那时它才
     /// 真有消费者」）—— 今天有两个：画选中那一笔，与 `↑` / `↓` 找邻块。
     fn block_at_source(&self, source: usize) -> Option<BlockId> {
-        self.trace_block_ids.get(source).copied().flatten()
+        self.view.trace_block_ids.get(source).copied().flatten()
     }
 
     /// 账本这一帧可见的那几块，把轴切成哪一段时间（票 22 第 6 条：视口用刻度行的区间底色标）。
@@ -5233,17 +5333,17 @@ impl TuiState {
     /// 于是它不参与：这一段说的是「这一屏的块在全程的哪儿」，而不是「这一屏覆盖了多久」。
     /// 滚出视口的那几块一个字节都不看 —— 每帧只过一遍可视的那十几行。
     fn viewport_span(&self, rows: u16) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let top = self.trace.top();
+        let top = self.view.trace.top();
         let mut first: Option<DateTime<Utc>> = None;
         let mut last: Option<DateTime<Utc>> = None;
         for offset in 0..usize::from(rows) {
-            let Some(source) = self.trace.source_at(top + offset) else {
+            let Some(source) = self.view.trace.source_at(top + offset) else {
                 continue;
             };
             let Some(id) = self.block_at_source(source) else {
                 continue;
             };
-            let Some(stamp) = self.block_at.get(&id) else {
+            let Some(stamp) = self.view.block_at.get(&id) else {
                 continue;
             };
             if first.is_none() {
@@ -5259,8 +5359,8 @@ impl TuiState {
     /// 语义是「**位置**精确、长度有下限」：它是一根竖线，画在选中块首行那一刻 —— 那一块
     /// 多长不画，不足一格的长度更不画。查的是身份那张表，不是对 `painted` 的一次扫描。
     fn selection_mark(&self, axis: timeline::Axis) -> Option<u16> {
-        let id = self.trace_selection?;
-        let at = self.block_at.get(&id)?.at;
+        let id = self.view.trace_selection?;
+        let at = self.view.block_at.get(&id)?.at;
         Some(axis.column(at))
     }
 
@@ -5274,14 +5374,14 @@ impl TuiState {
     /// 而合并要一次排序 —— 这一档规模上它比维护第二份「命中段」缓存便宜，也少一处会与过滤集
     /// 走散的状态。合并与阈值都是纯算术，住在 [`timeline::hit_bands`] 里。
     fn hit_bands(&self, axis: timeline::Axis) -> Vec<timeline::HitBand> {
-        if !self.filtering() {
+        if !self.view.filtering() {
             return Vec::new();
         }
-        let Some(search) = self.trace_search.as_ref() else {
+        let Some(search) = self.view.trace_search.as_ref() else {
             return Vec::new();
         };
         let hits = search.hits.iter().filter_map(|id| {
-            let stamp = self.block_at.get(id)?;
+            let stamp = self.view.block_at.get(id)?;
             Some((stamp.lane?, stamp.at))
         });
         timeline::hit_bands(axis, hits)
@@ -5297,19 +5397,19 @@ impl TuiState {
             .rev()
             .find(|row| self.block_at_source(*row) != Some(id))
             .map_or(0, |row| row + 1);
-        let last = (source + 1..self.trace.sources())
+        let last = (source + 1..self.view.trace.sources())
             .find(|row| self.block_at_source(*row) != Some(id))
-            .map_or(self.trace.sources() - 1, |row| row - 1);
+            .map_or(self.view.trace.sources() - 1, |row| row - 1);
         Some((first, last))
     }
 
     /// 账本上第一条有身份的源行 / 最后一条。
     fn first_block_row(&self) -> Option<usize> {
-        (0..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
+        (0..self.view.trace.sources()).find(|row| self.block_at_source(*row).is_some())
     }
 
     fn last_block_row(&self) -> Option<usize> {
-        (0..self.trace.sources())
+        (0..self.view.trace.sources())
             .rev()
             .find(|row| self.block_at_source(*row).is_some())
     }
@@ -5320,13 +5420,21 @@ impl TuiState {
     /// 选中的那一块已经被 `CAP` 裁出窗口时也走这一支：它没有了位置可算，而「从眼前这块接着
     /// 走」比「什么都不做」有用。
     fn selection_anchor(&self) -> Option<usize> {
-        if let Some(row) = self.trace_selection.and_then(|id| self.first_source_of(id)) {
+        if let Some(row) = self
+            .view
+            .trace_selection
+            .and_then(|id| self.view.first_source_of(id))
+        {
             return Some(row);
         }
         // 视口顶端那一条**来源行** —— 窗格报的是显示行，而一条来源行可能折成了几行，所以
         // 要换回来再往下找。
-        let top = self.trace.source_at(self.trace.top()).unwrap_or(0);
-        (top..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
+        let top = self
+            .view
+            .trace
+            .source_at(self.view.trace.top())
+            .unwrap_or(0);
+        (top..self.view.trace.sources()).find(|row| self.block_at_source(*row).is_some())
     }
 
     /// 选中上 / 下一**块**。
@@ -5342,32 +5450,31 @@ impl TuiState {
             Some((first, _)) if step < 0 => (0..first)
                 .rev()
                 .find(|row| self.block_at_source(*row).is_some()),
-            Some((_, last)) => {
-                (last + 1..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
-            }
+            Some((_, last)) => (last + 1..self.view.trace.sources())
+                .find(|row| self.block_at_source(*row).is_some()),
             // 账本上一条有身份的行都没有：没有可选的落点。
             None => None,
         };
         let Some(row) = target else {
             return;
         };
-        self.trace_selection = self.block_at_source(row);
-        self.trace.reveal_source(row);
+        self.view.trace_selection = self.block_at_source(row);
+        self.view.trace.reveal_source(row);
     }
 
     /// `g`：账本第一条行 —— 它是最后一端之外的**另一端**，与「第一页」不是一件事（票 10 §12）。
     fn select_first_block(&mut self) {
         if let Some(row) = self.first_block_row() {
-            self.trace_selection = self.block_at_source(row);
-            self.trace.reveal_source(row);
+            self.view.trace_selection = self.block_at_source(row);
+            self.view.trace.reveal_source(row);
         }
     }
 
     /// `G`：最新那一条，并**恢复跟随**（选中的块被过滤掉之类的场合不归它管 —— 那归票 20）。
     fn select_last_block(&mut self) {
         if let Some(row) = self.last_block_row() {
-            self.trace_selection = self.block_at_source(row);
-            self.trace.to_bottom();
+            self.view.trace_selection = self.block_at_source(row);
+            self.view.trace.to_bottom();
         }
     }
 
@@ -5406,7 +5513,11 @@ impl TuiState {
     fn group_at_cursor(&self) -> Option<(GroupShape, usize)> {
         let row = self.selection_anchor()?;
         let id = self.block_at_source(row)?;
-        let at = self.painted.iter().position(|painted| painted.id() == id)?;
+        let at = self
+            .view
+            .painted
+            .iter()
+            .position(|painted| painted.id() == id)?;
         let shape = self.group_shape();
         let header = shape.records.get(at)?.owner?;
         Some((shape, header))
@@ -5419,14 +5530,14 @@ impl TuiState {
     /// 折起来的成员不再占源行，而 `[` / `]` 的落点不该落在看不见的东西上。摊开之后仍然报不
     /// 出位置（被 `CAP` 裁掉了）就什么都不做 —— 硬改选中只会在屏上留下一个看不见的落点。
     fn land_on_record(&mut self, id: BlockId) {
-        if self.first_source_of(id).is_none() && self.unfold_around(id) {
-            self.replay_trace();
+        if self.view.first_source_of(id).is_none() && self.unfold_around(id) {
+            self.view.replay_trace();
         }
-        let Some(row) = self.first_source_of(id) else {
+        let Some(row) = self.view.first_source_of(id) else {
             return;
         };
-        self.trace_selection = Some(id);
-        self.trace.reveal_source(row);
+        self.view.trace_selection = Some(id);
+        self.view.trace.reveal_source(row);
     }
 
     /// 把**收着这一块的那几层**展开，返回「折叠集合有没有动过」。
@@ -5434,15 +5545,20 @@ impl TuiState {
     /// 判据落在范围上，不落在「它现在画没画」上：一条记录被哪几层收着，由 [`fold_scopes`]
     /// 那一份范围说 —— 于是展开与折起用的是同一条「哪几块算一段」。
     fn unfold_around(&mut self, id: BlockId) -> bool {
-        let Some(index) = self.painted.iter().position(|painted| painted.id() == id) else {
+        let Some(index) = self
+            .view
+            .painted
+            .iter()
+            .position(|painted| painted.id() == id)
+        else {
             return false;
         };
-        let scopes = fold_scopes(&self.painted);
+        let scopes = fold_scopes(&self.view.painted);
         let mut changed = false;
         for (scope, line) in &scopes {
             // `scope.head < index`：目标自己那一行不在任何范围里，所以「选中一个组头」不会
             // 顺手把上层也摊开（它本来就在账本上）。
-            if scope_covers(scope, index) && self.folded.remove(&line.id()) {
+            if scope_covers(scope, index) && self.view.folded.remove(&line.id()) {
                 changed = true;
             }
         }
@@ -5466,13 +5582,17 @@ impl TuiState {
     fn fold_target_at_cursor(&self) -> Option<BlockId> {
         let row = self.selection_anchor()?;
         let id = self.block_at_source(row)?;
-        let index = self.painted.iter().position(|painted| painted.id() == id)?;
-        match &self.painted[index] {
+        let index = self
+            .view
+            .painted
+            .iter()
+            .position(|painted| painted.id() == id)?;
+        match &self.view.painted[index] {
             Painted::GroupHeader(header) => Some(header.id),
             Painted::Block {
                 block: Block::Tool(_),
                 ..
-            } => fold_scopes(&self.painted)
+            } => fold_scopes(&self.view.painted)
                 .into_iter()
                 .find(|(scope, line)| {
                     matches!(line, FoldLine::Run { .. }) && scope.head <= index && index < scope.end
@@ -5487,10 +5607,10 @@ impl TuiState {
     /// 重放是**唯一**那条路：折叠改的是「一块画几行」，与宽度重放、过滤共用同一个入口，
     /// 所以拖动宽度之后折叠态原样还在。
     fn toggle_fold(&mut self, id: BlockId) {
-        if !self.folded.remove(&id) {
-            self.folded.insert(id);
+        if !self.view.folded.remove(&id) {
+            self.view.folded.insert(id);
         }
-        self.replay_trace();
+        self.view.replay_trace();
     }
 
     /// `{`：全折 —— 整本账折到只剩各级组头与折行，**正在跑的那个回合也折**（票 21 第 6 条）。
@@ -5499,13 +5619,13 @@ impl TuiState {
     /// 自己折的东西一并抹掉）。**连按两次 `{` 不覆盖那份存根** —— 否则 `}` 还原出来的就是
     /// 全折态本身，那一次全展白按。
     fn fold_everything(&mut self) {
-        if self.fold_before_all.is_none() {
-            self.fold_before_all = Some(self.folded.clone());
+        if self.view.fold_before_all.is_none() {
+            self.view.fold_before_all = Some(self.view.folded.clone());
         }
-        for (_, line) in fold_scopes(&self.painted) {
-            self.folded.insert(line.id());
+        for (_, line) in fold_scopes(&self.view.painted) {
+            self.view.folded.insert(line.id());
         }
-        self.replay_trace();
+        self.view.replay_trace();
     }
 
     /// `}`：全展 —— 全折过就**还原到进全折之前**那一份折叠态；没全折过，那就是「全展」本身
@@ -5514,11 +5634,11 @@ impl TuiState {
     /// 前一半正是票面那句「不是清空折叠态」：全折是一次临时的看全，而读者自己折过的那几块
     /// 不属于它。
     fn unfold_everything(&mut self) {
-        match self.fold_before_all.take() {
-            Some(before) => self.folded = before,
-            None => self.folded.clear(),
+        match self.view.fold_before_all.take() {
+            Some(before) => self.view.folded = before,
+            None => self.view.folded.clear(),
         }
-        self.replay_trace();
+        self.view.replay_trace();
     }
 
     /// 这一条源行是不是一个**折叠把手**（组头那一行，或者一行折行），是的话它翻的是谁。
@@ -5527,7 +5647,7 @@ impl TuiState {
     /// 一条代表它那一段的折行在那张表上长得一模一样，而点前者该开详情、点后者该折 / 展。
     fn fold_handle_at(&self, source: usize) -> Option<BlockId> {
         let id = self.block_at_source(source)?;
-        self.fold_handles.contains(&id).then_some(id)
+        self.view.fold_handles.contains(&id).then_some(id)
     }
 
     /// `Enter`：开选中那一块的详情。
@@ -5536,13 +5656,17 @@ impl TuiState {
     /// 还原给轨迹页的那笔账一个字不差。选中的是组头、小标题这类**没有详情**的行时什么都不
     /// 做：它们本来就点不开，键盘上也不该变出一个来。
     fn open_selected_detail(&mut self) {
-        let Some(row) = self.trace_selection.and_then(|id| self.first_source_of(id)) else {
+        let Some(row) = self
+            .view
+            .trace_selection
+            .and_then(|id| self.view.first_source_of(id))
+        else {
             return;
         };
-        let Some(detail) = self.trace_links.get(row).cloned().flatten() else {
+        let Some(detail) = self.view.trace_links.get(row).cloned().flatten() else {
             return;
         };
-        let Some(here) = self.trace.ledger_row(row) else {
+        let Some(here) = self.view.trace.ledger_row(row) else {
             return;
         };
         self.open_trace_detail(detail, here);
@@ -5555,8 +5679,8 @@ impl TuiState {
     fn open_trace_detail(&mut self, detail: Detail, here: usize) {
         let panes = layout::plan(self.area, 1, self.sidebar_wanted);
         let opener = DetailOpener::Trace {
-            top: self.trace.top(),
-            follow: self.trace.following(),
+            top: self.view.trace.top(),
+            follow: self.view.trace.following(),
         };
         self.open_detail(
             detail,
@@ -5687,14 +5811,14 @@ impl TuiState {
     /// 忙闲不在这里判 —— 渲染器不知道什么在跑，所以只上行；循环那一侧答一句「这一回合跑完
     /// 再切」（spec §6）。
     fn ask_picker(&mut self, kind: PickerKind) {
-        if !self.facts.switchable {
+        if !self.view.facts.switchable {
             self.say(wording::heng(wording::switch_not_switchable()));
             return;
         }
         // 没有档位旋钮的模型：开出来只会是一个**空**浮层（spec §8 的那一句正是为了这个），
         // 所以这里给一句说明，而不是让读的人看见一块没有候选的盒子。
         if kind == PickerKind::Effort && self.fixed_effort() {
-            self.say(wording::effort_fixed_detail(&self.facts.model));
+            self.say(wording::effort_fixed_detail(&self.view.facts.model));
             return;
         }
         self.events.push(FrontEndEvent::OpenPicker(kind));
@@ -6055,15 +6179,18 @@ impl TuiState {
     /// 到达、或读的人滚动一下的瞬间就漂开。在末尾时它是最新的那个单位，也就是「我在跟着
     /// 这场对话走」的意思，哪怕整条转录一屏就装得下（spec §4）。
     fn focused_turn(&self) -> Option<usize> {
-        let units = self.turn_rail.units();
+        let units = self.view.turn_rail.units();
         if units == 0 {
             return None;
         }
-        if self.conversation.following() {
+        if self.view.conversation.following() {
             return Some(units - 1);
         }
-        let source = self.conversation.source_at(self.conversation.top())?;
-        Some(self.turn_rail.unit_of(source).min(units - 1))
+        let source = self
+            .view
+            .conversation
+            .source_at(self.view.conversation.top())?;
+        Some(self.view.turn_rail.unit_of(source).min(units - 1))
     }
 
     /// 跳到某个单位的开头：点它那一格所做的事。
@@ -6071,10 +6198,10 @@ impl TuiState {
     /// 落点是**顶端对齐**的，所以每一次跳都落在眼睛期待的地方；最新那个单位改为夹到末尾，
     /// 这是同一条规矩在转录末端读到的样子，而不是一个特例（spec §4）。
     fn jump_to_unit(&mut self, unit: usize) {
-        let Some(head) = self.turn_rail.head(unit) else {
+        let Some(head) = self.view.turn_rail.head(unit) else {
             return;
         };
-        self.conversation.scroll_to_source(head);
+        self.view.conversation.scroll_to_source(head);
     }
 
     /// 一次点击落在**对话视图的一段可点文本**上吗：落在上面就把它解析掉，交给运行期去打开
@@ -6126,42 +6253,10 @@ impl TuiState {
     /// **屏幕**行号：一次点击按它换回那条来源行。**只有轨迹页有入口** —— 对话页画的是全文，
     /// 点它不打开任何东西（`.scratch/tui-feedback/spec.md` §9）。
     fn trace_hit_at(&self, row: u16) -> Option<(Detail, usize)> {
-        let offset = (row.checked_sub(self.trace_drawn.top)?) as usize;
-        let source = (*self.trace_drawn.rows.get(offset)?)?;
-        let detail = self.trace_links.get(source)?.clone()?;
-        Some((detail, self.trace.ledger_row(source)?))
-    }
-
-    /// 一条记录的身份：流上的东西取信封的行号，渲染层自己造的没有信封，于是 `index` 由
-    /// 渲染层那条单调计数补（[ADR 0021](../../docs/adr/0021-line-identity-comes-from-the-event-envelope.md)）。
-    ///
-    /// `offset` 是**这一批块里的第几个**（一条事件可以产出零个到多个）。流上的那批用批次内的
-    /// 序号 —— 它跟着事件走，所以重放时哪怕块的产出顺序变了，身份仍然指向同一个块。
-    fn next_block_id(&mut self, seq: Option<u64>, offset: u32) -> BlockId {
-        let index = match seq {
-            Some(_) => offset,
-            None => {
-                let index = self.next_local_id;
-                self.next_local_id += 1;
-                index
-            }
-        };
-        BlockId { seq, index }
-    }
-
-    /// 那一块的**第一条**来源行；已经被上限裁掉、或者还没有画出来，就 `None`。
-    ///
-    /// 这是「块 → 位置」那一步，而窗格只按来源行下标寻址 —— 于是它是
-    /// [`Self::trace_block_ids`] 上的一次线性查找。那张表与窗格**同长同进同出**（`push`
-    /// 报的丢弃数是唯一权威），所以表在就是窗格在，而查到的那一行就是读者会看到的那一行。
-    ///
-    /// **不做以块为键的反向索引**：那张表每次裁剪都要全体左移一张映射，而查找只在读者按键
-    /// 或绘制选中高亮时发生 —— 那是每帧至多一次、长度有上限的线性扫描。
-    ///
-    /// 它是**公共**的，因为「选中那一块」这件事的验收在集成测试里（屏上那一行亮着），
-    /// 而那是后面几轮账本与检索的接缝（`.scratch/trace-ledger/spec.md` §2）。
-    pub fn first_source_of(&self, id: BlockId) -> Option<usize> {
-        self.trace_block_ids.iter().position(|it| *it == Some(id))
+        let offset = (row.checked_sub(self.view.trace_drawn.top)?) as usize;
+        let source = (*self.view.trace_drawn.rows.get(offset)?)?;
+        let detail = self.view.trace_links.get(source)?.clone()?;
+        Some((detail, self.view.trace.ledger_row(source)?))
     }
 
     /// 账本此刻的分组形状：谁属于哪个组头（票 19）。
@@ -6173,12 +6268,12 @@ impl TuiState {
     /// 它也**不是常驻状态**：一次按键当场算一遍（记录的类型与顺序都是现成的），于是不必再
     /// 维护第二份与窗格、与那次裁剪同步的账。
     fn group_shape(&self) -> GroupShape {
-        let discussion = self.discussion();
+        let discussion = self.view.discussion();
         let mut shape = GroupShape {
-            records: Vec::with_capacity(self.painted.len()),
+            records: Vec::with_capacity(self.view.painted.len()),
         };
         let mut current: Option<usize> = None;
-        for (index, painted) in self.painted.iter().enumerate() {
+        for (index, painted) in self.view.painted.iter().enumerate() {
             // 这条记录**自己**的归属，以及它之后那一条记录的归属。
             let (level, own, next) = match painted {
                 // 组头：它自己就是「最近的那一级组头」—— 于是 `[` 在组头那一行上是空操作。
@@ -6203,14 +6298,6 @@ impl TuiState {
         shape
     }
 
-    /// 记下账本上这一条**锚**：能当来源面那一环的记录，以及它在账本上的行号（票 14）。
-    ///
-    /// 它只增：链要往上看好几环，而 `CAP` 只挪窗口不挪行号 —— 所以这张表与窗格是**两条**
-    /// 寿命不同的账，各司其职。
-    fn note_anchor(&mut self, kind: AnchorKind, row: usize) {
-        self.anchors.push(Anchor { kind, row });
-    }
-
     /// 一次发言的合计用量 —— 用量面「本次」那一节读它（票 15 第 3 条）。
     ///
     /// 它与行尾那个 `合计` **同一个数**：收尾的发言取 [`Self::turn_totals`] 里那一份，还在
@@ -6222,11 +6309,11 @@ impl TuiState {
         let Some(turn) = turn.filter(|turn| *turn > 0) else {
             return Usage::default();
         };
-        match self.turn_totals.get(turn as usize - 1) {
+        match self.view.turn_totals.get(turn as usize - 1) {
             Some(total) => *total,
             // 还没收尾的那一次发言：读「到这一刻为止」的那一份。它还没结算，但口径与收尾后
             // 那个合计是同一条 —— 同一次发言里各次调用之和。
-            None if turn == self.turn_ordinal => self.turn_usage,
+            None if turn == self.view.turn_ordinal => self.view.turn_usage,
             None => Usage::default(),
         }
     }
@@ -6244,6 +6331,7 @@ impl TuiState {
             AnchorKind::UserMessage,
         ] {
             let Some(anchor) = self
+                .view
                 .anchors
                 .iter()
                 .rfind(|anchor| anchor.kind == kind && anchor.row < here)
@@ -6258,7 +6346,8 @@ impl TuiState {
         }
         // 第一环之上还有别的迭代回复 —— 那些是链更深的那些环，不再展开。
         let deeper = links.first().is_some_and(|first| {
-            self.anchors
+            self.view
+                .anchors
                 .iter()
                 .any(|anchor| anchor.kind == AnchorKind::Reply && anchor.row < first.row)
         });
@@ -6273,7 +6362,7 @@ impl TuiState {
     /// 账本第 `row` 行那条来源行的行首文字；那一行已经被上限裁掉时是 `None` —— 于是链上
     /// 那一环**只给位置**（票 14 第 6 条）。
     fn anchor_text(&self, row: usize) -> Option<String> {
-        let text = line_text(self.trace.ledger_line(row)?);
+        let text = line_text(self.view.trace.ledger_line(row)?);
         let text = text.trim();
         (!text.is_empty()).then(|| text.to_owned())
     }
@@ -6311,7 +6400,7 @@ impl TuiState {
                 self.pulse = 0;
                 if !running {
                     // 一次运行结束：「正在做什么」没有主语了。
-                    self.running_tool = None;
+                    self.view.running_tool = None;
                 }
                 // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
                 // 不再等答案，它那次询问也随运行一起死了。把覆盖层留在屏幕上，会把下一个
@@ -6385,15 +6474,17 @@ impl TuiState {
                 context_window,
                 speakers,
             } => {
-                self.facts.model = model;
-                self.facts.context_window = context_window;
-                self.facts.speaker_order = speakers;
+                self.view.facts.model = model;
+                self.view.facts.context_window = context_window;
+                self.view.facts.speaker_order = speakers;
                 // 档位是渲染器状态（与 `mode` 同一格）：它不进 `facts`，因为它是**会话中途**
                 // 才有的值，而注入的 facts 是组装时的快照。
-                self.effort = effort;
+                self.view.effort = effort;
                 // 名册换了，于是每个新名字去拿一个没人认领的颜色槽位 ——
                 // `SpeakerColors` 已经为这件事备好了路（spec §4）。
-                self.colors.adopt_roster(&self.facts.speaker_order);
+                self.view
+                    .colors
+                    .adopt_roster(&self.view.facts.speaker_order);
             }
             // 一份「从这份清单里挑一个」的问话（spec §9）。
             ConsoleRequest::Picker(request) => {
@@ -6740,7 +6831,7 @@ impl TuiState {
             // 的东西 —— 所以它挪动自己那份副本，并请求同一次挪动。两者都对组装打底的那个值
             // 施加 [`Mode::next`]，这让它们不会互相矛盾
             // （`.scratch/todo-and-modes/spec.md` §1）。
-            self.mode = self.mode.next();
+            self.view.mode = self.view.mode.next();
             self.events.push(FrontEndEvent::CycleMode);
             return;
         }
@@ -6789,24 +6880,6 @@ impl TuiState {
         self.sync_menu();
     }
 
-    /// 从流上留一份「现在在推进哪个目标」，给终端标题用（spec §6）。
-    ///
-    /// 以**正在推进**为准：`events::current_goal` 只认最后一条 `GoalSelected`，目标停下
-    /// 之后它仍会返回名字，所以停下与完成这两条都要清。重放走同一个 `apply`，于是
-    /// `--continue` 的目标名自然重建，不需要第二套路径。
-    fn observe_goal(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
-            return;
-        };
-        match &event.payload {
-            EventPayload::GoalSelected { goal } => self.goal = Some(goal.clone()),
-            EventPayload::GoalStopped { .. } | EventPayload::GoalCompleted { .. } => {
-                self.goal = None;
-            }
-            _ => {}
-        }
-    }
-
     /// 循环是否**在一次运行里面**：一个回合，或者它在驱动的一场讨论。
     ///
     /// 这件事由循环通过 [`ConsoleRequest::RunState`] 说出来；这里什么都不推断它。两次推断
@@ -6838,7 +6911,7 @@ impl TuiState {
         let Some(reply) = self.prompt_reply.take() else {
             return;
         };
-        self.conversation.to_bottom();
+        self.view.conversation.to_bottom();
         let line = self.editor.submitted();
         // 「改完再 `@` 它」是索引的主要用法，所以每提交一条消息就在后台重扫一次
         // （`.scratch/input-tokens/spec.md` §1）。位在这里置，遍历由循环去发。
@@ -7030,7 +7103,7 @@ impl TuiState {
         // 是「未跟踪也一视同仁」（`.scratch/diff-page/issues/06-grilling-external-viewer.md`
         // 的边界那一条）。
         let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
-        self.diff_reading = Some(DiffReading {
+        self.view.diff_reading = Some(DiffReading {
             serial,
             file: file.clone(),
             columns: width,
@@ -7056,7 +7129,7 @@ impl TuiState {
     /// 看一份 diff 时用哪个外部命令（`[ui] diff_viewer`）。渲染循环拿它去起子进程
     /// （`.scratch/diff-page/spec.md` §8）。
     pub fn diff_viewer(&self) -> &crate::config::DiffViewerSettings {
-        &self.facts.diff_viewer
+        &self.view.facts.diff_viewer
     }
 
     /// 该发一次 `git diff` 了吗：取走那一次请求（同一次不重复发）。
@@ -7065,7 +7138,7 @@ impl TuiState {
     /// 进程，结果从 [`TuiState::diff_loaded`] 回来。第二个返回值是**正文宽** —— 外部工具那一
     /// 档要把它当 `COLUMNS` 传出去（§8）。
     pub fn take_diff_read(&mut self) -> Option<(u64, changes::ChangedFile, usize)> {
-        let reading = self.diff_reading.as_mut()?;
+        let reading = self.view.diff_reading.as_mut()?;
         if reading.sent {
             return None;
         }
@@ -7079,14 +7152,20 @@ impl TuiState {
     /// 人后来打开的东西。`note` 是外部工具没跑成时提示行那一句回执（那时正文已经回退成内置
     /// 那一档）。
     pub fn diff_loaded(&mut self, serial: u64, body: changes::Body, note: Option<String>) {
-        if self.diff_reading.as_ref().map(|reading| reading.serial) != Some(serial) {
+        if self
+            .view
+            .diff_reading
+            .as_ref()
+            .map(|reading| reading.serial)
+            != Some(serial)
+        {
             return;
         }
-        self.diff_reading = None;
+        self.view.diff_reading = None;
         if let Some(note) = note {
             self.say(note);
         }
-        let session_dir = self.facts.session_dir.clone();
+        let session_dir = self.view.facts.session_dir.clone();
         let Some(view) = self.detail.as_mut() else {
             return;
         };
@@ -7108,9 +7187,9 @@ impl TuiState {
         view.faces = detail_faces(
             &view.detail,
             &session_dir,
-            &self.facts.tool_schemas,
+            &self.view.facts.tool_schemas,
             width,
-            self.facts.number_style,
+            self.view.facts.number_style,
         );
         view.face_mut().top = top;
         self.dirty = true;
@@ -7465,14 +7544,15 @@ impl TuiState {
         if self.fixed_effort() {
             return wording::effort_fixed().to_owned();
         }
-        self.effort
+        self.view
+            .effort
             .map(|effort| effort.as_str().to_owned())
             .unwrap_or_else(|| wording::effort_default().to_owned())
     }
 
     /// 当前模型有没有档位可选。没有就是「固定」：思考常开、模型不收那个参数。
     fn fixed_effort(&self) -> bool {
-        caps_for(&self.facts.model).is_ok_and(|caps| caps.reasoning_efforts.is_empty())
+        caps_for(&self.view.facts.model).is_ok_and(|caps| caps.reasoning_efforts.is_empty())
     }
 
     /// 在提示行上留一句短说明。
@@ -7836,7 +7916,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let trace_width = conversation_width;
     // 前缀分档量的是主列**页**的宽度：主列最小 40 列（终端下界就是它），所以轨迹视图恒为
     // 宽档、恒带方括号（`.scratch/trace-in-main/spec.md` §3）。
-    state.trace_tier_width = panes.main.width;
+    state.view.trace_tier_width = panes.main.width;
     state.rerender_if_width_changed(conversation_width, trace_width);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
@@ -8029,7 +8109,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
         return;
     };
     let rows = match state.tab {
-        Tab::Usage => state.panel.lines(&state.facts, page),
+        Tab::Usage => state.view.panel.lines(&state.view.facts, page),
         // `todo` 自己画：它要记下自己的矩形（整页可点，`.scratch/todo-page/spec.md` §5），
         // 也要把**折出来的续行**标给屏幕文本层 —— 否则一条折行的待办复制出来会多几个换行（§8）。
         Tab::Todo => {
@@ -8051,7 +8131,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     // 「只认真画出来的东西」）。
     state.changes.rect = None;
     // 同理是这一页：停在 `调用量` 上时，点左栏不该开出一份清单。
-    state.todo.clear_rect();
+    state.view.todo.clear_rect();
     // `调用量` 那一块也进屏幕文本层：它是「一页已经排好的行」，没有软折可言
     // （`.scratch/tui-feedback/spec.md` §5）。
     note_rows(state, page, &rows, &[], &[]);
@@ -8061,10 +8141,10 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
 /// 左栏的 `todo` 页：页顶一条进度行（末行右端留着那个按钮）、下面是全部未完成的项
 /// （`.scratch/todo-page/spec.md` §2–§5）。
 fn draw_todo_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
-    state.todo.set_rect(page);
+    state.view.todo.set_rect(page);
     state.files_page.rect = None;
     state.changes.rect = None;
-    let (rows, folded) = state.todo.lines_with_folds(page);
+    let (rows, folded) = state.view.todo.lines_with_folds(page);
     note_rows(state, page, &rows, &folded, &[]);
     frame.render_widget(Paragraph::new(rows), page);
 }
@@ -8329,7 +8409,7 @@ fn draw_tab_bar(
         state.tab == Tab::Usage,
         HitAction::SwitchTab(Tab::Usage),
     )];
-    if state.todo.visible() {
+    if state.view.todo.visible() {
         entries.push((
             wording::TAB_TODO,
             state.tab == Tab::Todo,
@@ -8434,12 +8514,15 @@ fn draw_label_bar(
 /// [`wording::status_row`] 里；这一行本身总是画出来的，连它最后一档都容不下的宽度会被截断
 /// 而不是丢掉（spec §2）。
 fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let share = wording::context_share_value(state.panel.last_input(), state.facts.context_window);
+    let share = wording::context_share_value(
+        state.view.panel.last_input(),
+        state.view.facts.context_window,
+    );
     let width = panes.status.width as usize;
     let parts = wording::status_row(
-        &state.facts.model,
+        &state.view.facts.model,
         &state.effort_label(),
-        state.mode,
+        state.view.mode,
         &share,
         &format!(
             "{} {}",
@@ -9167,16 +9250,21 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 认一遍，结果一分为二 —— 下划线就地铺在这一行上，候选跟着进屏幕文本层供点击
             // 命中。认在画之前，所以两处用的是同一次识别的同一份答案。
             let mut rows = state
+                .view
                 .conversation
                 .view(text_area.width, text_area.height, &live);
-            let folded = soft_folds(&state.conversation, state.conversation.top(), rows.len());
+            let folded = soft_folds(
+                &state.view.conversation,
+                state.view.conversation.top(),
+                rows.len(),
+            );
             let hotspots = links::mark(&mut rows, &folded);
             note_rows(state, text_area, &rows, &folded, &hotspots);
             // 这一页画在哪儿：点击要拿它判「落在对话的转录里吗」。与轨迹页那条同一条纪律，
             // 每帧重填（`.scratch/clickable-links/spec.md` §1）。
             state.conversation_rect = Some(text_area);
             frame.render_widget(Paragraph::new(rows), text_area);
-            draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
+            draw_scrollbar(frame, panes.scrollbar(), &state.view.conversation);
             draw_turn_rail(frame, panes, state);
             draw_indicator(frame, text_area, state, Viewport::Conversation);
         }
@@ -9185,13 +9273,16 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 固定区那一块排在账本上面，于是它不随账本滚动（票 22 第 1 条）。
             draw_trace_band(frame, panes, state, text_area.height);
             // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
-            let live = TuiState::live_rows(&state.live);
-            let mut rows = state.trace.view(text_area.width, text_area.height, &live);
-            let top = state.trace.top();
+            let live = TuiState::live_rows(&state.view.live);
+            let mut rows = state
+                .view
+                .trace
+                .view(text_area.width, text_area.height, &live);
+            let top = state.view.trace.top();
             mark_trace_selection(state, top, &mut rows);
-            state.trace_drawn.top = text_area.y;
-            state.trace_drawn.rows = (0..rows.len())
-                .map(|offset| state.trace.source_at(top + offset))
+            state.view.trace_drawn.top = text_area.y;
+            state.view.trace_drawn.rows = (0..rows.len())
+                .map(|offset| state.view.trace.source_at(top + offset))
                 .collect();
             // 折叠热区：这一帧真画出来的**组头行与折行**整行都算把手（票 21 第 5 条）。每帧
             // 重建、与屏幕文本层同一套纪律 —— 一个滚出视口的把手不必各自失效。
@@ -9199,8 +9290,8 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 只认**每一条源行的第一显示行**：一条窄到折成两行的组头不该被热两次。
             let handles: Vec<(u16, BlockId)> = (0..rows.len())
                 .filter_map(|offset| {
-                    let source = state.trace.source_at(top + offset)?;
-                    if offset > 0 && state.trace.source_at(top + offset - 1) == Some(source) {
+                    let source = state.view.trace.source_at(top + offset)?;
+                    if offset > 0 && state.view.trace.source_at(top + offset - 1) == Some(source) {
                         return None;
                     }
                     let id = state.fold_handle_at(source)?;
@@ -9213,13 +9304,13 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
                     HitAction::Fold(id),
                 );
             }
-            let folded = soft_folds(&state.trace, top, rows.len());
+            let folded = soft_folds(&state.view.trace, top, rows.len());
             note_rows(state, text_area, &rows, &folded, &[]);
             // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
             // 只是现在它等于主列的内容区）。
             state.trace_rect = Some(text_area);
             frame.render_widget(Paragraph::new(rows), text_area);
-            draw_scrollbar(frame, panes.trace_scrollbar(), &state.trace);
+            draw_scrollbar(frame, panes.trace_scrollbar(), &state.view.trace);
             draw_indicator(frame, text_area, state, Viewport::Trace);
         }
     }
@@ -9323,6 +9414,7 @@ impl Lanes {
     fn model(&self, frame: &mut ratatui::Frame, state: &TuiState) {
         let row = self.row(1);
         for (column, cell) in state
+            .view
             .timeline
             .model_cells(self.axis, self.now)
             .into_iter()
@@ -9346,7 +9438,7 @@ impl Lanes {
         // 回合边界画在这一行上的一道竖线（票 22 第 4 条）；迭代边界不标，一个回合 1–557 次
         // 迭代太密。
         let style = Style::default().fg(palette::CHROME);
-        for column in state.timeline.turn_marks(self.axis) {
+        for column in state.view.timeline.turn_marks(self.axis) {
             self.paint(frame, row, column, wording::BAND_MARK, style);
         }
     }
@@ -9356,6 +9448,7 @@ impl Lanes {
         let row = self.row(2);
         let style = Style::default().fg(palette::PLAIN);
         for (column, depth) in state
+            .view
             .timeline
             .tool_depth(self.axis, self.now)
             .into_iter()
@@ -9385,8 +9478,8 @@ impl Lanes {
     /// 只剩模型，工具那两态永远读不出来。
     fn compact(&self, frame: &mut ratatui::Frame, state: &TuiState) {
         let row = self.row(1);
-        let model = state.timeline.model_cells(self.axis, self.now);
-        let depth = state.timeline.tool_depth(self.axis, self.now);
+        let model = state.view.timeline.model_cells(self.axis, self.now);
+        let depth = state.view.timeline.tool_depth(self.axis, self.now);
         let style = Style::default().fg(palette::PLAIN);
         for column in 0..usize::from(self.axis.width()) {
             let symbol = if depth[column] >= 2 {
@@ -9424,7 +9517,7 @@ fn draw_trace_band(
     // 进行中的那一段画到**此刻**（票 22 第 8 条）—— 轴域因此也跟着走到此刻，而一趟静止的
     // 会话不会每帧变宽（那由 `Timeline::domain` 里的 `running` 判）。
     let now = Utc::now();
-    let Some((from, to)) = state.timeline.domain(now) else {
+    let Some((from, to)) = state.view.timeline.domain(now) else {
         return;
     };
     let Some(axis) = timeline::Axis::new(
@@ -9487,11 +9580,11 @@ fn draw_lane_label(frame: &mut ratatui::Frame, row: u16, x: u16, label: &str) {
 /// **不画反显**（全屏唯一的反显仍只给问卷与 `/`·`@` 菜单）：把选中行反显会把它自己那档
 /// `ACCENT + BOLD` 洗白。也不借底色：那是内容语义（票 10 §4、§6）。
 fn mark_trace_selection(state: &TuiState, top: usize, rows: &mut [Line<'static>]) {
-    let Some(selected) = state.trace_selection else {
+    let Some(selected) = state.view.trace_selection else {
         return;
     };
     for (offset, row) in rows.iter_mut().enumerate() {
-        let Some(source) = state.trace.source_at(top + offset) else {
+        let Some(source) = state.view.trace.source_at(top + offset) else {
             // 还没定稿的尾巴不属于任何块，没有身份可跟。
             continue;
         };
@@ -9579,7 +9672,7 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
     if rows == 0 || panes.rail.width == 0 {
         return;
     }
-    let units = state.turn_rail.units();
+    let units = state.view.turn_rail.units();
     if units == 0 {
         // 空的会话有一条空列：没有格子，也没有一个 `⋮` 假装上面还有历史（spec §4）。
         return;
@@ -9650,8 +9743,8 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
 /// 它的整块都是点击目标，所以这个矩形记在窗格上 —— 一次点击只能落在上一帧画出来的东西上。
 fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, view: Viewport) {
     let pane = match view {
-        Viewport::Conversation => &state.conversation,
-        Viewport::Trace => &state.trace,
+        Viewport::Conversation => &state.view.conversation,
+        Viewport::Trace => &state.view.trace,
     };
     // 详情覆盖层占着**打开它的那一页**的时候，回去的路是覆盖层自己的页脚：指示器的计数暂停了，
     // 它的点击不属于任何人（票 02 §4）。对话页的指示器照画（票 13）—— 今天打开方恒为轨迹页
@@ -12827,10 +12920,10 @@ impl TuiState {
         self.detail_opener = Some(opener);
         let faces = detail_faces(
             &detail,
-            &self.facts.session_dir,
-            &self.facts.tool_schemas,
+            &self.view.facts.session_dir,
+            &self.view.facts.tool_schemas,
             width,
-            self.facts.number_style,
+            self.view.facts.number_style,
         );
         self.detail = Some(DetailView {
             detail,
@@ -12849,13 +12942,13 @@ impl TuiState {
         if self.detail.take().is_some() {
             // 那一份还在读的 diff 跟着一起作废：弹窗都关了，回来的结果没有去处
             // （下一次打开会给自己一个新的序号）。
-            self.diff_reading = None;
+            self.view.diff_reading = None;
             // 还原给**打开它的那一页**：轨迹页回到底部或原处，文件页什么都不动
             // （票 13、`.scratch/files-page/spec.md` §5）。
             match self.detail_opener.take() {
                 Some(DetailOpener::Trace { top, follow }) => {
-                    self.trace.set_holding(false);
-                    self.trace.restore(top, follow);
+                    self.view.trace.set_holding(false);
+                    self.view.trace.restore(top, follow);
                 }
                 Some(DetailOpener::Files)
                 | Some(DetailOpener::Changes)
@@ -13247,7 +13340,8 @@ fn draw_file_viewer(frame: &mut ratatui::Frame, panes: &layout::Regions, state: 
         state.file_viewer_rect = None;
         return;
     }
-    let Some(area) = panes.overlay_area(panes.viewer_width(state.facts.file_viewer.width)) else {
+    let Some(area) = panes.overlay_area(panes.viewer_width(state.view.facts.file_viewer.width))
+    else {
         // 没地方画它：收掉，别把键盘扣在一个没人看得见的进程上。
         state.close_file_viewer();
         return;
@@ -13523,8 +13617,8 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     // 继续跟着新内容（票 13），文件页由它自己那份滚动与展开状态守着
     // （`.scratch/files-page/spec.md` §5）。
     if matches!(state.detail_opener, Some(DetailOpener::Trace { .. })) {
-        state.trace.set_following(false);
-        state.trace.set_holding(true);
+        state.view.trace.set_following(false);
+        state.view.trace.set_holding(true);
     }
     // 框外的一次点击能打中什么，只有记下来之后才存在。
     state.detail_rect = Some(area);
@@ -13729,16 +13823,24 @@ mod tests {
     fn the_link_table_keeps_pace_with_the_pane_at_the_cap() {
         let mut trace_page = state();
         for _ in 0..pane::CAP + 2 {
-            trace_page.push_line(Viewport::Trace, Line::from("x"), None, Some(false), None);
+            trace_page
+                .view
+                .push_line(Viewport::Trace, Line::from("x"), None, Some(false), None);
         }
-        assert_eq!(trace_page.trace.sources(), pane::CAP);
-        assert_eq!(trace_page.trace_links.len(), trace_page.trace.sources());
+        assert_eq!(trace_page.view.trace.sources(), pane::CAP);
+        assert_eq!(
+            trace_page.view.trace_links.len(),
+            trace_page.view.trace.sources()
+        );
         // 身份表与链接表同一理由：同一个丢弃数裁，所以它也与窗格同长（ADR 0021）。
-        assert_eq!(trace_page.trace_block_ids.len(), trace_page.trace.sources());
+        assert_eq!(
+            trace_page.view.trace_block_ids.len(),
+            trace_page.view.trace.sources()
+        );
         // 回合条与对话窗格平行（链接表只服务轨迹页），所以它跟着对话那一侧。
         let mut conversation = state();
         for _ in 0..pane::CAP + 2 {
-            conversation.push_line(
+            conversation.view.push_line(
                 Viewport::Conversation,
                 Line::from("x"),
                 None,
@@ -13746,10 +13848,10 @@ mod tests {
                 None,
             );
         }
-        assert_eq!(conversation.conversation.sources(), pane::CAP);
+        assert_eq!(conversation.view.conversation.sources(), pane::CAP);
         assert_eq!(
-            conversation.turn_rail.lines.len(),
-            conversation.conversation.sources()
+            conversation.view.turn_rail.lines.len(),
+            conversation.view.conversation.sources()
         );
     }
 
@@ -13758,12 +13860,12 @@ mod tests {
     #[test]
     fn a_chain_link_keeps_its_position_after_the_cap_clips_its_row() {
         let mut page = state();
-        page.trace.push(Line::from("回复那一条"));
-        page.note_anchor(AnchorKind::Reply, 1);
-        page.trace.push(Line::from("回合头"));
-        page.note_anchor(AnchorKind::UnitHeader, 2);
-        page.trace.push(Line::from("本行"));
-        let here = page.trace.pushed();
+        page.view.trace.push(Line::from("回复那一条"));
+        page.view.note_anchor(AnchorKind::Reply, 1);
+        page.view.trace.push(Line::from("回合头"));
+        page.view.note_anchor(AnchorKind::UnitHeader, 2);
+        page.view.trace.push(Line::from("本行"));
+        let here = page.view.trace.pushed();
         let chain = page.ancestor_chain(here, "本行");
         assert_eq!(chain.links.len(), 2, "本行上方那两环");
         assert_eq!(chain.links[0].row, 1);
@@ -13777,9 +13879,9 @@ mod tests {
 
         // 再把那两行挤出窗口：位置照旧，文字没了。
         for _ in 0..pane::CAP {
-            page.trace.push(Line::from("后来的行"));
+            page.view.trace.push(Line::from("后来的行"));
         }
-        let here = page.trace.pushed();
+        let here = page.view.trace.pushed();
         let chain = page.ancestor_chain(here, "本行");
         assert_eq!(chain.links.len(), 2, "链还是那两环");
         assert_eq!(chain.links[0].row, 1, "位置仍是账本第 1 行");
@@ -13795,16 +13897,16 @@ mod tests {
         let mut page = state();
         // 三次迭代各一条回复，加上一个回合头与一条用户消息，然后才是本行。
         for row in 1..=5 {
-            page.trace.push(Line::from("账本上的一行"));
+            page.view.trace.push(Line::from("账本上的一行"));
             let kind = match row {
                 2 => AnchorKind::UnitHeader,
                 5 => AnchorKind::UserMessage,
                 _ => AnchorKind::Reply,
             };
-            page.note_anchor(kind, row);
+            page.view.note_anchor(kind, row);
         }
-        page.trace.push(Line::from("本行"));
-        let here = page.trace.pushed();
+        page.view.trace.push(Line::from("本行"));
+        let here = page.view.trace.pushed();
         let chain = page.ancestor_chain(here, "本行");
         assert_eq!(chain.links.len(), 3, "固定三环：回复 / 回合 / 用户消息");
         assert_eq!(chain.links[0].kind, AnchorKind::Reply);
@@ -13818,8 +13920,8 @@ mod tests {
     #[test]
     fn a_chain_that_cannot_reach_an_ancestor_just_ends() {
         let mut page = state();
-        page.trace.push(Line::from("本行"));
-        let here = page.trace.pushed();
+        page.view.trace.push(Line::from("本行"));
+        let here = page.view.trace.pushed();
         let chain = page.ancestor_chain(here, "本行");
         assert!(chain.links.is_empty(), "一环都没有");
         assert!(!chain.deeper, "也没有更深的链");
@@ -14514,7 +14616,7 @@ mod tests {
     fn the_builtin_viewer_still_opens_the_detail_overlay() {
         // 回归：没配 `file_viewer` 时点开文件走的是老路，一个进程都不起。
         let mut state = state();
-        state.facts.file_viewer.kind = crate::config::FileViewer::Builtin;
+        state.view.facts.file_viewer.kind = crate::config::FileViewer::Builtin;
 
         state.open_file("README.md");
 
@@ -14608,7 +14710,7 @@ mod tests {
     /// 账本上那一串**块**（按源行顺序，同一个块只算一次）。
     fn blocks_in_order(page: &TuiState) -> Vec<BlockId> {
         let mut blocks: Vec<BlockId> = Vec::new();
-        for row in page.trace_block_ids.iter().flatten() {
+        for row in page.view.trace_block_ids.iter().flatten() {
             if blocks.last() != Some(row) {
                 blocks.push(*row);
             }
@@ -14625,7 +14727,8 @@ mod tests {
         let page = a_page_with_a_failed_call();
         // 失败那一次调用占两条源行：主行与它的错误正文首行。
         let first = page
-            .first_source_of(page.trace_block_ids[0].expect("第一条有身份"))
+            .view
+            .first_source_of(page.view.trace_block_ids[0].expect("第一条有身份"))
             .unwrap();
         assert_eq!(first, 0);
         assert_eq!(
@@ -14642,14 +14745,14 @@ mod tests {
         assert_eq!(page.block_bounds_at(1), Some((0, 1)), "从附属行问也一样");
         // 第二条块只占一行，而它有自己的界。
         let second = blocks_in_order(&page)[1];
-        let second_row = page.first_source_of(second).unwrap();
+        let second_row = page.view.first_source_of(second).unwrap();
         assert_eq!(
             page.block_bounds_at(second_row),
             Some((second_row, second_row))
         );
         assert_ne!(page.block_at_source(second_row), page.block_at_source(0));
         // 没有身份的行（这里不存在，但要有一个确定的答案）。
-        assert_eq!(page.block_at_source(page.trace.sources()), None);
+        assert_eq!(page.block_at_source(page.view.trace.sources()), None);
     }
 
     /// `↑` / `↓` 在**块**之间走：附属行与主行同号，所以中间那些行从来不是落点 ——
@@ -14662,27 +14765,31 @@ mod tests {
 
         // `g` 落在第一块的第一条源行上。
         page.key(Key::Char('g'));
-        assert_eq!(page.trace_selection, Some(blocks[0]));
-        assert_eq!(page.first_source_of(blocks[0]), Some(0), "落点是主行");
+        assert_eq!(page.view.trace_selection, Some(blocks[0]));
+        assert_eq!(page.view.first_source_of(blocks[0]), Some(0), "落点是主行");
 
         // `↓`（与 `j` 同一条）换到下一块 —— 跳过那一条附属行。
         page.key(Key::Char('j'));
-        assert_eq!(page.trace_selection, Some(blocks[1]));
+        assert_eq!(page.view.trace_selection, Some(blocks[1]));
         page.key(Key::Down);
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(blocks[1]),
             "走到头就停在原地，不越界"
         );
         page.key(Key::Up);
-        assert_eq!(page.trace_selection, Some(blocks[0]));
+        assert_eq!(page.view.trace_selection, Some(blocks[0]));
         page.key(Key::Char('k'));
-        assert_eq!(page.trace_selection, Some(blocks[0]), "往上也没有下一块");
+        assert_eq!(
+            page.view.trace_selection,
+            Some(blocks[0]),
+            "往上也没有下一块"
+        );
 
         // `G` 落在最新那一块上，并把视口带到底（恢复跟随）。
         page.key(Key::Char('G'));
-        assert_eq!(page.trace_selection, Some(blocks[1]));
-        assert!(page.trace.following(), "`G` 恢复跟随");
+        assert_eq!(page.view.trace_selection, Some(blocks[1]));
+        assert!(page.view.trace.following(), "`G` 恢复跟随");
     }
 
     /// 选中存的是**块身份**：宽度变化重放之后它还在那一块上，而位置下标那套活不过这一趟
@@ -14692,13 +14799,17 @@ mod tests {
         let mut page = a_page_with_a_failed_call();
         let blocks = blocks_in_order(&page);
         page.key(Key::Char('G'));
-        assert_eq!(page.trace_selection, Some(blocks[1]));
+        assert_eq!(page.view.trace_selection, Some(blocks[1]));
 
         page.rerender_if_width_changed(SHARED_RENDER_WIDTH, 40);
-        assert_eq!(page.trace_selection, Some(blocks[1]), "重放之后还是那一块");
         assert_eq!(
-            page.first_source_of(blocks[1]),
-            Some(page.trace.sources() - 1),
+            page.view.trace_selection,
+            Some(blocks[1]),
+            "重放之后还是那一块"
+        );
+        assert_eq!(
+            page.view.first_source_of(blocks[1]),
+            Some(page.view.trace.sources() - 1),
             "它还在，而且换到了重放之后的那一条源行上"
         );
     }
@@ -14712,34 +14823,35 @@ mod tests {
         // 一条注入既是开场段的一块（于是那一页顶上多一行小标题），又是一条点得开的记录。
         page.apply(RenderEvent::identity("你是衡（heng）"));
         let header = page
+            .view
             .trace_block_ids
             .front()
             .copied()
             .flatten()
             .expect("开场有小标题");
-        let notice = *page.trace_block_ids.back().expect("注入那一行在");
+        let notice = *page.view.trace_block_ids.back().expect("注入那一行在");
         let notice = notice.expect("它也有身份");
         assert_ne!(header, notice);
         assert_eq!(
-            page.first_source_of(header),
+            page.view.first_source_of(header),
             Some(0),
             "小标题是第一条来源行"
         );
         assert!(
-            page.trace_links.front().is_none_or(Option::is_none),
+            page.view.trace_links.front().is_none_or(Option::is_none),
             "小标题点不开"
         );
 
-        page.trace_selection = Some(header);
+        page.view.trace_selection = Some(header);
         page.key(Key::Enter);
         assert!(!page.detail_open(), "点不开的行，键盘上也开不出详情");
 
         // 而它下面那一条能点开：同一个键、同一份链接。
         assert!(
-            page.trace_links.back().is_some_and(Option::is_some),
+            page.view.trace_links.back().is_some_and(Option::is_some),
             "注入那一行点得开"
         );
-        page.trace_selection = Some(notice);
+        page.view.trace_selection = Some(notice);
         page.key(Key::Enter);
         assert!(page.detail_open(), "能点开的那一条照旧开得出详情");
     }
@@ -14750,6 +14862,7 @@ mod tests {
     fn opening_and_closing_a_detail_leaves_the_pages_holding_alone() {
         let mut page = a_page_with_a_failed_call();
         let detail = page
+            .view
             .trace_links
             .iter()
             .flatten()
@@ -14779,10 +14892,10 @@ mod tests {
     fn escape_clears_then_hands_back_and_then_stops_answering() {
         let mut page = a_page_with_a_failed_call();
         page.key(Key::Down); // 还没选中：从视口顶端那一条出发落一块
-        assert!(page.trace_selection.is_some(), "先有选中");
+        assert!(page.view.trace_selection.is_some(), "先有选中");
 
         page.key(Key::Esc);
-        assert_eq!(page.trace_selection, None, "第一下清选中");
+        assert_eq!(page.view.trace_selection, None, "第一下清选中");
         assert!(page.trace_keyboard, "键盘还在轨迹页手里");
         page.key(Key::Esc);
         assert!(!page.trace_keyboard, "第二下把它交还给输入区");
@@ -14794,7 +14907,7 @@ mod tests {
         page.take_trace_keyboard();
         assert!(page.trace_keyboard, "拿回来之后照旧持有");
         page.key(Key::Down);
-        assert!(page.trace_selection.is_some(), "而它又认键了");
+        assert!(page.view.trace_selection.is_some(), "而它又认键了");
     }
 
     /// 「点在哪儿键盘就归哪儿」：左栏与输入区拿过去时轨迹页那一层放下，点账本又拿回来。
@@ -14819,16 +14932,16 @@ mod tests {
     fn a_pending_question_keeps_the_trace_layer_out_of_the_way() {
         let mut page = a_page_with_a_failed_call();
         page.pending = Some(Pending::ClearDraft);
-        let before = page.trace_selection;
+        let before = page.view.trace_selection;
         page.key(Key::Down);
         assert_eq!(
-            page.trace_selection, before,
+            page.view.trace_selection, before,
             "模态占着键盘时 `↓` 不落到账本上"
         );
         assert!(page.trace_keyboard, "而轨迹页那一位没被动过");
         page.pending = None;
         page.key(Key::Down);
-        assert!(page.trace_selection.is_some(), "关掉之后就还给轨迹页");
+        assert!(page.view.trace_selection.is_some(), "关掉之后就还给轨迹页");
     }
 
     /// 块的身份来自**事件信封**：信封的行号就是 JSONL 的行号，实时与重放是同一个值
@@ -14855,7 +14968,7 @@ mod tests {
             },
         ));
 
-        let ids: Vec<Option<BlockId>> = trace_page.trace_block_ids.iter().copied().collect();
+        let ids: Vec<Option<BlockId>> = trace_page.view.trace_block_ids.iter().copied().collect();
         let found: Vec<BlockId> = ids.iter().flatten().copied().collect();
         assert!(
             !found.is_empty(),
@@ -14906,6 +15019,7 @@ mod tests {
         // 一个块可以占**多条**来源行（折行、附属行），而它们身份相同 —— 所以这里数的是
         // 不同的身份，不是行数。
         let mut distinct: Vec<BlockId> = trace_page
+            .view
             .trace_block_ids
             .iter()
             .flatten()
@@ -14948,12 +15062,13 @@ mod tests {
                 },
             ));
         }
-        let before: Vec<Option<BlockId>> = trace_page.trace_block_ids.iter().copied().collect();
+        let before: Vec<Option<BlockId>> =
+            trace_page.view.trace_block_ids.iter().copied().collect();
         assert!(before.iter().any(Option::is_some), "先有身份可比");
 
         // 宽度变了：重放那条路会把窗格与两张平行表清空再逐块重推。
         trace_page.rerender_if_width_changed(SHARED_RENDER_WIDTH, 60);
-        let after: Vec<Option<BlockId>> = trace_page.trace_block_ids.iter().copied().collect();
+        let after: Vec<Option<BlockId>> = trace_page.view.trace_block_ids.iter().copied().collect();
         assert_eq!(before, after, "重放之后身份逐项相同，顺序也相同");
     }
 
@@ -14967,7 +15082,7 @@ mod tests {
             kind: DeltaKind::Reasoning,
             text: "想一下".to_owned(),
         });
-        let open: Vec<Option<BlockId>> = trace_page.trace_block_ids.iter().copied().collect();
+        let open: Vec<Option<BlockId>> = trace_page.view.trace_block_ids.iter().copied().collect();
         trace_page.apply(RenderEvent::Delta {
             speaker: crate::events::SpeakerId::Debater("kimi".into()),
             kind: DeltaKind::Reasoning,
@@ -14983,7 +15098,8 @@ mod tests {
                 first_token_ms: None,
             },
         ));
-        let settled: Vec<Option<BlockId>> = trace_page.trace_block_ids.iter().copied().collect();
+        let settled: Vec<Option<BlockId>> =
+            trace_page.view.trace_block_ids.iter().copied().collect();
         assert_eq!(open.len(), 1, "开着的时候只有那一条思考行：{:?}", open);
         assert_eq!(
             open[0], settled[0],
@@ -15106,6 +15222,7 @@ mod tests {
     fn the_plan_folds_a_whole_unit_into_one_summary_line() {
         let state = a_ledger_with_a_run_of_calls();
         let unit = state
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -15115,7 +15232,7 @@ mod tests {
                 _ => None,
             })
             .expect("有一个一级组头");
-        let plan = ledger_plan(&state.painted, &folded_ids(&[unit]), false);
+        let plan = ledger_plan(&state.view.painted, &folded_ids(&[unit]), false);
 
         match &plan[0] {
             Planned::Fold(FoldLine::Unit {
@@ -15143,7 +15260,7 @@ mod tests {
     #[test]
     fn adjacent_calls_fold_into_one_line_and_report_each_tool_once() {
         let state = a_ledger_with_a_run_of_calls();
-        let runs: Vec<FoldLine> = fold_scopes(&state.painted)
+        let runs: Vec<FoldLine> = fold_scopes(&state.view.painted)
             .into_iter()
             .filter_map(|(_, line)| matches!(line, FoldLine::Run { .. }).then_some(line))
             .collect();
@@ -15159,7 +15276,7 @@ mod tests {
         // 夹着一条消息就是**不相邻**：并成一行会把两段思考混成一段（票 21 第 1 条）。
         let gapped = a_ledger_with_a_gap_between_calls();
         assert!(
-            fold_scopes(&gapped.painted)
+            fold_scopes(&gapped.view.painted)
                 .iter()
                 .all(|(_, line)| !matches!(line, FoldLine::Run { .. })),
             "被消息隔开的调用不成一段"
@@ -15171,20 +15288,20 @@ mod tests {
     #[test]
     fn nothing_stays_folded_while_a_filter_is_on() {
         let state = a_ledger_with_a_run_of_calls();
-        let everything: Vec<BlockId> = fold_scopes(&state.painted)
+        let everything: Vec<BlockId> = fold_scopes(&state.view.painted)
             .into_iter()
             .map(|(_, line)| line.id())
             .collect();
         assert!(!everything.is_empty(), "这份账本上有可折的东西");
         let folded = folded_ids(&everything);
         assert!(
-            ledger_plan(&state.painted, &folded, false)
+            ledger_plan(&state.view.painted, &folded, false)
                 .iter()
                 .any(|slot| !matches!(slot, Planned::Record)),
             "没筛的时候它折着"
         );
         assert!(
-            ledger_plan(&state.painted, &folded, true)
+            ledger_plan(&state.view.painted, &folded, true)
                 .iter()
                 .all(|slot| *slot == Planned::Record),
             "筛着的时候一条折行都没有"
@@ -15195,15 +15312,15 @@ mod tests {
     #[test]
     fn a_folded_run_still_carries_the_link_of_its_first_call() {
         let mut state = a_ledger_with_a_run_of_calls();
-        let run = fold_scopes(&state.painted)
+        let run = fold_scopes(&state.view.painted)
             .into_iter()
             .find_map(|(_, line)| matches!(line, FoldLine::Run { .. }).then_some(line))
             .expect("这一段三次调用是一个可折的段");
         // 重放那一刻 `painted` 是**取出来**递给这一层的（`mem::take`），所以链接也从那一份
         // 找 —— 这条测试与那条路径共用同一个入参。
-        let records = std::mem::take(&mut state.painted);
+        let records = std::mem::take(&mut state.view.painted);
         assert!(
-            state.fold_line_link(&run, &records).is_some(),
+            state.view.fold_line_link(&run, &records).is_some(),
             "折行得能点开：它是那一段的第一条源行"
         );
     }
@@ -15222,7 +15339,7 @@ mod tests {
                 },
             ));
         }
-        let plan = ledger_plan(&state.painted, &folded_ids(&[]), false);
+        let plan = ledger_plan(&state.view.painted, &folded_ids(&[]), false);
         match &plan[0] {
             Planned::Fold(line @ FoldLine::Preamble { injections, .. }) => {
                 assert_eq!(*injections, 2);
@@ -15289,6 +15406,7 @@ mod tests {
         ));
 
         let headers: Vec<(HeaderLevel, u32)> = trace_page
+            .view
             .painted
             .iter()
             .filter_map(|painted| match painted {
@@ -15318,6 +15436,7 @@ mod tests {
         ));
         // 组头画完之后记住它在哪一行 —— 它随后被就地改写，而**不是**被移走或另起一行。
         let header_id = trace_page
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -15326,6 +15445,7 @@ mod tests {
             })
             .expect("那个回合有一个一级组头");
         let header_row = trace_page
+            .view
             .first_source_of(header_id)
             .expect("组头已经画出去了");
         for (offset, name) in ["bash", "bash", "read"].into_iter().enumerate() {
@@ -15350,11 +15470,12 @@ mod tests {
             ));
         }
         assert_eq!(
-            trace_page.first_source_of(header_id),
+            trace_page.view.first_source_of(header_id),
             Some(header_row),
             "组头**就地改写**：直方图长到三次之后它仍在原来那一行上，没有被移到下面去"
         );
         let header = trace_page
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -15484,6 +15605,7 @@ mod tests {
             ));
         }
         let header = trace_page
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -15526,7 +15648,7 @@ mod tests {
                 summary: Some("压成摘要".to_owned()),
             },
         ));
-        for painted in &trace_page.painted {
+        for painted in &trace_page.view.painted {
             let line = match painted {
                 Painted::GroupHeader(header) => group_header_line(header, 79, false),
                 Painted::SectionHeader(header) => section_header_line(header),
@@ -16110,7 +16232,8 @@ mod tests {
 
     /// 第几个、哪一级的组头那条记录的身份。
     fn header_of(page: &TuiState, level: HeaderLevel, ordinal: u32) -> BlockId {
-        page.painted
+        page.view
+            .painted
             .iter()
             .find_map(|painted| match painted {
                 Painted::GroupHeader(header)
@@ -16126,11 +16249,13 @@ mod tests {
     /// 某个身份**紧跟着的下一条**记录的身份。
     fn record_after(page: &TuiState, id: BlockId) -> BlockId {
         let index = page
+            .view
             .painted
             .iter()
             .position(|painted| painted.id() == id)
             .expect("那一条记录在");
-        page.painted
+        page.view
+            .painted
             .get(index + 1)
             .map(|painted| painted.id())
             .expect("它后面还有一条")
@@ -16138,7 +16263,8 @@ mod tests {
 
     /// 那一次工具调用那条记录的身份。
     fn tool_block(page: &TuiState, tool: &str) -> BlockId {
-        page.painted
+        page.view
+            .painted
             .iter()
             .find_map(|painted| match painted {
                 Painted::Block {
@@ -16161,25 +16287,25 @@ mod tests {
         let first = tool_block(&page, "ls");
         let second = tool_block(&page, "read");
 
-        page.trace_selection = Some(second);
+        page.view.trace_selection = Some(second);
         page.key(Key::Char('['));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(iteration),
             "第二次迭代里那条落到二级头，不是一级头"
         );
 
-        page.trace_selection = Some(first);
+        page.view.trace_selection = Some(first);
         page.key(Key::Char('['));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(unit),
             "第一次迭代那一段没有二级头，所以落到一级头"
         );
 
         page.key(Key::Char('['));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(unit),
             "组头自己按 `[` 是空操作：它自己就是最近的那一级"
         );
@@ -16198,28 +16324,28 @@ mod tests {
         let second = tool_block(&page, "read");
 
         let member = record_after(&page, iteration);
-        page.trace_selection = Some(second);
+        page.view.trace_selection = Some(second);
         page.key(Key::Char(']'));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(member),
             "成员行按 `]` 回到它那一组的第一条成员"
         );
 
-        page.trace_selection = Some(iteration);
+        page.view.trace_selection = Some(iteration);
         page.key(Key::Char(']'));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(member),
             "从组头按 `]` 也是同一处"
         );
 
         let first_member = record_after(&page, unit);
         assert_ne!(first_member, iteration, "一级组里的二级头不是它的成员");
-        page.trace_selection = Some(unit);
+        page.view.trace_selection = Some(unit);
         page.key(Key::Char(']'));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(first_member),
             "一级组头按下去跳过二级头，直接进成员"
         );
@@ -16230,25 +16356,39 @@ mod tests {
     #[test]
     fn an_unclaimed_stretch_answers_neither_bracket() {
         let mut page = a_page_with_two_levels();
-        let preamble = page.painted.first().map(|painted| painted.id()).unwrap();
-        let notice = page.painted.last().map(|painted| painted.id()).unwrap();
+        let preamble = page
+            .view
+            .painted
+            .first()
+            .map(|painted| painted.id())
+            .unwrap();
+        let notice = page
+            .view
+            .painted
+            .last()
+            .map(|painted| painted.id())
+            .unwrap();
 
         for held in [preamble, notice] {
-            page.trace_selection = Some(held);
+            page.view.trace_selection = Some(held);
             page.key(Key::Char('['));
-            assert_eq!(page.trace_selection, Some(held), "不编一个所属组");
+            assert_eq!(page.view.trace_selection, Some(held), "不编一个所属组");
             page.key(Key::Char(']'));
-            assert_eq!(page.trace_selection, Some(held), "也不进任何组");
+            assert_eq!(page.view.trace_selection, Some(held), "也不进任何组");
             page.key(Key::Char('['));
-            assert_eq!(page.trace_selection, Some(held), "到头就到头，不绕到另一头");
+            assert_eq!(
+                page.view.trace_selection,
+                Some(held),
+                "到头就到头，不绕到另一头"
+            );
         }
 
         // 已经在某组第一条成员上时，`]` 也停在原地。
         let unit = header_of(&page, HeaderLevel::Unit, 1);
         let member = record_after(&page, unit);
-        page.trace_selection = Some(member);
+        page.view.trace_selection = Some(member);
         page.key(Key::Char(']'));
-        assert_eq!(page.trace_selection, Some(member), "已经在组首就不动");
+        assert_eq!(page.view.trace_selection, Some(member), "已经在组首就不动");
     }
 
     /// 两个键只在轨迹页**持有键盘**时归它：交还之后 `[` / `]` 回到草稿 —— 与这一层里别的
@@ -16261,7 +16401,7 @@ mod tests {
             page.key(key);
         }
         assert_eq!(page.editor.text(), "[]", "交还之后两个括号回到草稿");
-        assert_eq!(page.trace_selection, None, "也没有偷偷动选中");
+        assert_eq!(page.view.trace_selection, None, "也没有偷偷动选中");
 
         page.take_trace_keyboard();
         page.key(Key::Char('['));
@@ -16277,15 +16417,19 @@ mod tests {
         let first_member = record_after(&page, unit);
         let last_of_unit = tool_block(&page, "ls");
 
-        page.trace_selection = Some(last_of_unit);
+        page.view.trace_selection = Some(last_of_unit);
         page.key(Key::Char(']'));
         assert_eq!(
-            page.trace_selection,
+            page.view.trace_selection,
             Some(first_member),
             "回到本组第一条成员，不越到下一组去"
         );
         page.key(Key::Char(']'));
-        assert_eq!(page.trace_selection, Some(first_member), "已经在组首就停住");
+        assert_eq!(
+            page.view.trace_selection,
+            Some(first_member),
+            "已经在组首就停住"
+        );
     }
 
     /// 两个键的判据**不看此刻画出来什么**：视口在哪儿不参与，落点只由记录序决定
@@ -16297,17 +16441,25 @@ mod tests {
         let second = tool_block(&page, "read");
         let member = record_after(&page, iteration);
 
-        page.trace_selection = Some(second);
-        page.trace.scroll_to_source(0);
+        page.view.trace_selection = Some(second);
+        page.view.trace.scroll_to_source(0);
         page.key(Key::Char('['));
-        assert_eq!(page.trace_selection, Some(iteration), "视口在顶上时一样");
+        assert_eq!(
+            page.view.trace_selection,
+            Some(iteration),
+            "视口在顶上时一样"
+        );
 
-        page.trace.to_bottom();
-        page.trace_selection = Some(second);
+        page.view.trace.to_bottom();
+        page.view.trace_selection = Some(second);
         page.key(Key::Char('['));
-        assert_eq!(page.trace_selection, Some(iteration), "视口在底下时也一样");
+        assert_eq!(
+            page.view.trace_selection,
+            Some(iteration),
+            "视口在底下时也一样"
+        );
         page.key(Key::Char(']'));
-        assert_eq!(page.trace_selection, Some(member));
+        assert_eq!(page.view.trace_selection, Some(member));
     }
 
     // --- 搜索与过滤：索引、判据、导航、草稿（票 20） -------------------------
@@ -16333,7 +16485,7 @@ mod tests {
             text: "这段推理还在流".to_owned(),
         });
         assert!(
-            page.trace_index.entries.is_empty(),
+            page.view.trace_index.entries.is_empty(),
             "开着的那一段还没定稿，不进索引"
         );
         page.apply(RenderEvent::Delta {
@@ -16341,10 +16493,13 @@ mod tests {
             kind: DeltaKind::Text,
             text: "答案".to_owned(),
         });
-        assert_eq!(page.trace_index.entries.len(), 1, "定稿那一刻进索引");
-        let first = page.trace_index.entries[0].0;
+        assert_eq!(page.view.trace_index.entries.len(), 1, "定稿那一刻进索引");
+        let first = page.view.trace_index.entries[0].0;
         assert!(
-            page.trace_index.hits(&query_terms("推理")).contains(&first),
+            page.view
+                .trace_index
+                .hits(&query_terms("推理"))
+                .contains(&first),
             "那一段思考定稿之后搜得到"
         );
 
@@ -16353,11 +16508,12 @@ mod tests {
         for index in 0..pane::CAP + 20 {
             long.apply(RenderEvent::notice(format!("第 {index} 句话")));
         }
-        assert_eq!(long.trace.sources(), pane::CAP, "窗格裁到上限");
-        assert_eq!(long.trace_index.entries.len(), pane::CAP + 20);
-        let earliest = long.trace_index.entries[0].0;
+        assert_eq!(long.view.trace.sources(), pane::CAP, "窗格裁到上限");
+        assert_eq!(long.view.trace_index.entries.len(), pane::CAP + 20);
+        let earliest = long.view.trace_index.entries[0].0;
         assert!(
-            long.trace_index
+            long.view
+                .trace_index
                 .hits(&query_terms("第 0 句话"))
                 .contains(&earliest),
             "早就滚出屏的那一块照样搜得到"
@@ -16374,10 +16530,11 @@ mod tests {
             page.key(Key::Char(ch));
         }
         page.key(Key::Enter);
-        assert!(page.filtering());
+        assert!(page.view.filtering());
 
-        let visible = page.visible_records();
+        let visible = page.view.visible_records();
         let shown: Vec<BlockId> = page
+            .view
             .painted
             .iter()
             .zip(&visible)
@@ -16444,8 +16601,9 @@ mod tests {
             two_turns.key(Key::Char(ch));
         }
         two_turns.key(Key::Enter);
-        let visible = two_turns.visible_records();
+        let visible = two_turns.view.visible_records();
         let shown: Vec<BlockId> = two_turns
+            .view
             .painted
             .iter()
             .zip(&visible)
@@ -16481,14 +16639,14 @@ mod tests {
         for ch in "read".chars() {
             page.key(Key::Char(ch));
         }
-        assert_eq!(page.trace_search.as_ref().unwrap().query, "read");
+        assert_eq!(page.view.trace_search.as_ref().unwrap().query, "read");
         // 改一个字符就实时重算：这一刻还没按回车，过滤已经生效了（票 20 第 2 条）。
-        assert!(page.filtering(), "打一个字符就重算，不等回车");
+        assert!(page.view.filtering(), "打一个字符就重算，不等回车");
 
         // `Enter` 接受并离开 —— 过滤留着，草稿一个字没动，也**没有提交**。
         page.key(Key::Enter);
         assert!(!page.trace_searching());
-        assert!(page.filtering(), "接受的查询留着过滤");
+        assert!(page.view.filtering(), "接受的查询留着过滤");
         assert_eq!(page.editor.text(), "写了一半的话", "草稿原样还原");
         assert!(line.try_recv().is_err(), "搜索模式里的回车不提交草稿");
 
@@ -16496,9 +16654,9 @@ mod tests {
         page.key(Key::Char('/'));
         assert_eq!(page.editor.text(), "read", "接着上次那条查询改");
         page.key(Key::Char('x'));
-        assert!(page.filtering());
+        assert!(page.view.filtering());
         page.key(Key::Esc);
-        assert!(!page.filtering(), "取消搜索把过滤也丢掉");
+        assert!(!page.view.filtering(), "取消搜索把过滤也丢掉");
         assert!(!page.trace_searching());
         assert_eq!(page.editor.text(), "写了一半的话");
     }
@@ -16511,7 +16669,7 @@ mod tests {
         page.key(Key::Char('n'));
         page.key(Key::Char('N'));
         assert_eq!(page.editor.text(), "nN");
-        assert!(page.trace_selection.is_none(), "没有命中就没有下一个");
+        assert!(page.view.trace_selection.is_none(), "没有命中就没有下一个");
     }
 
     /// `Esc` 的四层序（票 20 第 10 条）：搜索模式 → 清过滤 → 清选中 → 交还键盘。
@@ -16519,27 +16677,27 @@ mod tests {
     fn escape_walks_the_four_layers_in_order() {
         let mut page = a_page_with_two_levels();
         page.key(Key::Char('g'));
-        assert!(page.trace_selection.is_some(), "先放一个选中");
+        assert!(page.view.trace_selection.is_some(), "先放一个选中");
 
         page.key(Key::Char('/'));
         page.key(Key::Char('r'));
         assert!(page.trace_searching());
         page.key(Key::Esc);
         assert!(
-            !page.trace_searching() && !page.filtering(),
+            !page.trace_searching() && !page.view.filtering(),
             "第一层：取消搜索"
         );
-        assert!(page.trace_selection.is_some(), "选中与搜索互不清");
+        assert!(page.view.trace_selection.is_some(), "选中与搜索互不清");
 
         page.key(Key::Char('/'));
         page.key(Key::Char('r'));
         page.key(Key::Enter);
-        assert!(page.filtering() && !page.trace_searching());
+        assert!(page.view.filtering() && !page.trace_searching());
         page.key(Key::Esc);
-        assert!(!page.filtering(), "第二层：清过滤");
-        assert!(page.trace_selection.is_some(), "选中还留着");
+        assert!(!page.view.filtering(), "第二层：清过滤");
+        assert!(page.view.trace_selection.is_some(), "选中还留着");
         page.key(Key::Esc);
-        assert!(page.trace_selection.is_none(), "第三层：清选中");
+        assert!(page.view.trace_selection.is_none(), "第三层：清选中");
         assert!(page.trace_keyboard);
         page.key(Key::Esc);
         assert!(!page.trace_keyboard, "第四层：交还键盘");
@@ -16559,6 +16717,7 @@ mod tests {
 
         let first = tool_block(&page, "read");
         let second = page
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -16571,6 +16730,7 @@ mod tests {
             })
             .expect("第二次 read 在");
         let notice = page
+            .view
             .painted
             .iter()
             .find_map(|painted| match painted {
@@ -16585,15 +16745,19 @@ mod tests {
 
         // 没有选中时 `n` 从第一个命中开始。
         page.key(Key::Char('n'));
-        assert_eq!(page.trace_selection, Some(first));
+        assert_eq!(page.view.trace_selection, Some(first));
         page.key(Key::Char('n'));
-        assert_eq!(page.trace_selection, Some(second));
+        assert_eq!(page.view.trace_selection, Some(second));
         page.key(Key::Char('n'));
-        assert_eq!(page.trace_selection, Some(notice), "通知里的命中也算一个");
+        assert_eq!(
+            page.view.trace_selection,
+            Some(notice),
+            "通知里的命中也算一个"
+        );
         page.key(Key::Char('n'));
-        assert_eq!(page.trace_selection, Some(notice), "走到头就停住");
+        assert_eq!(page.view.trace_selection, Some(notice), "走到头就停住");
         page.key(Key::Char('N'));
-        assert_eq!(page.trace_selection, Some(second), "`N` 往回走一个");
+        assert_eq!(page.view.trace_selection, Some(second), "`N` 往回走一个");
     }
 
     /// 过滤期间新到的命中块进账，并记一笔「新增」—— `· 新增 M` 数的是**块**，不是行
@@ -16606,16 +16770,17 @@ mod tests {
             page.key(Key::Char(ch));
         }
         page.key(Key::Enter);
-        let before = page.trace_search.as_ref().unwrap().hits.len();
+        let before = page.view.trace_search.as_ref().unwrap().hits.len();
         assert_eq!(before, 1);
-        assert_eq!(page.trace_search.as_ref().unwrap().fresh, 0);
+        assert_eq!(page.view.trace_search.as_ref().unwrap().fresh, 0);
 
         a_tool_call(&mut page, 20, "c-9", "read");
-        let search = page.trace_search.as_ref().unwrap();
+        let search = page.view.trace_search.as_ref().unwrap();
         assert_eq!(search.hits.len(), 2, "它进了过滤集");
         assert_eq!(search.fresh, 1, "而且算一个新增");
         let landed = tool_block(&page, "read");
         let newest = page
+            .view
             .painted
             .iter()
             .filter_map(|painted| match painted {
@@ -16630,7 +16795,7 @@ mod tests {
             .expect("两次 read 在");
         assert_ne!(landed, newest);
         assert!(
-            page.first_source_of(newest).is_some(),
+            page.view.first_source_of(newest).is_some(),
             "新命中的那一块出现在过滤视图里"
         );
     }

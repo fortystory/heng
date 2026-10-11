@@ -69,7 +69,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [ ] [文档回改：lifecycle.md 与逐面文档（实现期执行）](issues/09-doc-revision.md)
 - [x] [grilling：会话列表的搜索与过滤](issues/10-session-list-search.md)
 - [x] [grilling：后台会话有事时的场外通知](issues/11-offscreen-attention.md)
-- [ ] [12: 把 TuiState 的会话投影抽成子结构](issues/12-session-projection-struct.md)
+- [x] [12: 把 TuiState 的会话投影抽成子结构](issues/12-session-projection-struct.md)
 - [ ] [13: 渲染器与路径锁升进程级、`Harness: Send`](issues/13-process-level-renderer-and-locks.md)
 - [ ] [14: 渲染事件带 session id 与重放语义修正](issues/14-render-event-session-id.md)
 - [ ] [15: 宿主表与前台指针：一场会话与今天等价](issues/15-session-host-table.md)
