@@ -41,6 +41,11 @@ pub struct Prefix {
     pub cwd: Option<String>,
     /// 前 8 行里**首条**归一化后非空的用户消息正文（原文，未截断）。
     pub first_user_text: Option<String>,
+    /// 头 8 行里读到的非空行数。
+    pub lines: usize,
+    /// 其中解析成 JSON 的行数。`lines > 0 && parsed == 0` 就是一条**坏流**
+    /// （`.scratch/session-tab/spec.md` §3 的「流损坏」标记）。
+    pub parsed: usize,
 }
 
 /// 只读一条流的头 8 行，逐行 `serde_json::Value`。
@@ -57,9 +62,14 @@ pub fn read_prefix(path: &Path) -> std::io::Result<Prefix> {
             break;
         }
         let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        prefix.lines += 1;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
+        prefix.parsed += 1;
         let Some(payload) = value.get("payload") else {
             continue;
         };
