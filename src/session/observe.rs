@@ -514,6 +514,8 @@ fn entry_of(event: &Event) -> Option<Entry> {
         EventPayload::GoalSelected { .. } => return None,
         // 会话的名字同理：它是这场会话的标记，不是时间线上发生了什么。
         EventPayload::SessionTitled { .. } => return None,
+        // 换档同理：它是这一场的档位标记，不是时间线上发生了什么。
+        EventPayload::SessionFactsChanged { .. } => return None,
         // 收尾汇总同上：写它的那次调用已经留下一条助手消息，`sessions show` 从那里读得出
         // 来；这一条是流上的记录，不再重复列一遍。
         EventPayload::GoalCompleted { .. } => return None,
@@ -1004,6 +1006,8 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
             EventPayload::GoalSelected { .. } => {}
             // 改名也不计进任何一项统计：它是名字，不是用量。
             EventPayload::SessionTitled { .. } => {}
+            // 换档也不计进任何一项统计。
+            EventPayload::SessionFactsChanged { .. } => {}
             EventPayload::GoalCompleted { .. } => {}
             EventPayload::GoalStopped { .. } => {}
             // 沙箱状态不计进任何一项统计：它是这一刻的记账，不是用量。

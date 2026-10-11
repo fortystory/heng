@@ -119,6 +119,8 @@ impl Render for Headless {
                         // 名字是左栏与终端标题的东西，机器模式没有给人看的进展可报
                         // （`.scratch/session-tab/spec.md` §4）。
                         EventPayload::SessionTitled { .. } => {}
+                        // 换档在机器模式里没有给人看的进展 —— 回执由交互那一侧打。
+                        EventPayload::SessionFactsChanged { .. } => {}
                         // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
                         EventPayload::SandboxStatus {
                             mode,

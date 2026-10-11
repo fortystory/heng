@@ -341,6 +341,21 @@ pub enum EventPayload {
         session_id: SessionId,
         cwd: String,
         schema_version: u32,
+        /// 这一场用哪几样会话级事实（`.scratch/session-tab/spec.md` §2、决策票 05）。
+        ///
+        /// 五个 `Option` + `#[serde(default)]`：旧流没有它们，读出来是 `None`，回退**进程配置
+        /// 默认**并如实说明。**不记** `context_window`（它由模型推得出来）与沙箱可用性（那是
+        /// 这一刻的机器事实，另有一条 `SandboxStatus`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sandbox_mode: Option<String>,
     },
     ContextInjected {
         source: ContextSource,
@@ -366,6 +381,26 @@ pub enum EventPayload {
     /// `/undo` 这类它压根没听见的东西。`text` 是人敲下的那一整条（散文，打码）。
     CommandRun {
         text: String,
+    },
+    /// 这场会话的**会话级事实**的一份全量快照（`.scratch/session-tab/spec.md` §2、决策票 05）。
+    ///
+    /// **只追加**，所以**当前事实 = 流上最后一条** —— 与目标、`todo`、标题同一条派生纪律。
+    /// 每条流在装载之后都会补一条完整的快照：`SessionStarted` 那五个字段给的是**开场那一刻**
+    /// 的值，而 `/model`、`Shift+Tab` 这些会话级手势会把它挪走。
+    ///
+    /// **log-only**：投影不把它变成任何一条 `messages`，模型看不到自己的档位被换过。五个字段
+    /// 都是标识符（模型 id / provider 名 / 协议标记），不是散文。
+    SessionFactsChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sandbox_mode: Option<String>,
     },
     /// 人给这场会话起的一个名字（`.scratch/session-tab/spec.md` §4 与决策票 01）。
     ///
@@ -529,6 +564,7 @@ impl EventPayload {
             EventPayload::SessionEnded { .. } => "SessionEnded",
             EventPayload::CommandRun { .. } => "CommandRun",
             EventPayload::SessionTitled { .. } => "SessionTitled",
+            EventPayload::SessionFactsChanged { .. } => "SessionFactsChanged",
             EventPayload::GoalSelected { .. } => "GoalSelected",
             EventPayload::GoalStopped { .. } => "GoalStopped",
             EventPayload::GoalCompleted { .. } => "GoalCompleted",
@@ -564,6 +600,7 @@ impl EventPayload {
     pub fn redact(&mut self, redactor: &Redactor) {
         match self {
             EventPayload::SessionStarted { .. }
+            | EventPayload::SessionFactsChanged { .. }
             | EventPayload::SessionEnded { .. }
             | EventPayload::GoalSelected { .. }
             | EventPayload::RoundStarted { .. }

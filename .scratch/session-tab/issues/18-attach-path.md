@@ -1,7 +1,7 @@
 # 18: 装载路径：切入历史会话
 
 Type: implement
-Status: ready-for-agent
+Status: in-progress
 Blocked by: 15
 Part of: ../map.md
 
@@ -20,3 +20,36 @@ Part of: ../map.md
 - [ ] 宿主表加只读标志，**不动三态**
 - [ ] **已在宿主表里的会话绝不重走装载**（否则 `resuming` 闸门会把进行中的工具调用读成崩溃遗留、合成一条「结果未知」）
 - [ ] 测试：宿主接缝覆盖「新流 / 旧流回退 / 三档损坏流 / 只读禁令」；`-c` 与界面点选走同一条路径
+
+## 进度
+
+**2026-10-12 · 事实与判定层已落地（这一票尚未 done）**：`src/session/facts.rs`、
+`src/session/attach.rs`、`tests/session_attach.rs`（9 条）、`tests/session_host.rs`（+3 条）。
+已覆盖：
+
+- **`SessionStarted` 补五格**（model / provider / effort / permission_mode / sandbox_mode），
+  全是 `Option` + `serde(default)`；`SCHEMA_VERSION` 已在票 16 涨到 3，这一次不动它。
+  `record_session_started` 填的是**那一刻**的取值（`Session` 的 config 与 mode），
+  `SessionConfig` 因此多了 `provider`（`Config::session_config` 从 profile 名填上）。
+- **新事件 `SessionFactsChanged`**：log-only、只追加、当前事实 = 流上最后一条；五处穷尽 match
+  各自表态（投影零产出、headless 静默、transcript 不产块、`entry_of` 不列、`stats` 不计）。
+- **`SessionFacts::current`**：最后一条快照 → 第一条 `SessionStarted` → 全 `None`；
+  `missing()` 报出哪几格是空的，`with_fallback()` 逐格补进程配置默认并报出补了哪几样
+  （「如实说明」那句话的原料）。
+- **`Harness::record_facts`**：装载之后补一条完整快照的入口（`agent::record_session_facts`）。
+- **流的三档健康**（`attach::health`）：尾行坏 → **可写**（`EventLog::open` 会截掉那条尾巴）、
+  坏行后面还有好行 → **只读预览**、一行都读不出或打不开 → **拒装**。
+- **`attach::check`**：已在宿主表 → `AlreadyHosted`（绝不重走装载，否则 `resuming` 闸门会把
+  进行中的工具调用读成崩溃遗留）、cwd 目录不在 → `MissingCwd`、流读不出 → `Unreadable`，
+  其余 `Ready`。
+- **宿主表加只读标志**：`HostEntry::read_only` + `SessionHost::adopt_read_only`，**三态不动**
+  （只读不是第四个状态）。
+
+**还没做**：
+
+- **只读预览的写流禁令**：提交、所有 `/` 命令、`Shift+Tab`、页内改名、新建各回一句 —— 执行点
+  在 cli 与 TUI，等票 15 的接线。
+- **装载函数本身**（`check` 之后交给装载 task、`assemble` 一场已存在的会话、装完切前台）与其
+  cli 接线：`-c <id>` 与界面点选走同一条路径。
+- 提示行那句「旧流缺字段，已回退进程配置默认」的具体措辞与常驻标记。
+- 环境类事实（沙箱 / 技能 / `AGENTS.md`）重探：组装时本来就是重探，但还没有一条测试钉住它。

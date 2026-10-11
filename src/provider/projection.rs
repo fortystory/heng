@@ -82,6 +82,8 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // 会话的名字是这个会话的元数据，不是它说过的一句话：模型读不到自己的名字
             // （`.scratch/session-tab/spec.md` §4、决策票 01 §8）。
             EventPayload::SessionTitled { .. } => {}
+            // 会话级事实是 harness 记账：模型读得到的是它自己的身份注入，而不是这条流水账。
+            EventPayload::SessionFactsChanged { .. } => {}
             // 钉住的注入属于钉住的开头，绝不与发言合并：它必须每一回合都看起来一模一样，前缀缓存
             // 才能继续命中（spec §5、§10）。开头那几条注入 —— 项目规矩与技能清单 —— 是**一条**
             // `user` 消息（spec §10、决定 09：「与 AGENTS.md 同一条」），所以连续的一串注入合并成

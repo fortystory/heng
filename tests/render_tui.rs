@@ -1326,6 +1326,11 @@ fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
                 session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
                 cwd: "/workspace".to_owned(),
                 schema_version: 1,
+                model: None,
+                provider: None,
+                effort: None,
+                permission_mode: None,
+                sandbox_mode: None,
             },
         )],
     });

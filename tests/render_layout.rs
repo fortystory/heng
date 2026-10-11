@@ -12892,6 +12892,11 @@ fn ctrl_v_is_a_view_only_gesture() {
                 session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
                 cwd: "/workspace".to_owned(),
                 schema_version: 1,
+                model: None,
+                provider: None,
+                effort: None,
+                permission_mode: None,
+                sandbox_mode: None,
             },
         )],
     });

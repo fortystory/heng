@@ -78,6 +78,8 @@ pub struct HostEntry {
     pub state: watch::Receiver<SessionState>,
     /// 主循环往这一场发命令的那条通道。
     pub cmd: mpsc::Sender<SessionCommand>,
+    /// 只读预览（票 18）：流半读装起来的那一场 —— 凡写流的一律禁，三态不动。
+    pub read_only: bool,
     /// 每场一份的取消手势（决策票 04 §3）。
     pub cancel: CancelSignal,
     /// 拥有这场会话的那个 task。
@@ -107,6 +109,23 @@ impl SessionHost {
     /// `cwd` 由调用方给：表里记的是这一场的工作目录，而它不必等于进程的 cwd（票 18 的装载路径
     /// 会让两者分开）。
     pub fn adopt(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
+        self.adopt_with(harness, cwd, false)
+    }
+
+    /// 同上，但这是一场**只读预览**（票 18 的第二档损坏流）。
+    ///
+    /// 只读不是一个第四态：三态照旧，表里只多一个标志 —— 凡写流的一律禁（提交、所有 `/`
+    /// 命令、`Shift+Tab`、页内改名、新建），各回一句。
+    pub fn adopt_read_only(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
+        self.adopt_with(harness, cwd, true)
+    }
+
+    fn adopt_with(
+        &mut self,
+        harness: Harness,
+        cwd: PathBuf,
+        read_only: bool,
+    ) -> Result<(), HostError> {
         let id = harness.session_id().clone();
         if self.contains(&id) {
             return Err(HostError::AlreadyHosted(id));
@@ -141,6 +160,7 @@ impl SessionHost {
         self.entries.push(HostEntry {
             id,
             cwd,
+            read_only,
             state: state_rx,
             cmd: cmd_tx,
             cancel,

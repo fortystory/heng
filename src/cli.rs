@@ -5097,6 +5097,11 @@ mod tests {
                     session_id: session.id.clone(),
                     cwd: cwd.display().to_string(),
                     schema_version: SCHEMA_VERSION,
+                    model: None,
+                    provider: None,
+                    effort: None,
+                    permission_mode: None,
+                    sandbox_mode: None,
                 },
             );
             std::fs::write(
@@ -5714,6 +5719,11 @@ mod tests {
                     session_id: stored.id.clone(),
                     cwd: workspace.display().to_string(),
                     schema_version: SCHEMA_VERSION,
+                    model: None,
+                    provider: None,
+                    effort: None,
+                    permission_mode: None,
+                    sandbox_mode: None,
                 },
             ),
             Event::new(

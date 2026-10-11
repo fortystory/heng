@@ -45,6 +45,11 @@ fn log(script: impl FnOnce(&mut EventLog)) -> (tempfile::TempDir, EventLog) {
             session_id: SessionId::new("s-1"),
             cwd: "/workspace".to_owned(),
             schema_version: heng::events::SCHEMA_VERSION,
+            model: None,
+            provider: None,
+            effort: None,
+            permission_mode: None,
+            sandbox_mode: None,
         },
     )
     .unwrap();

@@ -12,6 +12,11 @@ fn started(session: &str) -> EventPayload {
         session_id: SessionId::new(session),
         cwd: "/tmp/work".to_owned(),
         schema_version: SCHEMA_VERSION,
+        model: None,
+        provider: None,
+        effort: None,
+        permission_mode: None,
+        sandbox_mode: None,
     }
 }
 

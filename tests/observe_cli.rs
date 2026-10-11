@@ -49,6 +49,11 @@ fn fixture() -> Fixture {
             session_id: stored.id.clone(),
             cwd: cwd.to_string_lossy().into_owned(),
             schema_version: SCHEMA_VERSION,
+            model: None,
+            provider: None,
+            effort: None,
+            permission_mode: None,
+            sandbox_mode: None,
         },
     )
     .unwrap();

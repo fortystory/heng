@@ -300,16 +300,62 @@ pub struct TurnOutcome {
 /// 记下会话骨架。`agent` 模块拥有对日志的每一次写入，
 /// 所以连一次性的 `SessionStarted` 事件也在这里记录。
 pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
+    let session_id = session.id().clone();
+    let cwd = session.cwd().to_string_lossy().into_owned();
+    let facts = current_facts(session);
     emit(
         session,
         render,
         &SpeakerId::System,
         EventPayload::SessionStarted {
-            session_id: session.id().clone(),
-            cwd: session.cwd().to_string_lossy().into_owned(),
+            session_id,
+            cwd,
             schema_version: SCHEMA_VERSION,
+            model: facts.model,
+            provider: facts.provider,
+            effort: facts.effort,
+            permission_mode: facts.permission_mode,
+            sandbox_mode: facts.sandbox_mode,
         },
     )
+}
+
+/// 记下这场会话**此刻**的五样事实（`.scratch/session-tab/spec.md` §2、票 18）。
+///
+/// 每次装载之后补一条完整的快照：`SessionStarted` 那五格给的是**开场那一刻**的值，而
+/// `/model`、`Shift+Tab` 这些会话级手势会把它挪走。**log-only**，模型看不到自己被换过档。
+pub fn record_session_facts(session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
+    let facts = current_facts(session);
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::SessionFactsChanged {
+            model: facts.model,
+            provider: facts.provider,
+            effort: facts.effort,
+            permission_mode: facts.permission_mode,
+            sandbox_mode: facts.sandbox_mode,
+        },
+    )
+}
+
+/// 这一刻那五样会话级事实的样子。
+///
+/// 它们是**当时的取值**而不是「当前配置」：中途换过模型之后，流上早先那一条仍然说的是
+/// 那一刻的那个。
+fn current_facts(session: &Session) -> crate::session::SessionFacts {
+    let config = session.config();
+    crate::session::SessionFacts {
+        model: Some(config.model.clone()),
+        provider: config.provider.clone(),
+        effort: config
+            .params
+            .reasoning_effort
+            .map(|effort| effort.as_str().to_owned()),
+        permission_mode: Some(session.mode().as_str().to_owned()),
+        sandbox_mode: Some(config.sandbox.mode.as_str().to_owned()),
+    }
 }
 
 /// 记下这场会话的新名字（`.scratch/session-tab/spec.md` §4）。

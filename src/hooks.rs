@@ -235,6 +235,7 @@ impl HookEvent {
                 session_id,
                 cwd,
                 schema_version,
+                ..
             } => Some(HookEvent::SessionStarted {
                 session_id: session_id.clone(),
                 cwd: cwd.clone(),

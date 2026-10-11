@@ -32,6 +32,11 @@ fn log() -> (tempfile::TempDir, EventLog) {
             session_id: SessionId::new("s-1"),
             cwd: "/workspace".to_owned(),
             schema_version: SCHEMA_VERSION,
+            model: None,
+            provider: None,
+            effort: None,
+            permission_mode: None,
+            sandbox_mode: None,
         },
     )
     .unwrap();
@@ -609,6 +614,11 @@ fn list_summarizes_a_stored_session_from_its_own_stream() {
             session_id: stored.id.clone(),
             cwd: cwd.to_string_lossy().into_owned(),
             schema_version: SCHEMA_VERSION,
+            model: None,
+            provider: None,
+            effort: None,
+            permission_mode: None,
+            sandbox_mode: None,
         },
     )
     .unwrap();

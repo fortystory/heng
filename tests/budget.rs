@@ -199,6 +199,11 @@ fn write_log(path: &Path, events: &[Event]) {
                 session_id: SessionId::new("s-ledger"),
                 cwd: "/workspace".to_owned(),
                 schema_version: SCHEMA_VERSION,
+                model: None,
+                provider: None,
+                effort: None,
+                permission_mode: None,
+                sandbox_mode: None,
             },
         })
         .unwrap(),

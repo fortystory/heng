@@ -15,6 +15,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub mod attach;
+pub mod facts;
 pub mod host;
 pub mod ledger;
 pub mod listing;
@@ -22,6 +24,8 @@ pub mod observe;
 pub mod store;
 pub mod titles;
 
+pub use attach::{AttachCheck, StreamHealth};
+pub use facts::SessionFacts;
 pub use host::{HostEntry, SessionCommand, SessionHost, SessionState, SessionTurn};
 pub use ledger::DayLedger;
 pub use listing::{SessionListing, SessionMark, SessionRow, sessions};

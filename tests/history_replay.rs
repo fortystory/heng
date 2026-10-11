@@ -119,6 +119,11 @@ fn session_started(seq: u64) -> Event {
             session_id: SessionId::new("01J8ZQ4K7M"),
             cwd: "/workspace".to_owned(),
             schema_version: 1,
+            model: None,
+            provider: None,
+            effort: None,
+            permission_mode: None,
+            sandbox_mode: None,
         },
     )
 }

@@ -1255,8 +1255,9 @@ impl Config {
     /// 不必记得去要；而 `assemble_discussion` 会拒绝参与者在这一项上不一致的名册，所以没有
     /// 哪条流是只打了一半码的。
     pub fn session_config(&self, model_id: &str) -> Result<SessionConfig, ConfigError> {
-        let (model, _) = self.resolve_model(Some(model_id))?;
+        let (model, provider) = self.resolve_model(Some(model_id))?;
         let mut config = SessionConfig::new(model_id).with_params(model.params.clone());
+        config.provider = Some(provider.name.clone());
         config.pricing = self.pricing.clone();
         config.budget = self.budget.clone();
         config.redactor = self.redactor();
@@ -2516,6 +2517,10 @@ pub enum ConfigError {
 pub struct SessionConfig {
     /// provider 调用所用的模型标识。
     pub model: String,
+    /// 这一场跑在哪个 provider profile 上（`.scratch/session-tab/spec.md` §2 要记的五样之一）。
+    ///
+    /// `None` 是测试与无 profile 的组装（`SessionConfig::new`）：那时它只进不了流，不影响别的。
+    pub provider: Option<String>,
     /// 一个回合里 provider 调用的硬上限。
     pub max_iterations: u32,
     /// 生成参数，含钉住的推理档位。
@@ -2578,6 +2583,7 @@ impl SessionConfig {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
+            provider: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
@@ -2720,6 +2726,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             model: String::new(),
+            provider: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,

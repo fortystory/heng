@@ -1157,6 +1157,13 @@ impl Harness {
         agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
+    /// 把这场会话**此刻**的五样事实补成一条完整快照（`.scratch/session-tab/spec.md` §2、票 18）。
+    ///
+    /// 每次装载之后补一条：`SessionStarted` 那五格是开场那一刻的值。
+    pub fn record_facts(&mut self) -> Result<(), Error> {
+        agent::record_session_facts(&mut self.session, &self.render)
+    }
+
     /// 给这场会话改名（`.scratch/session-tab/spec.md` §4）。空串即撤回。
     ///
     /// 它写下的是**一条新事件**，所以改名可重放、也能被 `-c` 带上 —— 标题不是界面里的一份

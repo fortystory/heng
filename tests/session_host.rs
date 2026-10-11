@@ -257,3 +257,54 @@ async fn two_sessions_run_their_own_turns() {
     assert!(second_text.contains("二号回答"), "{second_text}");
     assert!(!second_text.contains("一号回答"), "两场的流不串");
 }
+
+#[tokio::test]
+async fn a_read_only_preview_keeps_its_three_states() {
+    // 第二档损坏流（半读）装起来是一场**只读预览**：表里多一个标志，三态不动。
+    let dir = tempfile::tempdir().unwrap();
+    let hosted = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt_read_only(hosted.harness, hosted.cwd).unwrap();
+    let entry = host.get(&SessionId::new("s-1")).unwrap();
+    assert!(entry.read_only, "只读标志在表里");
+    assert_eq!(
+        *entry.state.borrow(),
+        SessionState::Idle,
+        "只读不是第四个状态"
+    );
+}
+
+#[tokio::test]
+async fn the_attach_check_refuses_to_load_what_is_already_hosted() {
+    use heng::session::AttachCheck;
+    use heng::session::attach::check;
+
+    let dir = tempfile::tempdir().unwrap();
+    let hosted = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let log_path = hosted.log_path.clone();
+    let workspace = hosted.cwd.clone();
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(hosted.harness, hosted.cwd).unwrap();
+
+    assert_eq!(
+        check(&host, &SessionId::new("s-1"), Some(&workspace), &log_path),
+        AttachCheck::AlreadyHosted(SessionId::new("s-1")),
+        "已经在表里的一场绝不重走装载：那会把进行中的工具调用读成崩溃遗留"
+    );
+}
+
+#[tokio::test]
+async fn a_loaded_session_can_be_given_a_fresh_facts_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hosted = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let log_path = hosted.log_path.clone();
+    hosted.harness.record_facts().unwrap();
+
+    let events = read_events(&log_path).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionFactsChanged { .. })),
+        "装载之后补的那一条快照落在流上：{events:?}"
+    );
+}
