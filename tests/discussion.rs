@@ -1104,12 +1104,12 @@ async fn a_discussion_puts_only_the_synthesis_on_stdout() {
 async fn the_four_round_reasons_render_distinguishably() {
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
-    let (render, receiver) = heng::render::channel();
+    let (render, receiver) = heng::render::channel(heng::events::SessionId::new("01J8ZQ4K7M"));
     let task = Renderer::headless(RenderSinks {
         stdout_result: Box::new(stdout.clone()),
         stderr_diagnostic: Box::new(stderr.clone()),
     })
-    .spawn(receiver);
+    .spawn(receiver, heng::events::SessionId::new("01J8ZQ4K7M"));
 
     let dir = tempfile::tempdir().unwrap();
     let mut log = EventLog::create(dir.path().join("log.jsonl")).unwrap();

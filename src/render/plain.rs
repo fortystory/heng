@@ -14,7 +14,7 @@ use std::io::Write;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::events::{Role, SpeakerId};
+use crate::events::{Role, SessionId, SpeakerId};
 
 use super::severity::Severity;
 use super::transcript::{Block, ToolBlock, Transcript, summarize_args};
@@ -33,6 +33,9 @@ pub struct PlainOptions {
 
 /// plain 渲染器。
 pub struct Plain {
+    /// 这个渲染器替哪一场会话说话的：它自己在通道上造的少数几条事件（丢掉增量那条诊断）
+    /// 也得带着会话身份（`.scratch/session-tab/spec.md` §6）。
+    session: SessionId,
     sinks: RenderSinks,
     color: bool,
     transcript: Transcript,
@@ -47,8 +50,9 @@ pub struct Plain {
 }
 
 impl Plain {
-    pub fn new(options: PlainOptions) -> Self {
+    pub fn new(options: PlainOptions, session: SessionId) -> Self {
         Self {
+            session,
             sinks: options.sinks,
             color: options.color,
             transcript: Transcript::new(),
@@ -381,7 +385,10 @@ impl Render for Plain {
             match receiver.recv().await {
                 Ok(event) => plain.emit(event),
                 Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                    plain.emit(RenderEvent::diagnostic(wording::renderer_dropped(dropped)));
+                    plain.emit(RenderEvent::diagnostic(
+                        plain.session.clone(),
+                        wording::renderer_dropped(dropped),
+                    ));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }

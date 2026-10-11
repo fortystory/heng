@@ -53,7 +53,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::events::{Event, SpeakerId};
+use crate::events::{Event, SessionId, SpeakerId};
 
 pub use headless::Headless;
 pub use input::{
@@ -85,14 +85,21 @@ pub enum DeltaKind {
 #[derive(Debug, Clone)]
 pub enum RenderEvent {
     Delta {
+        /// 这一条增量属于哪一场会话。它们不走事件流，所以身份只能由发送端带上。
+        session: SessionId,
         speaker: SpeakerId,
         kind: DeltaKind,
         text: String,
     },
-    Logged(Event),
+    Logged {
+        /// 事件自己不带会话身份（它落在哪一份日志上才决定），所以由发送端补上。
+        session: SessionId,
+        event: Event,
+    },
     /// 只给渲染器看的叙述，不是事件。`at` 是它**发生**的那一刻：它不是事件、没有信封可依，
     /// 所以时刻在源头打上（`.scratch/trace-in-main/spec.md` §5）。
     Diagnostic {
+        session: SessionId,
         at: DateTime<Utc>,
         message: String,
     },
@@ -101,12 +108,13 @@ pub enum RenderEvent {
     /// 它是一条**静默信号**，不是给人看的一行：不画进转录、不进事件流 —— 握着会话级文件
     /// 索引的那一端靠它知道该重扫一次（`.scratch/files-page/spec.md` §2）。三个渲染器里
     /// 只有 TUI 养着那份索引，另外两个把它当没看见。
-    WorkspaceChanged,
+    WorkspaceChanged { session: SessionId },
     /// 一行不为任何事件说话的界面文字：启动横幅与交互循环的朴素反馈。
     ///
     /// 不是 [`RenderEvent::Diagnostic`]：诊断是系统在报什么，并且被标成那样，而一条告知
     /// 就是那一行本身。`at` 同理，时间在源头打上。
     Notice {
+        session: SessionId,
         at: DateTime<Utc>,
         message: String,
     },
@@ -115,28 +123,46 @@ pub enum RenderEvent {
     /// 它不是事件、也永远不进事件流（身份在每次请求里现拼、从不落盘 —— `build_messages`，
     /// spec §15）。所以这一条是**按当前代码拼的一份**：`--continue` 重开看到的是今天的拼法，
     /// 不是当时那份。它点得开、看得全，但不进模型上下文、也不写 `log.jsonl`。
-    Identity {
-        text: String,
-    },
+    Identity { session: SessionId, text: String },
 }
 
 impl RenderEvent {
+    /// 这条事件属于哪一场会话。
+    ///
+    /// 渲染器在一个进程里只有一个，而它面前可以同时活着不止一场会话，所以每一条事件都得
+    /// 说得出自己是谁的（`.scratch/session-tab/spec.md` §6）。
+    pub fn session(&self) -> &SessionId {
+        match self {
+            Self::Delta { session, .. }
+            | Self::Logged { session, .. }
+            | Self::Diagnostic { session, .. }
+            | Self::WorkspaceChanged { session }
+            | Self::Notice { session, .. }
+            | Self::Identity { session, .. } => session,
+        }
+    }
+
     /// 一条诊断，时刻取现在。实时路径与不需要钉死时刻的测试走它。
-    pub fn diagnostic(message: impl Into<String>) -> Self {
+    pub fn diagnostic(session: SessionId, message: impl Into<String>) -> Self {
         Self::Diagnostic {
+            session,
             at: Utc::now(),
             message: message.into(),
         }
     }
 
     /// 拼好的系统提示词，给读的人看。没有时刻：它不属于任何一刻，是**当前**的拼法。
-    pub fn identity(text: impl Into<String>) -> Self {
-        Self::Identity { text: text.into() }
+    pub fn identity(session: SessionId, text: impl Into<String>) -> Self {
+        Self::Identity {
+            session,
+            text: text.into(),
+        }
     }
 
     /// 一条界面告知，时刻取现在。
-    pub fn notice(message: impl Into<String>) -> Self {
+    pub fn notice(session: SessionId, message: impl Into<String>) -> Self {
         Self::Notice {
+            session,
             at: Utc::now(),
             message: message.into(),
         }
@@ -160,12 +186,21 @@ impl std::fmt::Debug for RenderSinks {
 /// 渲染通道的发送端。克隆很便宜。
 #[derive(Clone)]
 pub struct RenderHandle {
+    /// 这个句柄代表哪一场会话：它发出去的每一条事件都带上这个身份
+    /// （`.scratch/session-tab/spec.md` §6）。
+    session: SessionId,
     sender: broadcast::Sender<RenderEvent>,
 }
 
 impl RenderHandle {
+    /// 这个句柄代表的那一场会话。
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+
     pub fn text_delta(&self, speaker: &SpeakerId, text: &str) {
         let _ = self.sender.send(RenderEvent::Delta {
+            session: self.session.clone(),
             speaker: speaker.clone(),
             kind: DeltaKind::Text,
             text: text.to_owned(),
@@ -174,6 +209,7 @@ impl RenderHandle {
 
     pub fn reasoning_delta(&self, speaker: &SpeakerId, text: &str) {
         let _ = self.sender.send(RenderEvent::Delta {
+            session: self.session.clone(),
             speaker: speaker.clone(),
             kind: DeltaKind::Reasoning,
             text: text.to_owned(),
@@ -181,13 +217,18 @@ impl RenderHandle {
     }
 
     pub fn logged(&self, event: &Event) {
-        let _ = self.sender.send(RenderEvent::Logged(event.clone()));
+        let _ = self.sender.send(RenderEvent::Logged {
+            session: self.session.clone(),
+            event: event.clone(),
+        });
     }
 
     /// 一条只给渲染器看的诊断，不是事件。时刻在这里打上 —— 它不是事件，没有信封可依
     /// （`.scratch/trace-in-main/spec.md` §5）。
     pub fn diagnostic(&self, message: &str) {
-        let _ = self.sender.send(RenderEvent::diagnostic(message));
+        let _ = self
+            .sender
+            .send(RenderEvent::diagnostic(self.session.clone(), message));
     }
 
     /// 一行原样显示的界面文字。
@@ -195,12 +236,16 @@ impl RenderHandle {
     /// 这条接缝存在，是为了让持有 harness 的调用方永远不必自己 print：渲染器一旦占住
     /// 终端，第二个写入者就会落进活动区域里（spec §19）。
     pub fn notice(&self, message: &str) {
-        let _ = self.sender.send(RenderEvent::notice(message));
+        let _ = self
+            .sender
+            .send(RenderEvent::notice(self.session.clone(), message));
     }
 
     /// 把拼好的系统提示词摆进转录（轨迹页看得到的那一条；不进事件流）。
     pub fn identity(&self, text: &str) {
-        let _ = self.sender.send(RenderEvent::identity(text));
+        let _ = self
+            .sender
+            .send(RenderEvent::identity(self.session.clone(), text));
     }
 
     /// 对前端说一句「工作区变了」：不画一行、不进事件流，只请握着文件索引的那一端重扫一次
@@ -209,7 +254,9 @@ impl RenderHandle {
     /// 触发点在工具收尾那一层 —— 判据是既有的 [`crate::tools::Effect`]，所以 `bash` 里的
     /// `mv` / `git checkout` 也算，而不必维护一张工具名单。
     pub fn workspace_changed(&self) {
-        let _ = self.sender.send(RenderEvent::WorkspaceChanged);
+        let _ = self.sender.send(RenderEvent::WorkspaceChanged {
+            session: self.session.clone(),
+        });
     }
 }
 
@@ -250,14 +297,19 @@ impl Renderer {
     }
 
     /// 在 `receiver` 上启动选中的渲染器，那条通道由组装期创建。
-    pub fn spawn(self, receiver: broadcast::Receiver<RenderEvent>) -> JoinHandle<()> {
+    pub fn spawn(
+        self,
+        receiver: broadcast::Receiver<RenderEvent>,
+        session: SessionId,
+    ) -> JoinHandle<()> {
         match self {
             Renderer::Headless(sinks) => {
+                let _ = session;
                 let renderer = Box::new(Headless::new(sinks));
                 tokio::spawn(async move { renderer.consume(receiver).await })
             }
             Renderer::Plain(options) => {
-                let renderer = Box::new(Plain::new(options));
+                let renderer = Box::new(Plain::new(options, session));
                 tokio::spawn(async move { renderer.consume(receiver).await })
             }
             Renderer::Tui(options) => {
@@ -270,7 +322,7 @@ impl Renderer {
 
 /// 创建那唯一一条渲染通道。组装期持有发送端（作为一个 [`RenderHandle`]）；消费端交给
 /// 恰好一个 [`Renderer`]。
-pub fn channel() -> (RenderHandle, broadcast::Receiver<RenderEvent>) {
+pub fn channel(session: SessionId) -> (RenderHandle, broadcast::Receiver<RenderEvent>) {
     let (sender, receiver) = broadcast::channel(RENDER_CHANNEL_CAPACITY);
-    (RenderHandle { sender }, receiver)
+    (RenderHandle { session, sender }, receiver)
 }

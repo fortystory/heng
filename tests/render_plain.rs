@@ -26,7 +26,7 @@ fn renderer(
 ) {
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
-    let (handle, receiver) = channel();
+    let (handle, receiver) = channel(heng::events::SessionId::new("01J8ZQ4K7M"));
     let task = Renderer::plain(PlainOptions {
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
@@ -34,7 +34,7 @@ fn renderer(
         },
         color,
     })
-    .spawn(receiver);
+    .spawn(receiver, heng::events::SessionId::new("01J8ZQ4K7M"));
     (handle, stdout, stderr, task)
 }
 

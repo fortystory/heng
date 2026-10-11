@@ -643,7 +643,10 @@ fn a_live_event_arriving_mid_replay_waits_for_the_history() {
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
-    state.live_event(RenderEvent::notice("heng 启动".to_owned()));
+    state.live_event(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "heng 启动".to_owned(),
+    ));
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -681,7 +684,10 @@ fn a_logged_event_arriving_mid_replay_is_not_painted_twice() {
     replay(&mut state, events);
     state.replay_batch();
     // 快照里已经握着的那条结果从渲染通道到达。
-    state.live_event(RenderEvent::Logged(recovery));
+    state.live_event(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: recovery,
+    });
     run_replay(&mut state);
     open_trace_tab(&mut state, 120, 40);
 
@@ -727,7 +733,10 @@ fn the_divider_separates_history_from_what_this_run_adds() {
         &mut state,
         vec![session_started(1), message(2, "上一段的回答", None)],
     );
-    state.live_event(RenderEvent::notice("本段的 banner".to_owned()));
+    state.live_event(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "本段的 banner".to_owned(),
+    ));
     run_replay(&mut state);
 
     let rows = screen(120, 40, &mut state);
@@ -800,8 +809,14 @@ fn the_panel_adds_up_the_history_and_keeps_accumulating() {
     run_replay(&mut state);
 
     // 接缝之后到达一条实时调用。
-    state.live_event(RenderEvent::Logged(usage(4, 50, 10, 0, 50)));
-    state.live_event(RenderEvent::Logged(turn_ended(5)));
+    state.live_event(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: usage(4, 50, 10, 0, 50),
+    });
+    state.live_event(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: turn_ended(5),
+    });
 
     let rows = screen(120, 40, &mut state);
     let tokens = panel_field(&rows, 1);
@@ -841,7 +856,10 @@ fn the_rail_grows_with_the_replayed_history() {
     // 接缝之后一次实时回合加上它自己的格，于是历史与这场会话共用一根
     // 回合条，而不是另起一根。
     let before = shape.len();
-    state.live_event(RenderEvent::Logged(turn_ended(41)));
+    state.live_event(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: turn_ended(41),
+    });
     let after = turn_rail_shape(&mut state);
     assert!(
         after.len() >= before && after.ends_with('┃'),
@@ -1144,7 +1162,10 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
     );
 
     // 覆盖层挂着的时候输出到达：它被追加，而不是被跟随。
-    state.live_event(RenderEvent::notice("历史详情打开时的新内容".to_owned()));
+    state.live_event(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "历史详情打开时的新内容".to_owned(),
+    ));
     let frozen = screen(120, 40, &mut state);
     assert!(
         frozen.iter().any(|row| row.contains(TOOL_FACES)),
@@ -1234,4 +1255,118 @@ fn a_replayed_history_grows_in_the_trace_page_too() {
     open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("调用 bash"), "轨迹页跟着历史长出来：{text}");
+}
+
+// ---------------------------------------------------------------------------
+// 票 14 — 会话身份与「不重不漏」
+// ---------------------------------------------------------------------------
+
+/// 这一场自己的身份：与 `facts()` 的 `session_id` 同一个串。
+fn this_session() -> SessionId {
+    SessionId::new("01J8ZQ4K7M")
+}
+
+#[test]
+fn a_live_event_the_snapshot_already_holds_is_not_drawn_twice() {
+    // 快照 = `seq` 1..=3。重放开始之后流上又落了 `seq = 4`，那是快照没持有的一条，
+    // 收尾时要补上。反过来，一条**快照已经持有**的进流事件（组装之后又被推了一遍）
+    // 不能在收尾时画第二遍 —— 判据是 `seq > S`（`.scratch/session-tab/spec.md` §6）。
+    let mut state = state();
+    replay(
+        &mut state,
+        vec![
+            session_started(1),
+            message(2, "上一段的回答", None),
+            message(3, "再上一段", None),
+        ],
+    );
+    // 重放还没铺完时，三条实时事件到达：快照里已有的一条、流上新增的一条、以及一条
+    // 永不进流的横幅。
+    state.live_event(RenderEvent::Logged {
+        session: this_session(),
+        event: message(3, "再上一段", None),
+    });
+    state.live_event(RenderEvent::Logged {
+        session: this_session(),
+        event: message(4, "这一段才是新的", None),
+    });
+    state.live_event(RenderEvent::notice(
+        this_session(),
+        "本段的一句话".to_owned(),
+    ));
+    run_replay(&mut state);
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert_eq!(
+        text.matches("再上一段").count(),
+        1,
+        "快照已经持有的那一条只画一次：{text}"
+    );
+    assert!(
+        text.contains("这一段才是新的"),
+        "重放期间流上新增的那一条要在收尾时补上：{text}"
+    );
+    assert!(
+        text.contains("本段的一句话"),
+        "永不进流的那一条同样在收尾时补上：{text}"
+    );
+}
+
+#[test]
+fn an_event_from_another_session_never_enters_the_projection() {
+    // 渲染器只有一份投影，它画的是当前前台；别的会话事件进不来
+    // （`.scratch/session-tab/spec.md` §6）。对照是同一条从自己这场发出来。
+    let mut state = state();
+    state.live_event(RenderEvent::notice(
+        SessionId::new("另一场"),
+        "另一场的一句话".to_owned(),
+    ));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("另一场的一句话"),
+        "别的会话不在这份投影里：{text}"
+    );
+
+    state.live_event(RenderEvent::notice(
+        this_session(),
+        "自己的一句话".to_owned(),
+    ));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("自己的一句话"), "自己的那条照常画：{text}");
+}
+
+#[test]
+fn a_new_replay_closes_the_one_in_flight_first() {
+    // 收到新的重放请求时先把在飞的旧重建收尾：分隔行、排空它的缓冲。直接覆盖会把旧批次
+    // 攒下的实时事件泄进下一次重建（票 14）。
+    let mut state = state();
+    replay(
+        &mut state,
+        vec![session_started(1), message(2, "旧的那一段", None)],
+    );
+    state.live_event(RenderEvent::notice(
+        this_session(),
+        "旧批次的横幅".to_owned(),
+    ));
+    assert!(state.replay_pending(), "旧重建还在飞");
+
+    replay(
+        &mut state,
+        vec![session_started(1), message(2, "新的那一段", None)],
+    );
+    run_replay(&mut state);
+
+    let rows = screen(120, 40, &mut state);
+    let banner = rows
+        .iter()
+        .position(|row| row.contains("旧批次的横幅"))
+        .expect("旧批次缓冲的那条在它自己收尾时放出来了");
+    let history = rows
+        .iter()
+        .position(|row| row.contains("新的那一段"))
+        .expect("新的一份照常铺");
+    assert!(
+        banner < history,
+        "旧批次在**新重建开始之前**收尾，于是它的缓冲落在那份历史之前：{rows:?}"
+    );
 }

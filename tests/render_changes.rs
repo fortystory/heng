@@ -369,7 +369,9 @@ fn a_failed_readout_keeps_the_last_numbers_and_leaves_a_receipt() {
     let before = sidebar(&mut state, 120, 24, 40);
 
     // 再请一次取数（`WorkspaceChanged` 就是它的一个触发点），然后让它失败。
-    state.live_event(RenderEvent::WorkspaceChanged);
+    state.live_event(RenderEvent::WorkspaceChanged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+    });
     assert!(state.take_changes());
     state.changes_loaded(changes::Outcome::Failed);
     let after = sidebar(&mut state, 120, 24, 40);
@@ -391,7 +393,9 @@ fn a_workspace_change_asks_for_one_read_at_a_time_and_draws_nothing() {
     let before = sidebar(&mut state, 120, 24, 40);
 
     for _ in 0..3 {
-        state.live_event(RenderEvent::WorkspaceChanged);
+        state.live_event(RenderEvent::WorkspaceChanged {
+            session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        });
     }
     let after = sidebar(&mut state, 120, 24, 40);
     assert_eq!(before, after, "这条信号不画任何东西");
@@ -399,7 +403,9 @@ fn a_workspace_change_asks_for_one_read_at_a_time_and_draws_nothing() {
     assert!(!state.take_changes(), "一次取数还在飞，不并发");
 
     // 飞着的时候工作区又变了：位留着，结果落地之后的下一轮补发。
-    state.live_event(RenderEvent::WorkspaceChanged);
+    state.live_event(RenderEvent::WorkspaceChanged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+    });
     assert!(!state.take_changes(), "飞着的那次不被抢");
     state.changes_loaded(changes::Outcome::Changed(Vec::new()));
     assert!(state.take_changes(), "补发的那一次仍然发得出去");
@@ -430,7 +436,9 @@ fn the_page_keeps_reading_even_when_it_is_not_in_front() {
     let mut state = state();
     assert!(state.take_changes());
     state.changes_loaded(changes::Outcome::Changed(Vec::new()));
-    state.live_event(RenderEvent::WorkspaceChanged);
+    state.live_event(RenderEvent::WorkspaceChanged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+    });
     assert!(state.take_changes(), "页不在前台也照旧取数");
 }
 

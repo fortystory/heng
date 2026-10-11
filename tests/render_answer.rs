@@ -72,31 +72,37 @@ const ANSWERED_TEXT: &str = "用哪个方案：这两条路走哪一条？\n  \
 /// 一次工具调用开始的日志事件。
 fn call(seq: u64, id: &str, tool: &str, args: serde_json::Value) -> RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::ToolCallStarted {
-            tool_call_id: ToolCallId::new(id),
-            tool_name: tool.to_owned(),
-            args,
-        },
-    ))
+    RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new(id),
+                tool_name: tool.to_owned(),
+                args,
+            },
+        ),
+    }
 }
 
 /// 一次工具调用完成的日志事件。
 fn result(seq: u64, id: &str, ok: bool, output: Option<&str>) -> RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::ToolCallCompleted {
-            tool_call_id: ToolCallId::new(id),
-            ok,
-            output: output.map(str::to_owned),
-            error: None,
-            duration_ms: 3,
-        },
-    ))
+    RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new(id),
+                ok,
+                output: output.map(str::to_owned),
+                error: None,
+                duration_ms: 3,
+            },
+        ),
+    }
 }
 
 /// 一个块是不是那次答卷。
@@ -260,13 +266,16 @@ fn the_answer_is_a_bubble_against_the_right_edge_like_any_user_turn() {
 /// 一条命令记录的事件（`.scratch/command-echo/spec.md`）。
 fn ran(seq: u64, text: &str) -> RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId};
-    RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::System,
-        EventPayload::CommandRun {
-            text: text.to_owned(),
-        },
-    ))
+    RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::System,
+            EventPayload::CommandRun {
+                text: text.to_owned(),
+            },
+        ),
+    }
 }
 
 #[test]

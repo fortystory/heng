@@ -265,6 +265,7 @@ fn a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting() {
     // 键盘就能回来。
     let mut state = state_running();
     state.apply(RenderEvent::Delta {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
         speaker: kimi(),
         kind: DeltaKind::Text,
         text: "synthesizing".to_owned(),
@@ -480,10 +481,18 @@ fn a_tool_call_is_painted_by_its_result_and_annotated_by_its_hook() {
     );
 
     assert!(
-        transcript.push(RenderEvent::Logged(call)).is_empty(),
+        transcript
+            .push(RenderEvent::Logged {
+                session: heng::events::SessionId::new("01J8ZQ4K7M"),
+                event: call
+            })
+            .is_empty(),
         "进行中的调用还没画"
     );
-    let ready = transcript.push(RenderEvent::Logged(result));
+    let ready = transcript.push(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: result,
+    });
     let tool = ready
         .iter()
         .find_map(|block| match block {
@@ -494,7 +503,10 @@ fn a_tool_call_is_painted_by_its_result_and_annotated_by_its_hook() {
     assert_eq!(tool.tool, "read_file");
     assert!(tool.outcome.as_ref().unwrap().ok);
 
-    let feedback = transcript.push(RenderEvent::Logged(hook));
+    let feedback = transcript.push(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: hook,
+    });
     assert_eq!(feedback.len(), 1, "hook 是自己的块：{feedback:#?}");
     assert!(
         matches!(
@@ -1324,24 +1336,30 @@ fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
 fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
     let mut state = new_state();
     state.request(ConsoleRequest::RunState { running: true });
-    state.apply(RenderEvent::Logged(Event::new(
-        1,
-        SpeakerId::System,
-        EventPayload::GoalSelected {
-            goal: "修文档索引".to_owned(),
-        },
-    )));
+    state.apply(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            1,
+            SpeakerId::System,
+            EventPayload::GoalSelected {
+                goal: "修文档索引".to_owned(),
+            },
+        ),
+    });
     assert_eq!(state.title(), "~/code/heng · 运行中 · 修文档索引");
 
     // 目标停下或做完，名字就不该再挂在标题上 —— 标题说的是**正在推进**的那一件。
-    state.apply(RenderEvent::Logged(Event::new(
-        2,
-        SpeakerId::System,
-        EventPayload::GoalCompleted {
-            goal: "修文档索引".to_owned(),
-            summary: "收尾".to_owned(),
-        },
-    )));
+    state.apply(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            2,
+            SpeakerId::System,
+            EventPayload::GoalCompleted {
+                goal: "修文档索引".to_owned(),
+                summary: "收尾".to_owned(),
+            },
+        ),
+    });
     assert_eq!(state.title(), "~/code/heng · 运行中");
 }
 

@@ -572,9 +572,10 @@ impl Tui {
                 match receiver.try_recv() {
                     Ok(event) => state.live_event(event),
                     Err(broadcast::error::TryRecvError::Lagged(dropped)) => {
-                        state.live_event(RenderEvent::diagnostic(wording::renderer_dropped(
-                            dropped,
-                        )));
+                        state.live_event(RenderEvent::diagnostic(
+                            state.front().clone(),
+                            wording::renderer_dropped(dropped),
+                        ));
                     }
                     Err(broadcast::error::TryRecvError::Empty) => break,
                     Err(broadcast::error::TryRecvError::Closed) => {
@@ -1472,7 +1473,7 @@ impl View {
     /// 之后它仍会返回名字，所以停下与完成这两条都要清。重放走同一个 `apply`，于是
     /// `--continue` 的目标名自然重建，不需要第二套路径。
     fn observe_goal(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
+        let RenderEvent::Logged { event, .. } = event else {
             return;
         };
         match &event.payload {
@@ -1486,7 +1487,7 @@ impl View {
 
     /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
     fn observe_running_tool(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
+        let RenderEvent::Logged { event, .. } = event else {
             return;
         };
         match &event.payload {
@@ -1509,7 +1510,7 @@ impl View {
     /// 只认带信封的事件：两条泳道的边界事件全在流上，而渲染层自己造的那几条（增量、诊断、
     /// 通知）没有时刻可言。
     fn observe_timeline(&mut self, event: &RenderEvent) {
-        let RenderEvent::Logged(event) = event else {
+        let RenderEvent::Logged { event, .. } = event else {
             return;
         };
         let at = event.at;
@@ -2339,7 +2340,7 @@ impl View {
         // 身份的一半：流上的事件带信封，所以它的行号就是这一批块的来源（ADR 0021）。
         // 渲染层自己造的那几条（增量 / 诊断 / 通知 / 身份注入）没有信封，于是是 `None`。
         let seq = match &event {
-            RenderEvent::Logged(event) => Some(event.seq),
+            RenderEvent::Logged { event, .. } => Some(event.seq),
             _ => None,
         };
         self.observe_goal(&event);
@@ -2468,6 +2469,10 @@ impl View {
 pub struct TuiState {
     /// 这一场会话的投影。切换会话就是**整块换掉**它（`.scratch/session-tab/spec.md` §6）。
     view: View,
+    /// 当前**前台**是哪一场会话。进程级的一个值：渲染器只有一份，而它面前可以同时活着
+    /// 不止一场会话（`.scratch/session-tab/spec.md` §6）。渲染通道上那些带会话身份的事件
+    /// 按它分派 —— 前台的进投影，别的只更新状态读数。
+    front: crate::events::SessionId,
     /// 会话的工作目录与用户的家目录：终端标题那一段路径的两半
     /// （`.scratch/terminal-title/spec.md` §1）。`home` 由 [`Tui::run`] 读一次传进来，
     /// 于是 [`TuiState::title`] 是纯函数、测试能钉死。
@@ -3880,6 +3885,9 @@ struct TraceSearch {
 struct Replay {
     /// 整条流，按 `seq` 顺序，与组装留下它时一模一样。
     events: Vec<Event>,
+    /// 快照里最大的那个 `seq`，记作 `S`。收尾时只放出 `seq > S` 的实时事件 —— 快照已经
+    /// 持有 `seq <= S` 的那些，再放一遍就是把同一条画第二次（`.scratch/session-tab/spec.md` §6）。
+    max_seq: u64,
     /// 下一个要应用的事件。同时充当进度行显示的 `n`。
     next: usize,
     /// 重放到目前为止产出的来源行数。零意味着历史什么都没画 —— 一条空流，或者一副只有
@@ -3893,8 +3901,11 @@ impl TuiState {
         cwd: std::path::PathBuf,
         home: Option<std::path::PathBuf>,
     ) -> Self {
+        // 前台初值就是这一场：单会话下它恒等于流上每一个事件带的那个身份。
+        let front = crate::events::SessionId::new(facts.session_id.clone());
         Self {
             view: View::new(facts),
+            front,
             cwd,
             home,
             last_title: None,
@@ -3958,6 +3969,11 @@ impl TuiState {
             // 循环开始跑目标时才会把它置上（[`ConsoleRequest::Muted`]）。
             muted: false,
         }
+    }
+
+    /// 当前前台是哪一场会话。
+    pub fn front(&self) -> &crate::events::SessionId {
+        &self.front
     }
 
     /// 这一刻终端标题该是什么（`.scratch/terminal-title/spec.md` §1–§3）。
@@ -4154,7 +4170,7 @@ impl TuiState {
         // 它同时请改动页重取一次（`.scratch/diff-page/spec.md` §4）：判据是那条既有的
         // `Effect`，所以执行者与讨论者的调用**也走得通**（它们落在同一条父流、同一个渲染器
         // 上）。两位分开置，因为两件事的节奏与失败模式不同。
-        if matches!(event, RenderEvent::WorkspaceChanged) {
+        if matches!(event, RenderEvent::WorkspaceChanged { .. }) {
             self.file_scan_wanted = true;
             self.changes_wanted = true;
             return 0;
@@ -4290,15 +4306,20 @@ impl TuiState {
 
     /// 喂进一个**实时**渲染事件：渲染器跑着的时候到达的事件，相对于历史重放正在铺下的那种。
     ///
-    /// 重放进行中的时候，事件按到达顺序压着不发，这样历史与这个会话加的行不会交错。**进流
-    /// 的**事件根本不压：重放的快照就是组装好的那条流，所以重放期间到达的一条进流事件是
-    /// 快照已经持有的 —— 缓冲它会把同一次工具调用或同一条消息画第二遍。只有那些永不进事件
-    /// 流的事件 —— 横幅、诊断、流式增量 —— 才被缓冲到接缝之后（`spec` §3）。
+    /// 两条分派规则：
+    ///
+    /// * **不是前台的会话进不了这一份投影** —— 渲染器只有一份，它画的是当前前台
+    ///   （`.scratch/session-tab/spec.md` §6）。后台会话的事件只用来更新状态读数与标记，
+    ///   那是主循环的事，不是这里。
+    /// * **重放期间一切都压着**，包括进流的事件。快照是组装那一刻的那条流，而重放铺的
+    ///   就是它；重放开始之后流上又落的那些事件才是这里缓冲的东西 —— 收尾时按
+    ///   `seq > S` 挑出来放，于是既不会漏，也不会把同一条画第二遍（票 14）。
     pub fn live_event(&mut self, event: RenderEvent) {
+        if event.session() != &self.front {
+            return;
+        }
         if self.replay.is_some() {
-            if !matches!(event, RenderEvent::Logged(_)) {
-                self.live_buffer.push(event);
-            }
+            self.live_buffer.push(event);
             self.dirty = true;
         } else {
             self.apply(event);
@@ -4329,7 +4350,10 @@ impl TuiState {
             let event = replay.events[replay.next].clone();
             replay.next += 1;
             applied += 1;
-            produced += self.apply(RenderEvent::Logged(event));
+            produced += self.apply(RenderEvent::Logged {
+                session: self.front.clone(),
+                event,
+            });
         }
         replay.lines += produced;
         // `apply` 自己会置这个标志，但进度行的 `n` 是只有这一趟说了话、帧才看得见的状态 ——
@@ -4349,9 +4373,19 @@ impl TuiState {
     /// 而下一次 `--continue` 会插入新的一条、而不是重放旧的那条。
     fn finish_replay(&mut self, replay: Replay) {
         if replay.lines > 0 {
-            self.apply(RenderEvent::notice(wording::history_divider()));
+            self.apply(RenderEvent::notice(
+                self.front.clone(),
+                wording::history_divider(),
+            ));
         }
+        // 补齐不重不漏：重放期间到达的事件全在 `live_buffer` 里，而快照已经持有
+        // `seq <= S` 的那些 —— 只放出快照还没铺过的那一段。
         for event in std::mem::take(&mut self.live_buffer) {
+            if let RenderEvent::Logged { event, .. } = &event {
+                if event.seq <= replay.max_seq {
+                    continue;
+                }
+            }
             self.apply(event);
         }
         // 读的人追上来了：转录就是历史，视口在它的末尾，而一个刚开出来的会话本来就该在那里。
@@ -6512,13 +6546,20 @@ impl TuiState {
             // 重新打开的会话组装时用的那段历史。空流不是一次重放：进入那个状态会为一次什么
             // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
             ConsoleRequest::Replay { events } => {
+                // 一次在飞的旧重建先收尾：分隔行、排空它的缓冲、视口回末尾。直接覆盖它
+                // 会把旧批次攒下的实时事件泄进下一次重建（票 14）。
+                if let Some(old) = self.replay.take() {
+                    self.finish_replay(old);
+                }
                 if !events.is_empty() {
                     // 重放占着指针（`mouse()` 在重放期间整个早退），所以一次进行中的拖选到
                     // 这里必须作废：它的区域编号指的还是重放前那一帧的屏幕文本
                     // （`.scratch/tui-feedback/spec.md` §5）。
                     self.drag = None;
+                    let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
                     self.replay = Some(Replay {
                         events,
+                        max_seq,
                         next: 0,
                         lines: 0,
                     });
@@ -6555,7 +6596,10 @@ impl TuiState {
             // 丢掉的渲染器增量损害的是输出，从不是正确性，所以它像任何别的实时事件一样被
             // 叙述出来 —— 并且和横幅同一个理由，在重放期间被缓冲。
             Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                self.live_event(RenderEvent::diagnostic(wording::renderer_dropped(dropped)));
+                self.live_event(RenderEvent::diagnostic(
+                    self.front.clone(),
+                    wording::renderer_dropped(dropped),
+                ));
                 false
             }
             Err(broadcast::error::RecvError::Closed) => true,
@@ -10751,13 +10795,13 @@ fn paint_block(
 /// 它产出的行只有那条活尾巴与还开着的思考行，而思考行定稿时用的正是这里给的那一刻。
 fn event_at(event: &RenderEvent) -> DateTime<Utc> {
     match event {
-        RenderEvent::Logged(event) => event.at,
+        RenderEvent::Logged { event, .. } => event.at,
         RenderEvent::Diagnostic { at, .. } | RenderEvent::Notice { at, .. } => *at,
         RenderEvent::Delta { .. } => Utc::now(),
         // 系统提示词不属于任何一刻：它是**当前**的拼法，不是"那时"发生的事。
         RenderEvent::Identity { .. } => Utc::now(),
         // 它到不了这里：`apply` 在那之前就把它接走了。给一个当下的时刻只是为了 match 完整。
-        RenderEvent::WorkspaceChanged => Utc::now(),
+        RenderEvent::WorkspaceChanged { .. } => Utc::now(),
     }
 }
 
@@ -14522,6 +14566,7 @@ mod tests {
         let mut transcript = crate::render::transcript::Transcript::new();
 
         let blocks = transcript.push(RenderEvent::identity(
+            s(),
             "你是衡（heng），一套自用的 coding agent harness…",
         ));
 
@@ -14821,7 +14866,7 @@ mod tests {
         let mut page = state();
         page.main_tab = MainTab::Trace;
         // 一条注入既是开场段的一块（于是那一页顶上多一行小标题），又是一条点得开的记录。
-        page.apply(RenderEvent::identity("你是衡（heng）"));
+        page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         let header = page
             .view
             .trace_block_ids
@@ -15078,12 +15123,14 @@ mod tests {
     fn a_thought_keeps_its_identity_when_it_settles() {
         let mut trace_page = state();
         trace_page.apply(RenderEvent::Delta {
+            session: s(),
             speaker: crate::events::SpeakerId::Debater("kimi".into()),
             kind: DeltaKind::Reasoning,
             text: "想一下".to_owned(),
         });
         let open: Vec<Option<BlockId>> = trace_page.view.trace_block_ids.iter().copied().collect();
         trace_page.apply(RenderEvent::Delta {
+            session: s(),
             speaker: crate::events::SpeakerId::Debater("kimi".into()),
             kind: DeltaKind::Reasoning,
             text: "再想".to_owned(),
@@ -15109,12 +15156,21 @@ mod tests {
     }
 
     /// 一个状态上跑起来的最短路径：把一条流上事件包成渲染事件（信封的行号由调用方给）。
+    /// 测试里那个会话身份：与 `state()` 造出来的 `SessionFacts::session_id` 同一个串，
+    /// 于是 `live_event` 的前台判据认得它（票 14）。
+    fn s() -> crate::events::SessionId {
+        crate::events::SessionId::new("s-1")
+    }
+
     fn logged(seq: u64, payload: EventPayload) -> RenderEvent {
-        RenderEvent::Logged(crate::events::Event::new(
-            seq,
-            crate::events::SpeakerId::Debater("kimi".into()),
-            payload,
-        ))
+        RenderEvent::Logged {
+            session: s(),
+            event: crate::events::Event::new(
+                seq,
+                crate::events::SpeakerId::Debater("kimi".into()),
+                payload,
+            ),
+        }
     }
 
     // --- 折叠三档（票 21） ---------------------------------------------------
@@ -16194,7 +16250,7 @@ mod tests {
         let mut page = state();
         page.main_tab = MainTab::Trace;
         let kimi = crate::events::SpeakerId::Debater("kimi".into());
-        page.apply(RenderEvent::identity("你是衡（heng）"));
+        page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         page.apply(logged(
             1,
             EventPayload::MessageCompleted {
@@ -16226,7 +16282,7 @@ mod tests {
                 reason: StopReason::Completed,
             },
         ));
-        page.apply(RenderEvent::notice("回合收尾之后的一句"));
+        page.apply(RenderEvent::notice(s(), "回合收尾之后的一句"));
         page
     }
 
@@ -16480,6 +16536,7 @@ mod tests {
     fn the_index_covers_the_whole_session_and_waits_for_a_delta_to_settle() {
         let mut page = state();
         page.apply(RenderEvent::Delta {
+            session: s(),
             speaker: crate::events::SpeakerId::Debater("kimi".into()),
             kind: DeltaKind::Reasoning,
             text: "这段推理还在流".to_owned(),
@@ -16489,6 +16546,7 @@ mod tests {
             "开着的那一段还没定稿，不进索引"
         );
         page.apply(RenderEvent::Delta {
+            session: s(),
             speaker: crate::events::SpeakerId::Debater("kimi".into()),
             kind: DeltaKind::Text,
             text: "答案".to_owned(),
@@ -16506,7 +16564,7 @@ mod tests {
         // 一整场会话比窗格的上限更长：窗格裁到 `CAP`，索引一条不少。
         let mut long = state();
         for index in 0..pane::CAP + 20 {
-            long.apply(RenderEvent::notice(format!("第 {index} 句话")));
+            long.apply(RenderEvent::notice(s(), format!("第 {index} 句话")));
         }
         assert_eq!(long.view.trace.sources(), pane::CAP, "窗格裁到上限");
         assert_eq!(long.view.trace_index.entries.len(), pane::CAP + 20);
@@ -16708,7 +16766,7 @@ mod tests {
     fn the_hits_walk_in_ledger_order_and_take_the_selection_with_them() {
         let mut page = a_page_with_two_levels();
         a_tool_call(&mut page, 9, "c-3", "read");
-        page.apply(RenderEvent::notice("再 read 一次"));
+        page.apply(RenderEvent::notice(s(), "再 read 一次"));
         page.key(Key::Char('/'));
         for ch in "read".chars() {
             page.key(Key::Char(ch));

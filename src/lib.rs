@@ -254,8 +254,8 @@ impl OpenedSession {
             .join("outputs");
         // 通道在这里创建，它的消费端则注入到唯一选中的那个渲染器：一个进程一个
         // 渲染器，永远没有并发的订阅者（spec §19）。
-        let (render, receiver) = render::channel();
-        let render_task = renderer.spawn(receiver);
+        let (render, receiver) = render::channel(session_id.clone());
+        let render_task = renderer.spawn(receiver, session_id.clone());
         // 全新还是继续，由日志是否存在决定，而那是调用方的决定：它交过来的是它刚在新
         // session id 下分配的一条路径，或是更早一次运行留下的那份。这样库就不用去读环境
         // 旗标（spec §1），同时 `--continue` 仍然只有一条代码路径（spec §11）。

@@ -38,7 +38,7 @@ async fn a_burst_of_decoded_deltas_does_not_starve_the_renderer() {
     let bytes = futures::stream::once(async move { Ok::<_, reqwest::Error>(body) });
     let mut stream = Box::pin(sse_stream(bytes, caps));
 
-    let (handle, mut receiver) = render::channel();
+    let (handle, mut receiver) = render::channel(heng::events::SessionId::new("01J8ZQ4K7M"));
     let consumer = tokio::spawn(async move {
         let mut received = 0usize;
         let mut dropped = 0u64;

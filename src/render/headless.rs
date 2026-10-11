@@ -92,8 +92,8 @@ impl Render for Headless {
                     let _ = sinks.stderr_diagnostic.flush();
                 }
                 // 机器模式没有文件索引要养：这条静默信号在这里什么都不是。
-                Ok(RenderEvent::WorkspaceChanged) => {}
-                Ok(RenderEvent::Logged(event)) => {
+                Ok(RenderEvent::WorkspaceChanged { .. }) => {}
+                Ok(RenderEvent::Logged { event, .. }) => {
                     if in_reasoning {
                         let _ = sinks.stderr_diagnostic.write_all(b"\n");
                         in_reasoning = false;

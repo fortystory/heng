@@ -944,9 +944,11 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
 
     let mut state = state();
     state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
         "heng：会话 abc · 模型 m · 模式 询问 · /tmp/x".to_owned(),
     ));
     state.apply(RenderEvent::Delta {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
         speaker: SpeakerId::Debater("kimi".into()),
         kind: DeltaKind::Text,
         text: "正在读文件".to_owned(),
@@ -1232,6 +1234,7 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
         // 让正文尾巴非空：否则对话视图末尾那条「正在思考…」也在走它的点号（2026-10-05 的
         // 另一条时钟动画），会把这条断言的靶子弄糊。
         state.apply(RenderEvent::Delta {
+            session: heng::events::SessionId::new("01J8ZQ4K7M"),
             speaker: heng::events::SpeakerId::Debater("kimi".into()),
             kind: heng::render::DeltaKind::Text,
             text: "正在读文件".to_owned(),
@@ -1790,7 +1793,10 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     use heng::render::wording;
 
     let mut state = state();
-    state.live_event(RenderEvent::notice("换页之前的一句话".to_owned()));
+    state.live_event(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "换页之前的一句话".to_owned(),
+    ));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("token"), "在显示调用量那一页：{text}");
 
@@ -2425,7 +2431,9 @@ fn a_workspace_change_asks_for_a_rescan_and_never_draws_a_line() {
 
     // 连着三次改动：一个位，因此是一次遍历。屏幕上一个字都不变。
     for _ in 0..3 {
-        state.live_event(RenderEvent::WorkspaceChanged);
+        state.live_event(RenderEvent::WorkspaceChanged {
+            session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        });
     }
     let after = screen(120, 24, &mut state).join("\n");
     assert_eq!(before, after, "这条信号不画任何东西");
@@ -2433,7 +2441,9 @@ fn a_workspace_change_asks_for_a_rescan_and_never_draws_a_line() {
     assert!(!state.take_file_scan(), "一次遍历还在飞，不并发");
 
     // 遍历在飞的时候又改了一次：位留着，结果落地之后的下一轮补发。
-    state.live_event(RenderEvent::WorkspaceChanged);
+    state.live_event(RenderEvent::WorkspaceChanged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+    });
     assert!(!state.take_file_scan(), "飞着的那次不被抢");
     state.files_loaded(vec!["a.rs".into(), "b.rs".into()]);
     assert!(state.take_file_scan(), "补发的那一次仍然发得出去");
@@ -2645,12 +2655,15 @@ fn at_event(
     at: chrono::DateTime<chrono::Utc>,
     payload: heng::events::EventPayload,
 ) -> heng::render::RenderEvent {
-    heng::render::RenderEvent::Logged(heng::events::Event {
-        seq,
-        at,
-        speaker_id: heng::events::SpeakerId::System,
-        payload,
-    })
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: heng::events::Event {
+            seq,
+            at,
+            speaker_id: heng::events::SpeakerId::System,
+            payload,
+        },
+    }
 }
 
 /// 轨迹页里一条块行去掉行首那个时间戳之后的样子 —— 它是定宽的一列，所以按列切。
@@ -2666,30 +2679,36 @@ fn without_stamp(row: &str) -> &str {
 /// 一条来自 **user** 的 `MessageCompleted`。
 fn user_message(seq: u64, text: &str) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, Role, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::User,
-        EventPayload::MessageCompleted {
-            role: Role::User,
-            text: text.to_owned(),
-            reasoning: None,
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::User,
+            EventPayload::MessageCompleted {
+                role: Role::User,
+                text: text.to_owned(),
+                reasoning: None,
 
-            first_token_ms: None,
-        },
-    ))
+                first_token_ms: None,
+            },
+        ),
+    }
 }
 
 /// 一条 `TurnStarted`。
 fn turn_started(seq: u64) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::TurnStarted {
-            agent: SpeakerId::Debater("kimi".into()),
-            iteration: 1,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::TurnStarted {
+                agent: SpeakerId::Debater("kimi".into()),
+                iteration: 1,
+            },
+        ),
+    }
 }
 
 /// 一整个回合：用户的问题、回合的开始、一条答复与回合的
@@ -2952,11 +2971,14 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
         .into_iter()
         .enumerate()
         {
-            state.apply(heng::render::RenderEvent::Logged(Event::new(
-                2 + u64::from(round) * 4 + offset as u64,
-                kimi.clone(),
-                payload,
-            )));
+            state.apply(heng::render::RenderEvent::Logged {
+                session: heng::events::SessionId::new("01J8ZQ4K7M"),
+                event: Event::new(
+                    2 + u64::from(round) * 4 + offset as u64,
+                    kimi.clone(),
+                    payload,
+                ),
+            });
         }
     }
 
@@ -3003,17 +3025,23 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
         .into_iter()
         .enumerate()
         {
-            later.apply(heng::render::RenderEvent::Logged(Event::new(
-                2 + u64::from(round) * 3 + offset as u64,
-                kimi.clone(),
-                payload,
-            )));
+            later.apply(heng::render::RenderEvent::Logged {
+                session: heng::events::SessionId::new("01J8ZQ4K7M"),
+                event: Event::new(
+                    2 + u64::from(round) * 3 + offset as u64,
+                    kimi.clone(),
+                    payload,
+                ),
+            });
         }
     }
     // 垫料，让转录比窗格高，跳转才有地方
     // 落：提示既不是用户消息也不是边界，所以单元照旧。
     for index in 0..40 {
-        later.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
+        later.apply(heng::render::RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     assert_eq!(turn_rail_shape(&mut later), "┊┊┃");
     let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
@@ -3036,7 +3064,10 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
 
     let mut state = state();
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
 
     // 静止时视口跟着最新的那一行。
@@ -3128,10 +3159,10 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
     // 按源代码行算，所以同一批历史在任何终端宽度下都留得住（spec §3）。
     let mut state = state();
     for index in 0..20_001 {
-        state.apply(RenderEvent::notice(format!(
-            "第 {index} 行 {}",
-            "x".repeat(200)
-        )));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行 {}", "x".repeat(200)),
+        ));
     }
     // 先来一帧：一次翻页是按读者能看见的行来量的。
     let _ = screen(120, 24, &mut state);
@@ -3173,7 +3204,10 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
 
     let mut state = state();
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let _ = screen(120, 24, &mut state);
 
@@ -3195,7 +3229,10 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
 
     // 读者不在的时候到了一行，而计数就是到的那一行 —— 不是
     // 恰好落在视口下面的全部东西。
-    state.apply(RenderEvent::notice("新的一行".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "新的一行".to_owned(),
+    ));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("↓ 1 行新内容 · 点此到底"), "到了一行：{text}");
 
@@ -3256,7 +3293,10 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
     // 转录 16 行时 40 条提示算两页，那会把测试的前提
     // 钉死在外壳自己的东西上。
     for index in 0..80 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
 
     // 跟着底部：窄一些的终端照样跟着底部。
@@ -3295,7 +3335,10 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     const TEXT_X: u16 = 41;
     const SCROLLBAR_X: u16 = 118;
     let mut state = state();
-    state.apply(RenderEvent::notice("x".repeat(78)));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "x".repeat(78),
+    ));
     let frame = buffer(120, 24, &mut state);
     let first = TRANSCRIPT_TOP as u16;
     assert_eq!(
@@ -3315,7 +3358,10 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     );
 
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let rows = screen(120, 24, &mut state);
     let transcript = transcript_rows(&rows) as u16;
@@ -3401,31 +3447,37 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
 /// 一条 `UsageRecorded`，按循环会记下来的样子。
 fn usage(seq: u64, input: u64, output: u64, cached: u64, miss: u64) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, Usage};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::UsageRecorded {
-            usage: Usage {
-                input_tokens: input,
-                output_tokens: output,
-                cached_tokens: cached,
-                miss_tokens: miss,
-                reasoning_tokens: None,
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::UsageRecorded {
+                usage: Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cached_tokens: cached,
+                    miss_tokens: miss,
+                    reasoning_tokens: None,
+                },
             },
-        },
-    ))
+        ),
+    }
 }
 
 /// 一条 `TurnEnded`。
 fn turn_ended(seq: u64) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, StopReason};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::TurnEnded {
-            reason: StopReason::Completed,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+        ),
+    }
 }
 
 /// 左栏第一页的那一行：页签条下横线下面那一行。
@@ -3888,7 +3940,10 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
 
     let mut state = state();
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let (ask, _rx) = ask_permission();
     state.request(ask);
@@ -4203,26 +4258,32 @@ fn apply_todo(
     args: serde_json::Value,
 ) {
     use heng::events::{Event, EventPayload, ToolCallId};
-    state.apply(RenderEvent::Logged(Event::new(
-        1,
-        speaker.clone(),
-        EventPayload::ToolCallStarted {
-            tool_call_id: ToolCallId::new(id),
-            tool_name: heng::tools::TODO_TOOL.to_owned(),
-            args,
-        },
-    )));
-    state.apply(RenderEvent::Logged(Event::new(
-        2,
-        speaker,
-        EventPayload::ToolCallCompleted {
-            tool_call_id: ToolCallId::new(id),
-            ok: true,
-            output: Some("todo: ok".to_owned()),
-            error: None,
-            duration_ms: 1,
-        },
-    )));
+    state.apply(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            1,
+            speaker.clone(),
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new(id),
+                tool_name: heng::tools::TODO_TOOL.to_owned(),
+                args,
+            },
+        ),
+    });
+    state.apply(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            2,
+            speaker,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new(id),
+                ok: true,
+                output: Some("todo: ok".to_owned()),
+                error: None,
+                duration_ms: 1,
+            },
+        ),
+    });
 }
 
 /// 页签条自己那一行，从帧上读出来。终端太窄
@@ -4613,7 +4674,10 @@ fn clicking_the_todo_page_opens_the_whole_list() {
 
     // 把转录填到左栏页区里去：对话视图里的一条消息正是可点开的那种行。
     for index in 0..12 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     state.apply(message(1, "被点开的消息", None));
 
@@ -5476,7 +5540,10 @@ fn the_menu_keeps_its_dashed_edges_over_text_that_is_not_ascii() {
     let mut state = state();
     install_catalog(&mut state);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("对话第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("对话第 {index} 行"),
+        ));
     }
     state.key(Key::Char('/'));
     let _ = screen(120, 24, &mut state);
@@ -5829,7 +5896,10 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
 
     let mut state = state();
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let _ = screen(120, 24, &mut state);
     state.key(Key::PageUp);
@@ -6096,23 +6166,27 @@ fn a_hidden_cursor_still_marks_the_input_area_not_the_status_row() {
 /// 一条给讨论者的 `MessageCompleted`。
 fn message(seq: u64, text: &str, reasoning: Option<&str>) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, Role, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::MessageCompleted {
-            role: Role::Assistant,
-            text: text.to_owned(),
-            reasoning: reasoning.map(str::to_owned),
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                text: text.to_owned(),
+                reasoning: reasoning.map(str::to_owned),
 
-            first_token_ms: None,
-        },
-    ))
+                first_token_ms: None,
+            },
+        ),
+    }
 }
 
 /// 一条来自讨论者的推理增量。
 fn reasoning_delta(text: &str) -> heng::render::RenderEvent {
     use heng::events::SpeakerId;
     heng::render::RenderEvent::Delta {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
         speaker: SpeakerId::Debater("kimi".into()),
         kind: heng::render::DeltaKind::Reasoning,
         text: text.to_owned(),
@@ -6123,6 +6197,7 @@ fn reasoning_delta(text: &str) -> heng::render::RenderEvent {
 fn text_delta(text: &str) -> heng::render::RenderEvent {
     use heng::events::SpeakerId;
     heng::render::RenderEvent::Delta {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
         speaker: SpeakerId::Debater("kimi".into()),
         kind: heng::render::DeltaKind::Text,
         text: text.to_owned(),
@@ -6137,44 +6212,53 @@ fn tool_started(
     args: serde_json::Value,
 ) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::ToolCallStarted {
-            tool_call_id: ToolCallId::new(id),
-            tool_name: tool.to_owned(),
-            args,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new(id),
+                tool_name: tool.to_owned(),
+                args,
+            },
+        ),
+    }
 }
 
 /// 一条针对某次调用的 `PermissionAsked`。
 fn permission_asked(seq: u64, id: &str) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::PermissionAsked {
-            request_id: "r-1".to_owned(),
-            tool_call_id: ToolCallId::new(id),
-            request: serde_json::json!({"tool_name": "bash", "args": {"command": "ls"}}),
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::PermissionAsked {
+                request_id: "r-1".to_owned(),
+                tool_call_id: ToolCallId::new(id),
+                request: serde_json::json!({"tool_name": "bash", "args": {"command": "ls"}}),
+            },
+        ),
+    }
 }
 
 /// 一条 `PermissionDecided`：用户说了是。
 fn permission_decided(seq: u64) -> heng::render::RenderEvent {
     use heng::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::PermissionDecided {
-            request_id: "r-1".to_owned(),
-            decision: Decision::Allow,
-            source: DecisionSource::User,
-            reason: None,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::PermissionDecided {
+                request_id: "r-1".to_owned(),
+                decision: Decision::Allow,
+                source: DecisionSource::User,
+                reason: None,
+            },
+        ),
+    }
 }
 
 /// 一条针对先前开始的调用发来的 `ToolCallCompleted`。
@@ -6199,17 +6283,20 @@ fn tool_completed_after(
     duration_ms: u64,
 ) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::ToolCallCompleted {
-            tool_call_id: ToolCallId::new(id),
-            ok,
-            output: output.map(str::to_owned),
-            error: error.map(str::to_owned),
-            duration_ms,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new(id),
+                ok,
+                output: output.map(str::to_owned),
+                error: error.map(str::to_owned),
+                duration_ms,
+            },
+        ),
+    }
 }
 
 /// 一次左键**按下**。
@@ -7686,7 +7773,10 @@ fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
         ],
     });
     for index in 0..40 {
-        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(heng::render::RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let _ = screen(120, 24, &mut state);
     let before = first_notice(&screen(120, 24, &mut state));
@@ -7746,7 +7836,10 @@ fn the_detail_overlay_freezes_the_transcript() {
     // 输出不许把窗格往下拽（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(heng::render::RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     // 打开方是**轨迹页**（今天唯一有入口的一页）：这条测试说的正是覆盖层把它背后的那一页冻住
     // （票 13 把冻结收窄到打开方之后仍然成立）。
@@ -7761,7 +7854,10 @@ fn the_detail_overlay_freezes_the_transcript() {
 
     // 覆盖层开着的时候有新输出到来。
     for index in 40..60 {
-        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(heng::render::RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     let during = screen(120, 24, &mut state);
     let after = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&during));
@@ -8238,7 +8334,10 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
     // （2026-09-23）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
+        state.apply(heng::render::RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 行"),
+        ));
     }
     // 先来一帧，然后是中间夹着一帧的实时思考段。左栏先切到轨迹页：思考行住在那里
     // （票 10），而转录那一半的窗口不受它影响。
@@ -8809,7 +8908,10 @@ fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
 fn the_trace_page_carries_the_transcript_and_sits_at_the_bottom() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let page = trace_page(&mut state, 120, 24);
@@ -8829,7 +8931,10 @@ fn the_trace_page_carries_the_transcript_and_sits_at_the_bottom() {
 fn the_wheel_scrolls_the_page_on_screen_and_leaves_the_other_alone() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let page_before = trace_page(&mut state, 120, 24);
@@ -8883,7 +8988,10 @@ fn the_wheel_scrolls_the_page_on_screen_and_leaves_the_other_alone() {
 fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     state.mouse(wheel_at(10, 12, true));
@@ -8907,7 +9015,10 @@ fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
 fn the_trace_page_keeps_its_place_across_a_tab_switch() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     state.mouse(wheel_at(10, 12, true));
@@ -9007,7 +9118,10 @@ fn the_trace_page_keeps_the_brackets_around_the_prefix() {
 fn a_width_change_replays_the_trace_page_too() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let _ = screen(120, 24, &mut state);
@@ -9037,14 +9151,17 @@ fn a_width_change_replays_the_trace_page_too() {
 /// 一条上下文注入。
 fn injected(seq: u64, content: &str) -> heng::render::RenderEvent {
     use heng::events::{ContextSource, Event, EventPayload, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::System,
-        EventPayload::ContextInjected {
-            source: ContextSource::McpCatalog,
-            content: content.to_owned(),
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::System,
+            EventPayload::ContextInjected {
+                source: ContextSource::McpCatalog,
+                content: content.to_owned(),
+            },
+        ),
+    }
 }
 
 /// 主列只剩对话：用户文本、assistant 正文、保留清单；过程行全在轨迹页
@@ -9063,7 +9180,10 @@ fn the_split_keeps_the_process_rows_out_of_the_conversation() {
     state.apply(reasoning_delta("一段推理。"));
     state.apply(message(4, "助手的回答。", None));
     state.apply(injected(5, "注入的正文"));
-    state.apply(RenderEvent::notice("命令回执".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "命令回执".to_owned(),
+    ));
 
     let conversation = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(conversation.contains("我问的问题"), "{conversation}");
@@ -9317,6 +9437,7 @@ fn a_session_with_process_rows(state: &mut TuiState) {
     state.apply(turn_started(6));
     state.apply(turn_ended(7));
     state.apply(RenderEvent::diagnostic(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
         "provider 流结束：正常停止".to_owned(),
     ));
 }
@@ -9379,7 +9500,10 @@ fn a_narrow_terminal_leaves_the_process_rows_out_of_the_conversation() {
 fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let _ = screen(120, 24, &mut state);
@@ -9543,8 +9667,14 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
     let mut state = state_with_roster(&["kimi"]);
     // 主列内容 77 列里，行首 9 列归时间戳（`.scratch/trace-in-main/spec.md` §5），所以正文
     // 拿到 68 列。
-    state.apply(RenderEvent::notice("x".repeat(68)));
-    state.apply(RenderEvent::notice("y".repeat(69)));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "x".repeat(68),
+    ));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "y".repeat(69),
+    ));
     open_trace_tab(&mut state, 120, 24);
     let page = trace_page(&mut state, 120, 24);
     assert_eq!(
@@ -9560,7 +9690,10 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
 
     // 有东西可读时主列右缘那一列（x = 118）出现滑块。
     for index in 0..20 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     let frame = buffer(120, 24, &mut state);
     assert!(
@@ -9570,8 +9703,14 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
 
     // 窄档（80 列）也一样：左栏让出 29 列，主列内容因此 51 列、正文 49 列，滚动条在 x = 78。
     let mut narrow = state_with_roster(&["kimi"]);
-    narrow.apply(RenderEvent::notice("z".repeat(40)));
-    narrow.apply(RenderEvent::notice("w".repeat(41)));
+    narrow.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "z".repeat(40),
+    ));
+    narrow.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "w".repeat(41),
+    ));
     open_trace_tab(&mut narrow, 80, 24);
     let page = trace_page(&mut narrow, 80, 24);
     assert_eq!(
@@ -9585,7 +9724,10 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
         "41 列一句话折成两行：{page:#?}"
     );
     for index in 0..20 {
-        narrow.apply(RenderEvent::notice(format!("第 {index} 句")));
+        narrow.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句"),
+        ));
     }
     let frame = buffer(80, 24, &mut narrow);
     assert!(
@@ -9717,7 +9859,10 @@ fn the_turn_rail_is_only_on_the_conversation_page() {
 fn the_page_keys_follow_the_page_on_screen() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let before = trace_page(&mut state, 120, 24);
@@ -9834,6 +9979,7 @@ fn a_wrapped_block_carries_its_stamp_on_the_first_line_only() {
     let at = fixed_at(4, 16, 53);
     let mut state = state_with_roster(&["kimi"]);
     state.apply(RenderEvent::Notice {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
         at,
         message: "字".repeat(80),
     });
@@ -9978,11 +10124,17 @@ fn main_row_of(state: &mut TuiState, needle: &str) -> u16 {
 fn closing_a_trace_detail_returns_to_where_it_was_opened() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..10 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     state.apply(message(11, "被点开的消息", None));
     for index in 0..10 {
-        state.apply(RenderEvent::notice(format!("后 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("后 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
     let _ = screen(120, 24, &mut state);
@@ -10019,7 +10171,10 @@ fn closing_a_trace_detail_returns_to_where_it_was_opened() {
 fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hidden() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     let _ = screen(120, 24, &mut state);
     let conversation_before = conversation_rows(&mut state, 120, 24);
@@ -10044,6 +10199,7 @@ fn the_run_log_lines_stay_out_of_the_conversation() {
     state.apply(permission_decided(5));
     state.apply(turn_ended(6));
     state.apply(RenderEvent::diagnostic(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
         "provider 流结束：正常停止".to_owned(),
     ));
 
@@ -10399,14 +10555,17 @@ fn the_receipt_of_an_open_lands_in_the_hint_row() {
 /// 一条 `TurnStarted`，迭代号由调用方给 —— 工具循环里的第二次调用就是 `iteration: 2`。
 fn turn_started_at(seq: u64, iteration: u32) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId};
-    heng::render::RenderEvent::Logged(Event::new(
-        seq,
-        SpeakerId::Debater("kimi".into()),
-        EventPayload::TurnStarted {
-            agent: SpeakerId::Debater("kimi".into()),
-            iteration,
-        },
-    ))
+    heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::TurnStarted {
+                agent: SpeakerId::Debater("kimi".into()),
+                iteration,
+            },
+        ),
+    }
 }
 
 #[test]
@@ -11161,17 +11320,20 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
     let _ = screen(120, 24, &mut state);
 
     // 换名之后新发言者的第一行拿到**另一个**颜色，而转录里已经画过的行不改名。
-    state.apply(RenderEvent::Logged(heng::events::Event::new(
-        9,
-        heng::events::SpeakerId::Debater("minimax-cn".into()),
-        heng::events::EventPayload::MessageCompleted {
-            role: heng::events::Role::Assistant,
-            text: "minimax 答的".to_owned(),
-            reasoning: None,
+    state.apply(RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: heng::events::Event::new(
+            9,
+            heng::events::SpeakerId::Debater("minimax-cn".into()),
+            heng::events::EventPayload::MessageCompleted {
+                role: heng::events::Role::Assistant,
+                text: "minimax 答的".to_owned(),
+                reasoning: None,
 
-            first_token_ms: None,
-        },
-    )));
+                first_token_ms: None,
+            },
+        ),
+    });
     let rows = screen(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
     let colour_at = |frame: &ratatui::buffer::Buffer, needle: &str| {
@@ -11927,14 +12089,17 @@ fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
     // 注入从今天那一面长出第二面来：标签条上写着「注入 ┆ 概述」，而**默认面仍是注入** ——
     // 打开就看到今天那份正文（来源标题 + 内容），面名只是第一次写出来（票 14 第 4 条）。
     let mut state = state_with_roster(&["kimi"]);
-    state.apply(heng::render::RenderEvent::Logged(heng::events::Event::new(
-        1,
-        heng::events::SpeakerId::User,
-        heng::events::EventPayload::ContextInjected {
-            source: heng::events::ContextSource::AgentsMd,
-            content: "注入的正文一段".to_owned(),
-        },
-    )));
+    state.apply(heng::render::RenderEvent::Logged {
+        session: heng::events::SessionId::new("01J8ZQ4K7M"),
+        event: heng::events::Event::new(
+            1,
+            heng::events::SpeakerId::User,
+            heng::events::EventPayload::ContextInjected {
+                source: heng::events::ContextSource::AgentsMd,
+                content: "注入的正文一段".to_owned(),
+            },
+        ),
+    });
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "上下文注入");
 
@@ -12525,7 +12690,10 @@ fn clicking_a_blank_spot_in_the_ledger_clears_the_selection() {
 
     // 一条通知行：它既没有详情入口、也不是折叠把手，所以这一下就是「点空白」
     // （票 21 之后组头那一行不再是空白 —— 它成了折 / 展的把手）。
-    state.apply(RenderEvent::notice("命令回执".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "命令回执".to_owned(),
+    ));
     click_text(&mut state, 120, 40, "命令回执");
     assert!(
         selected_rows_text(&mut state, 120, 40).is_empty(),
@@ -12869,7 +13037,10 @@ fn a_rebuild_after_a_width_change_keeps_the_selected_block() {
 fn paging_wheeling_and_new_blocks_leave_the_selection_alone() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
 
@@ -12898,7 +13069,10 @@ fn paging_wheeling_and_new_blocks_leave_the_selection_alone() {
 
     // 新块到达：视口照跟随走，而选中留在原地。
     state.key(Key::Char('G'));
-    state.apply(RenderEvent::notice("最新那一句".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "最新那一句".to_owned(),
+    ));
     let page = trace_page(&mut state, 120, 24);
     assert!(
         page.iter().any(|row| row.contains("最新那一句")),
@@ -12917,7 +13091,10 @@ fn paging_wheeling_and_new_blocks_leave_the_selection_alone() {
 fn g_and_shift_g_are_the_two_ends_of_the_ledger() {
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
     }
     open_trace_tab(&mut state, 120, 24);
 
@@ -12942,7 +13119,10 @@ fn g_and_shift_g_are_the_two_ends_of_the_ledger() {
         page.iter().any(|row| row.contains("第 39 句话")),
         "`G` 到最新：{page:#?}"
     );
-    state.apply(RenderEvent::notice("又一句".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "又一句".to_owned(),
+    ));
     let page = trace_page(&mut state, 120, 24);
     assert!(
         page.iter().any(|row| row.contains("又一句")),
@@ -12978,7 +13158,10 @@ fn a_two_level_ledger(state: &mut TuiState) {
     ));
     state.apply(tool_completed(7, "call-2", true, Some("out"), None));
     state.apply(turn_ended(8));
-    state.apply(RenderEvent::notice("回合收尾之后的一句".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "回合收尾之后的一句".to_owned(),
+    ));
 }
 
 /// `[` 落到**最近的那一级**组头、`]` 进那一组的第一条成员（票 19 第 1、2 条、验收第 1–3 条）。
@@ -13092,7 +13275,10 @@ fn an_unowned_row_answers_neither_bracket() {
     ));
     state.apply(tool_completed(3, "call-1", true, Some("out"), None));
     state.apply(turn_ended(4));
-    state.apply(RenderEvent::notice("收尾之后的一句".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "收尾之后的一句".to_owned(),
+    ));
     open_trace_tab(&mut state, 120, 40);
 
     assert!(walk_down_to(&mut state, 120, 40, "收尾之后的一句"));
@@ -13837,7 +14023,10 @@ fn the_preamble_collapses_to_one_line_and_stays_that_way() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(injected(1, "第一条注入的正文"));
     state.apply(injected(2, "第二条注入的正文"));
-    state.apply(RenderEvent::notice("命令回执".to_owned()));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "命令回执".to_owned(),
+    ));
     open_trace_tab(&mut state, 120, 40);
 
     let page = trace_page(&mut state, 120, 40).join("\n");
@@ -14478,7 +14667,10 @@ fn the_selected_block_leaves_a_mark_on_the_tool_lane() {
 fn the_band_gives_up_its_rows_before_the_ledger_does() {
     // 40×10 是屏幕的下界：那里横带整条让位，账本仍在（票 22 第 10 条）。
     let mut state = state_with_roster(&["kimi"]);
-    state.apply(RenderEvent::notice("只此一行"));
+    state.apply(RenderEvent::notice(
+        heng::events::SessionId::new("01J8ZQ4K7M"),
+        "只此一行",
+    ));
     let rows = screen(40, 10, &mut state);
     assert!(
         !rows
