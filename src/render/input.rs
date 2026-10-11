@@ -158,6 +158,13 @@ pub enum ConsoleRequest {
         /// 新的发言者名册（spec §4）：名字是 provider profile 的名字，换厂商就换名。
         speakers: Vec<String>,
     },
+    /// 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
+    ///
+    /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事（它会阻塞 TUI），
+    /// 而且渲染层不读环境。
+    Sessions {
+        listing: crate::session::listing::SessionListing,
+    },
     /// 开头的 `/` 能变成哪些名字。
     ///
     /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
@@ -186,7 +193,7 @@ pub enum ConsoleRequest {
 }
 
 /// 一个手势，由前端按自己的节奏推上来。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrontEndEvent {
     /// 用户打断了这次运行（Esc / Ctrl-C）。
     Cancel,
@@ -196,6 +203,13 @@ pub enum FrontEndEvent {
     CycleMode,
     /// 用户要求离开。
     Quit,
+    /// 会话页里改完名（票 17 的单键入口 `r`）：把新标题交给循环去落流。
+    ///
+    /// 渲染层不写事件流 —— 它连会话目录都不知道。所以它只上报「有人给这一场起了这个名字」。
+    SessionTitled {
+        id: crate::events::SessionId,
+        title: String,
+    },
     /// 点状态行那两格，或按 `ctrl-t`：打开模型/档位的选择器（spec §7）。
     ///
     /// **只带载荷，不带实现**：前端不知道现在忙不忙（渲染器不知道什么在跑），所以它只是说
@@ -230,6 +244,11 @@ impl ConsoleHandle {
     ///
     /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
     /// 是会话的技能，所以菜单读起来的顺序就是循环会尝试它们的顺序。
+    /// 推一份会话页要的列表。与 [`catalog`](Self::catalog) 一样发完就完。
+    pub fn sessions(&self, listing: crate::session::listing::SessionListing) {
+        let _ = self.requests.send(ConsoleRequest::Sessions { listing });
+    }
+
     pub fn catalog(&self, entries: Vec<CatalogEntry>) {
         let _ = self.requests.send(ConsoleRequest::Catalog { entries });
     }
@@ -463,6 +482,8 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::Prompt { reply } => {
                     let _ = reply.send(next_line(&mut reader, "> ").await);
                 }
+                // 会话页只在 TUI 左栏；plain 前端连那一页都没有。
+                ConsoleRequest::Sessions { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

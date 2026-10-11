@@ -1,7 +1,7 @@
 # 17: 左栏第五签「会话」：列出历史会话（只读）
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 16
 Part of: ../map.md
 
@@ -24,9 +24,9 @@ Part of: ../map.md
 - [ ] 只读轻路径：整轮约 10 ms；**不走 `summarize`**、**不走 `EventLog::open`**、无索引无落盘缓存
 - [ ] 测试：帧级断言照 `tests/render_layout.rs` 的写法（宽窄两档、组头、`＋N 场`、四级标记、降级阶梯、空态），键位断言照既有左栏两页的写法
 
-## 进度
+## 实现记录
 
-**2026-10-12 · 数据侧已落地（这一票尚未 done）**：`src/session/listing.rs` +
+**2026-10-12 · 数据侧**（`src/session/listing.rs` + `tests/session_listing.rs` 9 条）：`src/session/listing.rs` +
 `tests/session_listing.rs`（9 条）。已覆盖的验收条目：
 
 - 组头按检出：家族探测成功写 `--show-toplevel` 目录名；失败按 cwd 字符串各成一组；重名写尾
@@ -48,3 +48,26 @@ Part of: ../map.md
   `r` / `Esc`）与点击语义、页区四句文案。
 - 注入：一条 `ConsoleRequest`（数据从组装方进来 —— 渲染层不读环境、也不起 `git` 进程）。
 - 帧级与键位测试。
+
+
+**2026-10-12 · TUI 侧**（`src/render/tui.rs` + `tests/session_page.rs` 8 条）：
+
+- `Tab::Sessions` 是枚举第一项，页签条 `draw_tab_bar` 的第一项 —— **常驻**（空 store、读不出、
+  无 `git` 时都在），页签仍只走鼠标。窄档 28 列下五签仍放得下（既有布局用例没动）。
+- `SessionsPage`（`TuiState` 本体，进程级）：`rows` / `total` / `unreadable` / `host_empty`
+  （票 21 填）/ `filtered`（票 24 填）/ `focus`（按 **id** 保位）/ `rect` / `hits` /
+  `headers` / 改名模式的两个格子。
+- 行 = 标记列 1 + 标题 T + 间隔 1 + 时间 Tw（窄 `21 / 5`、宽 `27 / 11`）；标题按显示列宽截断
+  尾 `…`。四种标记取现成界面域色；cwd 不存在整行 + 组头 `MUTED`；流损坏把**时间那一格**
+  写成 `损坏`+`BAD` —— 写它后面会顶出栏宽。
+- 三级降级按**页区高度**分：≥8 行画组头与页顶读数行、6–7 行丢组头、<6 行两者都不画。
+- 页内键盘：`↑` / `↓`（组头不占行下标，跳过是结构性的）、`Enter`（切过去留票 20）、`r`
+  （进改名模式，复用常驻编辑器）、`Esc` 还键盘；**不新增 `Ctrl-*`**。改名提交上报
+  `FrontEndEvent::SessionTitled`，落流由循环那侧做（渲染层不写事件流）。
+- 点击：页签、页顶两个入口（`SessionNew` / `SessionClose`，动作留票 21）、任意一行
+  （`SessionRow(line)` → 交键盘 + 落焦点）。
+- 数据由组装方经 `ConsoleRequest::Sessions { listing }` 推进来，cli 在组装后推一次 ——
+  渲染层不读环境，也不为一次列表去起 `git` 进程。
+
+**留给后续票**：`Enter` 真的切过去（票 20）、`新建` / `关闭` 的动作与空宿主（票 21）、
+过滤态（票 24）、宿主状态进标记列（票 22）。

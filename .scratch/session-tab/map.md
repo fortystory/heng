@@ -74,7 +74,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [14: 渲染事件带 session id 与重放语义修正](issues/14-render-event-session-id.md)
 - [ ] [15: 宿主表与前台指针：一场会话与今天等价](issues/15-session-host-table.md)
 - [x] [16: 会话标题：`SessionTitled`、前缀派生与规格涨版](issues/16-session-title.md)
-- [ ] [17: 左栏第五签「会话」：列出历史会话（只读）](issues/17-session-page-list.md)
+- [x] [17: 左栏第五签「会话」：列出历史会话（只读）](issues/17-session-page-list.md)
 - [ ] [18: 装载路径：切入历史会话](issues/18-attach-path.md)
 - [ ] [19: 切换重建：`SwitchSession` 与 `seq` 补齐](issues/19-switch-rebuild.md)
 - [ ] [20: 点一行切过去（接入）](issues/20-click-to-switch.md)

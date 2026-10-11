@@ -2522,6 +2522,9 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 会话页那一页自己的状态：它是**第一签**，也是唯一一页由外部推数据进来的
+    /// （`.scratch/session-tab/spec.md` §3）。
+    sessions: SessionsPage,
     /// 文件页那一页自己的状态（`.scratch/files-page/spec.md` §1、§5）。
     ///
     /// 与 [`Panel`]、[`TodoPanel`] 同一族：一页的状态收在一个值里，而它整个只活在进程内 ——
@@ -3109,6 +3112,15 @@ enum HitAction {
     Submit,
     /// 显示左栏的这一页，跟点它的页签一样（spec §3）。
     SwitchTab(Tab),
+    /// 点会话页上的一行（下标）：交键盘 + 落焦点（能不能切由票 20 接）。
+    ///
+    /// 存**下标**而不是会话 id：命中表只在**画出来的那一帧**里有效，而 `HitAction` 要
+    /// 保持 `Copy`。
+    SessionRow(usize),
+    /// 点会话页页顶的 `新建`（动作由票 21 接）。
+    SessionNew,
+    /// 点会话页页顶的 `关闭`（作用于焦点行，动作由票 21 接）。
+    SessionClose,
     /// 显示主列的这一页，跟点它的页签一样（`.scratch/trace-in-main/spec.md` §2）。
     SwitchMainTab(MainTab),
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
@@ -3924,6 +3936,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             tab: Tab::Usage,
+            sessions: SessionsPage::default(),
             files_page: FilesPage::default(),
             // 进 TUI 就取一次数：打开就有东西看（§4）。
             changes: ChangesPage::default(),
@@ -4717,6 +4730,9 @@ impl TuiState {
             self.take_sidebar_keyboard(column, row);
         }
         match self.regions.action_at(column, row) {
+            Some(HitAction::SessionRow(line)) => self.sessions_click(line),
+            // 页顶那两个入口的动作由票 21 接：这一片只把位置与命中立起来。
+            Some(HitAction::SessionNew | HitAction::SessionClose) => {}
             Some(HitAction::SwitchTab(tab)) => {
                 self.tab = tab;
                 // 点页签条也是一次「点左栏」：切到能走键盘的那两页时键盘跟着交给它们，并先给
@@ -5944,10 +5960,90 @@ impl TuiState {
     /// （`.scratch/files-page/spec.md` §5、`.scratch/diff-page/spec.md` §7）。
     fn sidebar_key(&mut self, key: Key) -> bool {
         match self.tab {
+            Tab::Sessions => self.sessions_key(key),
             Tab::Files => self.files_key(key),
             Tab::Changes => self.changes_key(key),
-            // 另外两页没有能用方向键走的东西：键盘本来也不该扣在它们上面。
+            // 另外一页没有能用方向键走的东西：键盘本来也不该扣在它上面。
             _ => return false,
+        }
+    }
+
+    /// 会话页的键位（`.scratch/session-tab/spec.md` §3）：`↑` / `↓` 移焦点、`Enter` 切过去、
+    /// `r` 改名（复用常驻编辑器）、`Esc` 还键盘。**不新增 `Ctrl-*`**。
+    fn sessions_key(&mut self, key: Key) -> bool {
+        // 改名模式里键盘归编辑器：暂存草稿、`Enter` 提交、`Esc` 取消（照轨迹页搜索那一路）。
+        if self.sessions.renaming.is_some() {
+            match key {
+                Key::Esc => {
+                    self.sessions.renaming = None;
+                    self.sessions.rename_draft = None;
+                    self.editor.clear();
+                }
+                Key::Enter => {
+                    if let Some(id) = self.sessions.renaming.take() {
+                        let title = self.editor.submitted();
+                        self.sessions.rename_draft = None;
+                        // 落流的是循环：渲染层不写事件流（`.scratch/session-tab/spec.md` §4）。
+                        self.events.push(FrontEndEvent::SessionTitled { id, title });
+                    }
+                }
+                other => {
+                    self.editor_key(other);
+                }
+            }
+            return true;
+        }
+        match key {
+            Key::Esc => self.sidebar_keyboard = false,
+            Key::Up => self.sessions_move_focus(-1),
+            Key::Down => self.sessions_move_focus(1),
+            // 切过去由票 20 接：这一片只把焦点落下来。
+            Key::Enter => {}
+            Key::Char('r') => {
+                let target = self
+                    .sessions
+                    .focused_row()
+                    .map(|row| (row.id.clone(), row.title.clone()));
+                if let Some((id, title)) = target {
+                    self.sessions.renaming = Some(id);
+                    self.sessions.rename_draft = Some(title.clone());
+                    self.editor.clear();
+                    self.editor.insert_str(&title);
+                }
+            }
+            Key::Char(_) => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// 会话页的焦点往上下走一格。组头不占行下标（它是画出来的整行，不在 `rows` 里），所以
+    /// 「跳过组头」是结构性的，不靠额外规则。
+    fn sessions_move_focus(&mut self, step: isize) {
+        if self.sessions.rows.is_empty() {
+            self.sessions.focus = None;
+            return;
+        }
+        let current = self
+            .sessions
+            .focus
+            .as_ref()
+            .and_then(|id| self.sessions.rows.iter().position(|row| &row.id == id));
+        let last = self.sessions.rows.len() as isize - 1;
+        let next = match current {
+            Some(index) => (index as isize + step).clamp(0, last),
+            None if step < 0 => last,
+            None => 0,
+        };
+        self.sessions.focus = Some(self.sessions.rows[next as usize].id.clone());
+    }
+
+    /// 点会话页上的一行：交键盘 + 落焦点（能不能切由票 20 接）。
+    fn sessions_click(&mut self, line: usize) {
+        self.sidebar_keyboard = true;
+        self.release_trace_keyboard();
+        if let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) {
+            self.sessions.focus = Some(id.clone());
         }
     }
 
@@ -6535,6 +6631,16 @@ impl TuiState {
                     return;
                 }
                 self.picker = Some(Picker::new(request));
+            }
+            // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
+            ConsoleRequest::Sessions { listing } => {
+                let focus = self.sessions.focus.clone();
+                self.sessions.rows = listing.rows;
+                self.sessions.total = listing.total;
+                self.sessions.unreadable = listing.unreadable;
+                // 焦点按 **会话 id** 保位：重扫之后按 id 找回，不按下标（票 20）。
+                self.sessions.focus =
+                    focus.filter(|id| self.sessions.rows.iter().any(|row| &row.id == id));
             }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
@@ -8160,6 +8266,10 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
             draw_todo_page(frame, page, state);
             return;
         }
+        Tab::Sessions => {
+            draw_sessions_page(frame, page, state);
+            return;
+        }
         Tab::Files => {
             draw_files_page(frame, page, state);
             return;
@@ -8191,6 +8301,186 @@ fn draw_todo_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) 
     let (rows, folded) = state.view.todo.lines_with_folds(page);
     note_rows(state, page, &rows, &folded, &[]);
     frame.render_widget(Paragraph::new(rows), page);
+}
+
+/// 左栏第一签：store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。
+///
+/// 三级降级阶梯按**页区高度**分：≥8 行画组头与页顶读数行；6–7 行丢组头、保读数行；<6 行两者
+/// 都不画，只保列表与末行那句「还有多少场没露面」。
+fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
+    state.sessions.rect = Some(page);
+    state.sessions.headers.clear();
+    state.sessions.hits.clear();
+    // 这一帧没画的那几页：指针不该落在一页已经不在屏幕上的东西上。
+    state.files_page.rect = None;
+    state.changes.rect = None;
+    state.view.todo.clear_rect();
+
+    let height = page.height as usize;
+    let wide = page.width >= 40;
+    let (title_w, time_w) = if wide { (27u16, 11u16) } else { (21, 5) };
+    let now = std::time::SystemTime::now();
+    let show_head = height >= 6;
+    let show_groups = height >= 8;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if show_head {
+        lines.push(session_head_line(state, &page, wide));
+    }
+    if let Some(note) = state.sessions.note() {
+        lines.push(Line::from(Span::styled(
+            note,
+            Style::default().fg(palette::MUTED),
+        )));
+    } else {
+        let rows = std::mem::take(&mut state.sessions.rows);
+        let focus = state.sessions.focus.clone();
+        let mut last_group: Option<&str> = None;
+        for row in &rows {
+            if show_groups && last_group != Some(row.group.as_str()) {
+                state.sessions.headers.push(lines.len());
+                lines.push(Line::from(Span::styled(
+                    row.group.clone(),
+                    Style::default().fg(palette::MUTED),
+                )));
+                last_group = Some(row.group.as_str());
+            }
+            // 行命中：一整行都是落点（点击 = 交键盘 + 落焦点，票 17）。
+            let line = lines.len();
+            state.sessions.hits.push((line, row.id.clone()));
+            state.regions.cells.push(Region {
+                rect: Rect::new(page.x, page.y + line as u16, page.width, 1),
+                action: HitAction::SessionRow(line),
+            });
+            lines.push(session_line(row, focus.as_ref(), title_w, time_w, now));
+        }
+        state.sessions.rows = rows;
+    }
+    let missing = state
+        .sessions
+        .total
+        .saturating_sub(state.sessions.rows.len());
+    if missing > 0 {
+        lines.push(Line::from(Span::styled(
+            wording::session_more(missing),
+            Style::default().fg(palette::MUTED),
+        )));
+    }
+    lines.truncate(height);
+    frame.render_widget(Paragraph::new(lines), page);
+}
+
+/// 会话页页顶那一行：左端读数、右端两个入口（都 `ACCENT`、都可点）。
+fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'static> {
+    let running = state
+        .sessions
+        .rows
+        .iter()
+        .filter(|row| row.mark == crate::session::listing::SessionMark::Running)
+        .count();
+    let left = wording::session_count(state.sessions.total, running);
+    let left_w = text_columns(&left) as u16;
+    let new_w = text_columns(wording::SESSION_NEW) as u16;
+    let close_w = text_columns(wording::SESSION_CLOSE) as u16;
+    // 右端两个入口；空宿主时只剩 `新建`（票 21 填 `host_empty`）。
+    let close_at = page.width.saturating_sub(close_w);
+    let new_at = if state.sessions.host_empty {
+        page.width.saturating_sub(new_w)
+    } else {
+        close_at.saturating_sub(2 + new_w)
+    };
+    state.regions.cells.push(Region {
+        rect: Rect::new(page.x + new_at, page.y, new_w, 1),
+        action: HitAction::SessionNew,
+    });
+    if !state.sessions.host_empty {
+        state.regions.cells.push(Region {
+            rect: Rect::new(page.x + close_at, page.y, close_w, 1),
+            action: HitAction::SessionClose,
+        });
+    }
+    let accent = Style::default().fg(palette::ACCENT);
+    let mut spans = vec![Span::styled(left, Style::default().fg(palette::MUTED))];
+    spans.push(Span::raw(
+        " ".repeat(new_at.saturating_sub(left_w) as usize),
+    ));
+    spans.push(Span::styled(wording::SESSION_NEW, accent));
+    if !state.sessions.host_empty {
+        spans.push(Span::raw(
+            " ".repeat(close_at.saturating_sub(new_at + new_w) as usize),
+        ));
+        spans.push(Span::styled(wording::SESSION_CLOSE, accent));
+    }
+    let _ = wide;
+    Line::from(spans)
+}
+
+/// 会话页的一行：标记列 1 + 标题 T + 间隔 1 + 时间 Tw（spec §3）。
+fn session_line(
+    row: &crate::session::listing::SessionRow,
+    focus: Option<&crate::events::SessionId>,
+    title_w: u16,
+    time_w: u16,
+    now: std::time::SystemTime,
+) -> Line<'static> {
+    use crate::session::listing::SessionMark;
+    let focused = focus == Some(&row.id);
+    // 整行的那一档样式：焦点是 `ACCENT` + `BOLD`；cwd 不存在的那一行整行 `MUTED`。
+    let row_style = if focused {
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else if row.missing_cwd {
+        Style::default().fg(palette::MUTED)
+    } else {
+        Style::default().fg(palette::PLAIN)
+    };
+    // 标记列：四态互斥，前台压过一切。
+    let (mark, mark_style) = if row.foreground {
+        ("▍", Style::default().fg(palette::ACCENT))
+    } else {
+        match row.mark {
+            SessionMark::Awaiting => ("?", Style::default().fg(palette::WARN)),
+            SessionMark::Running => ("●", Style::default().fg(palette::PLAIN)),
+            SessionMark::Idle => (" ", row_style),
+        }
+    };
+    let title = fit_title(&row.title, title_w as usize);
+    let title_pad = title_w.saturating_sub(text_columns(&title) as u16);
+    // 「流损坏」排在时间**之前** —— 它就写在时间那一格里（写在后面会顶出栏宽）。
+    let (time, time_style) = if row.broken {
+        (
+            wording::SESSION_BROKEN.to_owned(),
+            Style::default().fg(palette::BAD),
+        )
+    } else {
+        (
+            wording::session_age_at(row.written, now, time_w >= 11),
+            Style::default().fg(if focused {
+                palette::ACCENT
+            } else {
+                palette::MUTED
+            }),
+        )
+    };
+    let time_pad = time_w.saturating_sub(text_columns(&time) as u16);
+    Line::from(vec![
+        Span::styled(mark.to_owned(), mark_style),
+        Span::styled(title, row_style),
+        Span::raw(" ".repeat(title_pad as usize + 1)),
+        Span::raw(" ".repeat(time_pad as usize)),
+        Span::styled(time, time_style),
+    ])
+}
+
+/// 标题按**显示列宽**截断，尾一个 `…`（spec §3）。
+fn fit_title(title: &str, width: usize) -> String {
+    if text_columns(title) <= width {
+        return title.to_owned();
+    }
+    let mut out = crate::render::width::truncate_columns(title, width.saturating_sub(1));
+    out.push('…');
+    out
 }
 
 /// 文件页：一棵从会话级索引排出来的工作区文件树
@@ -8448,11 +8738,18 @@ fn draw_tab_bar(
             panes.divide.unwrap_or(sidebar.right()),
         );
     }
-    let mut entries = vec![(
-        wording::TAB_USAGE,
-        state.tab == Tab::Usage,
-        HitAction::SwitchTab(Tab::Usage),
-    )];
+    let mut entries = vec![
+        (
+            wording::TAB_SESSIONS,
+            state.tab == Tab::Sessions,
+            HitAction::SwitchTab(Tab::Sessions),
+        ),
+        (
+            wording::TAB_USAGE,
+            state.tab == Tab::Usage,
+            HitAction::SwitchTab(Tab::Usage),
+        ),
+    ];
     if state.view.todo.visible() {
         entries.push((
             wording::TAB_TODO,
@@ -8762,6 +9059,60 @@ impl Picker {
 ///
 /// 与 [`Panel`]、[`TodoPanel`] 同一族，也与 [`DetailView`] 共用同一条纪律：状态由画它的那一处
 /// 顺手记下（「记住读的人真看到了什么」），只有真画出来的行才回应指针与键盘。
+/// 会话页自己的状态（`.scratch/session-tab/spec.md` §3）。
+///
+/// 与 `files_page` / `changes` 同一族：一页的状态收在一个值里，只活在进程内。页面**常驻**，
+/// 数据由组装方经 `ConsoleRequest::Sessions` 推过来 —— 渲染层不读环境、也不起 `git` 进程。
+#[derive(Default)]
+struct SessionsPage {
+    /// 数据侧排好的那些行（`crate::session::listing`）。
+    rows: Vec<crate::session::listing::SessionRow>,
+    /// store 里的总数：末行 `＋N 场` 的 N 就是它与 `rows.len()` 之差。
+    total: usize,
+    /// store 整个读不出（与「没有会话」是两件事）。
+    unreadable: bool,
+    /// 空宿主（票 21 填）：宿主表里一场都没有。
+    host_empty: bool,
+    /// 过滤态（票 24 填）：空结果那一句因此换成「没有命中的会话」。
+    filtered: bool,
+    /// 焦点行的会话 id。按 **id** 保位 —— 重扫之后按 id 找回，不按下标（票 20）。
+    focus: Option<crate::events::SessionId>,
+    /// 这一页画出来的矩形（命中的判据：只认真画出来的东西）。
+    rect: Option<Rect>,
+    /// 这一帧哪些行是组头 —— `↑` / `↓` 要跳过它们。
+    headers: Vec<usize>,
+    /// 画在屏幕上的行下标 → 会话 id。
+    hits: Vec<(usize, crate::events::SessionId)>,
+    /// 改名模式：正在改哪一场，以及它那一份草稿（复用常驻编辑器的那一份）。
+    renaming: Option<crate::events::SessionId>,
+    rename_draft: Option<String>,
+}
+
+impl SessionsPage {
+    /// 焦点那一行，如果有。
+    fn focused_row(&self) -> Option<&crate::session::listing::SessionRow> {
+        let id = self.focus.as_ref()?;
+        self.rows.iter().find(|row| &row.id == id)
+    }
+
+    /// 页区该写的那一句；`None` 表示有行要画。
+    fn note(&self) -> Option<&'static str> {
+        if self.unreadable {
+            return Some(wording::SESSIONS_UNREADABLE);
+        }
+        if self.host_empty {
+            return Some(wording::SESSIONS_NONE);
+        }
+        if self.filtered && self.rows.is_empty() {
+            return Some(wording::SESSIONS_NO_HIT);
+        }
+        if self.rows.is_empty() {
+            return Some(wording::SESSIONS_EMPTY);
+        }
+        None
+    }
+}
+
 #[derive(Default)]
 struct FilesPage {
     /// 展开着的目录，装的是索引里的拼法（目录带尾斜杠）。
@@ -8840,6 +9191,9 @@ enum ChangesState {
 /// （`.scratch/trace-in-main/spec.md` §2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    /// store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。**第一签，常驻** —— 空 store、
+    /// 读不出、无 `git` 时它都在。
+    Sessions,
     /// 会话的读数：旧信息面板装着的那些。
     Usage,
     /// agent 的待办列表，也是唯一不总在条上的页签：主会话第一次提交一次列表时它出现，此后

@@ -155,9 +155,8 @@ fn label_groups(rows: &mut [SessionRow]) {
     for row in rows.iter() {
         labels.entry(row.group_key.clone()).or_insert_with(|| {
             if let Some(cwd) = &row.cwd {
-                let family = git_toplevel(cwd);
-                if family.is_some() {
-                    return family.unwrap();
+                if let Some(top) = git_toplevel(cwd) {
+                    return top;
                 }
                 return Path::new(cwd)
                     .file_name()
@@ -202,7 +201,7 @@ fn tail_two(path: &str) -> String {
 
 /// 排序（spec §3）：前台所在的检出组钉组顶 → 组间 / 组内 mtime 降序 → id 降序兜底 →
 /// 读不出 mtime 的排最后。
-fn sort_rows(rows: &mut Vec<SessionRow>, foreground: &SessionId) {
+fn sort_rows(rows: &mut [SessionRow], foreground: &SessionId) {
     let pinned = rows
         .iter()
         .find(|row| &row.id == foreground)

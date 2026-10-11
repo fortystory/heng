@@ -312,6 +312,24 @@ pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> R
     )
 }
 
+/// 记下这场会话的新名字（`.scratch/session-tab/spec.md` §4）。
+///
+/// 它是**人敲的散文**，所以走 `emit` 的同一条路：打码、落流、推给渲染器。空串（或归一化之后
+/// 为空）就是**撤回** —— 那一条照样要写，否则最后一条手动标题仍然生效。
+pub fn record_session_title(
+    session: &mut Session,
+    render: &RenderHandle,
+    title: &str,
+) -> Result<(), Error> {
+    let title = crate::session::titles::normalize(title).unwrap_or_default();
+    emit(
+        session,
+        render,
+        &SpeakerId::User,
+        EventPayload::SessionTitled { title },
+    )
+}
+
 /// 记下这次会话开跑时的沙箱状态（沙箱 spec §8）。
 ///
 /// **log-only**：投影不把它变成 `messages`，所以钉住的前缀逐字不变，而 replay 能重算出

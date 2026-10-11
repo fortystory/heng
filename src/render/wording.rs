@@ -2257,6 +2257,93 @@ pub const TAB_FILES: &str = "文件";
 /// 都还在，页里各写一句。四签在窄档（28 列）下占 21 列，还剩 7 列填线，放得下。
 pub const TAB_CHANGES: &str = "改动";
 
+/// 左栏第一签：store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。
+///
+/// 它排在 `调用量` **之前**：会话页回答的是「我在哪一场」，比这一场的读数更外层。
+pub const TAB_SESSIONS: &str = "会话";
+
+/// 会话页页区的四句。它们住在措辞层，不许散进渲染代码。
+pub const SESSIONS_EMPTY: &str = "还没有历史会话";
+pub const SESSIONS_UNREADABLE: &str = "读不出会话列表";
+pub const SESSIONS_NONE: &str = "没有会话";
+pub const SESSIONS_NO_HIT: &str = "没有命中的会话";
+
+/// 页顶右端的两个入口，以及一行的「流损坏」尾标。
+pub const SESSION_NEW: &str = "新建";
+pub const SESSION_CLOSE: &str = "关闭";
+pub const SESSION_BROKEN: &str = "损坏";
+
+/// 页顶左端的读数：`N 场`，有人在跑时补一段 ` · M 场在跑`。
+pub fn session_count(total: usize, running: usize) -> String {
+    if running == 0 {
+        format!("{total} 场")
+    } else {
+        format!("{total} 场 · {running} 场在跑")
+    }
+}
+
+/// 末行那句「还有多少场没露面」。
+pub fn session_more(missing: usize) -> String {
+    format!("＋{missing} 场")
+}
+
+/// 一行右端的相对时间，两档（`.scratch/session-tab/spec.md` §3）。
+///
+/// 窄档只留得下 5 列（`刚刚` / `3分` / `2时` / `昨天` / `08-12`），宽档 11 列
+/// （`刚刚` / `3 分钟前` / `2 小时前` / `昨天 14:02` / `08-12 14:02`）。「昨天」按**本地**
+/// 日期算，不按 24 小时算：跨过午夜就该叫昨天。
+pub fn session_age_at(
+    written: Option<std::time::SystemTime>,
+    now: std::time::SystemTime,
+    wide: bool,
+) -> String {
+    let Some(written) = written else {
+        return String::new();
+    };
+    let seconds = now
+        .duration_since(written)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    if seconds < 60 {
+        return "刚刚".to_owned();
+    }
+    if seconds < 60 * 60 {
+        let minutes = seconds / 60;
+        return if wide {
+            format!("{minutes} 分钟前")
+        } else {
+            format!("{minutes}分")
+        };
+    }
+    let written_at = chrono::DateTime::<chrono::Local>::from(written);
+    let now_at = chrono::DateTime::<chrono::Local>::from(now);
+    let days = (now_at.date_naive() - written_at.date_naive()).num_days();
+    match days {
+        0 => {
+            let hours = seconds / 3600;
+            if wide {
+                format!("{hours} 小时前")
+            } else {
+                format!("{hours}时")
+            }
+        }
+        1 => {
+            if wide {
+                format!("昨天 {}", written_at.format("%H:%M"))
+            } else {
+                "昨天".to_owned()
+            }
+        }
+        _ => {
+            if wide {
+                written_at.format("%m-%d %H:%M").to_string()
+            } else {
+                written_at.format("%m-%d").to_string()
+            }
+        }
+    }
+}
+
 /// 主列页签条上的两个标签：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
 pub const TAB_CONVERSATION: &str = "对话";
 pub const TAB_TRACE: &str = "轨迹";

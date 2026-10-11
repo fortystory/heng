@@ -1157,6 +1157,14 @@ impl Harness {
         agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
+    /// 给这场会话改名（`.scratch/session-tab/spec.md` §4）。空串即撤回。
+    ///
+    /// 它写下的是**一条新事件**，所以改名可重放、也能被 `-c` 带上 —— 标题不是界面里的一份
+    /// 临时状态。
+    pub fn set_title(&mut self, title: &str) -> Result<(), Error> {
+        agent::record_session_title(&mut self.session, &self.render, title)
+    }
+
     /// 这场会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
     pub fn outputs_dir(&self) -> &std::path::Path {
         self.session.outputs_dir()

@@ -457,6 +457,20 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         console.replay(harness.events());
     }
 
+    // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）：数据在这一侧扫出来 —— 渲染层
+    // 不读环境，也不该为了一次列表去起 `git` 进程。
+    if let Some(root) = config::sessions_dir(env) {
+        let store = SessionStore::new(root);
+        let mut titles = crate::session::TitleCache::new();
+        let listing = crate::session::listing::sessions(
+            &store,
+            &mut titles,
+            harness.session_id(),
+            &std::collections::HashMap::new(),
+        );
+        console.sessions(listing);
+    }
+
     // MCP 这一层加载成什么样，作为一条上下文注入进流（票 19）：与技能清单同形 —— 模型因此知道
     // 手里有哪些外部 server，而转录里那行**点得开**、详情就是同一段数据。
     if let Some(catalog) = mcp.catalog_text() {
@@ -1575,6 +1589,18 @@ async fn interactive_loop(
                     // 期间只有提示行在等，没有回合、没有讨论，所以清单可以真的开出来。
                     Some(FrontEndEvent::OpenPicker(kind)) => {
                         open_picker(harness, console, config, kind, false).await;
+                    }
+                    // 会话页里按 `r` 改完名：落流的是**循环**（渲染层不写事件流）。
+                    Some(FrontEndEvent::SessionTitled { id, title }) => {
+                        // 这一片只认得当前这场；多场的那一半由票 20 接。
+                        if id == *harness.session_id()
+                            && let Err(error) = harness.set_title(&title)
+                        {
+                            harness.notice(&format!(
+                                "heng: {}",
+                                render::wording::error_report(&error)
+                            ));
+                        }
                     }
                     None => return ExitCode::SUCCESS,
                 },
@@ -2737,6 +2763,8 @@ impl ExitRequest {
             FrontEndEvent::Cancel => signal.cancel(),
             // 模式循环在调用点自己处理。
             FrontEndEvent::CycleMode => {}
+            // 改名也是：它既不退出，也不取消。
+            FrontEndEvent::SessionTitled { .. } => {}
             // 切换由调用点自己处理（忙闲判据在那一侧）。
             FrontEndEvent::OpenPicker(_) => {}
         }
