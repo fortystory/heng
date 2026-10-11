@@ -5,7 +5,7 @@
 //! 各成一组」那一档要覆盖的分支。
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use heng::events::{EventLog, EventPayload, Role, SCHEMA_VERSION, SessionId, SpeakerId};
 use heng::session::listing::{SessionMark, sessions};

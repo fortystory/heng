@@ -1,7 +1,7 @@
 # 15: 宿主表与前台指针：一场会话与今天等价
 
 Type: implement
-Status: ready-for-agent
+Status: in-progress
 Blocked by: 13
 Part of: ../map.md
 
@@ -19,3 +19,33 @@ Part of: ../map.md
 - [ ] `clear_while_looping` 闸门取消：loop 在跑也能新建，旧会话连它在跑的 loop 一起留后台
 - [ ] 权限策略从脚手架级共享变成**一场一份**（沙箱探测 / 技能 / 工具表 / `AGENTS.md` 同理，按票 04 §1）
 - [ ] `tests/goal_loop.rs`、`tests/e2e_single_turn.rs`、`tests/modes.rs`、`tests/cancellation.rs` 全绿；新增宿主接缝测试（假 provider）覆盖「入表 / 取回 / 状态三态流转」
+
+## 进度
+
+**2026-10-12 · 机制层已落地（这一票尚未 done）**：`src/session/host.rs` +
+`tests/session_host.rs`（6 条）。已覆盖：
+
+- `SessionState` 三态、`SessionCommand`（`Turn` / `Cancel` / `Close`）、`SessionTurn`
+  （`Prompt` / `Skill` / `Injected`）。
+- `SessionHost::adopt`：把 `Harness` 交给一个 `tokio::spawn` 的 task，记下
+  `id` / `cwd` / `state: watch` / `cmd: mpsc` / `cancel: CancelSignal` / `join: JoinHandle`；
+  同一 `SessionId` 第二次入表被拒（`HostError::AlreadyHosted`）。
+- 表级 `foreground: watch<SessionId>`：`switch` 只改指针（忙闲不阻挡、不卸载任何一场），
+  `follow_foreground` 给 task 一份接收端。
+- `running()` 数的是 `RunningTurn` 的场数；`close` 发 `Close`、await task、从表移除。
+- 6 条用例：同 id 只能一行、回合在 task 里跑完并落到**那一场自己的流**上、永不结束的流把状态
+  停在 `RunningTurn`（取消后回 `Idle`、读数归零）、切换只动指针、关闭真的少一行且 task 结束、
+  两场各跑各的流不串。
+
+**还没做**（这一票剩下的部分，也是最大的一块）：
+
+- **cli 接线**：`interactive_loop(&mut harness, ...)` 现在直接持有 `Harness`（45 处调用），
+  要改成「组装 → `adopt` → 主循环发命令、读状态」。`run_one_turn` / `run_goal_loop` /
+  `open_picker` 三处跟着改形状；`Submission` 的解析留在主循环，只有「跑一个回合」那一半变成
+  `SessionCommand::Turn`。
+- **命令的形状**：票 04 §3 写的是 `Submit(Submission)`，而 `Submission` 借用 CLI 的字符串。
+  机制层先用与它等价的 `SessionTurn`（owned）—— 接线时把 `Submission` 的每个分支映射过来。
+- `/clear` 与阈值 rollover 从「换一场」变成「新建一场 + 入表 + 切前台」；`clear_while_looping`
+  闸门取消。
+- 权限策略「一场一份」（现状已经是 per-`assemble`，接线时钉一条断言即可）。
+- `RenderEvent::SessionState`（状态变更点推给渲染器，票 22 的标记列读它）。
