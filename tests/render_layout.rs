@@ -5091,7 +5091,9 @@ fn the_menu_colours_each_kind_of_name_differently() {
 
 #[test]
 fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
-    // 票 09：上限 72 → 96。描述被截在半句上，菜单就在教人按 `Tab` 去猜后半句。
+    // 票 09 起的这一条：描述被截在半句上，菜单就在教人按 `Tab` 去猜后半句。80 列的描述在 200
+    // 列终端（对话区 159 列）里整句落在**一行**上 —— 票 10 之后菜单按对话区量宽，这条照旧成立，
+    // 而它当年要比的那个「旧上限 74」已经不存在了：菜单宽是 159。
     let description = "说明".repeat(20);
     let mut state = state();
     state.request(ConsoleRequest::Catalog {
@@ -5110,6 +5112,64 @@ fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
     assert!(
         width > 74,
         "菜单宽过旧上限（74 = 旧上限 72 加两条边框），实际 {width}"
+    );
+}
+
+/// 菜单的宽度就是**对话区**那么宽（票 10）。
+///
+/// 判据是它与输入区对齐 —— 左边框压在输入区那一列上，右边框压在输入区那一列上 —— 而不是
+/// 「够宽」：够宽的菜单仍会随候选长短漂，于是它浮在一行满宽的输入区上时对不齐。
+///
+/// 两种终端各测一次，因为对话区宽度是两个阶梯的函数：120 列下左栏吃掉一档（对话区窄一截），
+/// 80 列下左栏整栏让位（对话区就是屏幕减去 0）。
+#[test]
+fn the_menu_spans_the_whole_conversation_column() {
+    use heng::render::layout::plan;
+    use ratatui::layout::Rect;
+
+    for columns in [120u16, 80u16] {
+        let mut state = state();
+        install_catalog(&mut state);
+        state.key(Key::Char('/'));
+        let frame = buffer(columns, 24, &mut state);
+
+        // 那一帧自己的输入区 —— 菜单要对齐的是**这一次**排版算出来的那个矩形，不是记住的常数。
+        let regions = plan(Rect::new(0, 0, columns, 24), 1, true);
+        let (x, _, width, _) = menu_box(&frame, columns, 24, "/undo");
+        assert_eq!(
+            x, regions.input.x,
+            "{columns} 列下菜单的左边就是对话区的左边"
+        );
+        assert_eq!(
+            width, regions.input.width,
+            "{columns} 列下菜单横跨整个对话区"
+        );
+        assert!(
+            x + width <= columns,
+            "{columns} 列下菜单没出屏：{x}+{width}"
+        );
+    }
+}
+
+/// 一行菜单排版到那么宽之后，描述**整句**落在那一行上 —— 它不再被那一条「放不下就让名字独占
+/// 一行」的判据踢掉（`menu_row` 那半边，票 10 照旧不动）。
+///
+/// 描述是 40 列（20 个汉字），对话区是 79 列：按最宽的一条算时它装得下（那正是票 09 的算法
+/// 唯一擅长的场景），所以这条钉的是**整宽之后仍然如此**。
+#[test]
+fn a_description_still_reads_as_one_line_in_the_full_width_menu() {
+    let description = "说明".repeat(10);
+    let mut state = state();
+    state.request(ConsoleRequest::Catalog {
+        entries: vec![CatalogEntry::command("demo", description.clone())],
+    });
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+    let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 120)).collect();
+    assert!(
+        rows.join("\n").contains(&description),
+        "40 列的描述在 120 列的对话区里整句都在：\n{}",
+        rows.join("\n")
     );
 }
 
@@ -5153,18 +5213,32 @@ fn the_file_index_is_warmed_once_and_rescanned_after_a_submission() {
     assert!(!state.take_file_scan(), "重扫也只发一次");
 }
 
+/// 菜单跟着光标走的是**纵向**（票 10：横向改为与对话区对齐）。
 #[test]
-fn the_menu_follows_the_cursor_column() {
+fn the_menu_holds_its_column_and_follows_the_cursor_down() {
     let mut state = state();
     install_catalog(&mut state);
     state.key(Key::Char('/'));
     let frame = buffer(120, 24, &mut state);
-    let (before, ..) = menu_box(&frame, 120, 24, "/undo");
-    // 再多一个字符，框就跟着打它的那个光标走。
+    let (before_x, _, before_width, _) = menu_box(&frame, 120, 24, "/undo");
+    assert_eq!(before_x + before_width, 120, "它先横跨整个对话区");
+    // 同一个记号里再打一个字，光标往右走一列 —— 框不动，宽度也不动（宽度是布局给的）。
     state.key(Key::Char('a'));
     let frame = buffer(120, 24, &mut state);
-    let (after, ..) = menu_box(&frame, 120, 24, "/ask-matt");
-    assert_eq!(after, before + 1, "框跟着光标移动了");
+    let (x, _, width, _) = menu_box(&frame, 120, 24, "/ask-matt");
+    assert_eq!(x, before_x, "横向不再跟着光标走");
+    assert_eq!(width, before_width, "宽度按对话区量，不随候选变");
+    // 高度仍由候选数决定：`/a` 只剩一条，窗口从一窗收成一行。
+
+    // 纵向照旧贴着光标：草稿多出一行、光标落到第二行的记号上，框的下缘跟着下移一行。
+    state.paste("\n/");
+    let frame = buffer(120, 24, &mut state);
+    let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
+    assert_eq!(
+        top as usize + height as usize,
+        input_row(120, 24) + 1,
+        "框的下缘就是光标那一行"
+    );
 }
 
 #[test]

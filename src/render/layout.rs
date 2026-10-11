@@ -394,12 +394,25 @@ impl Regions {
         self.main.bottom().saturating_sub(cursor_y + 1)
     }
 
-    /// 浮动的 `/` 菜单去哪儿：一个 `width` 列宽、`rows` 个内容行高的带框盒子，锚在光标上，
-    /// 好跟着正在打的东西走（spec §6）。
+    /// `/` 菜单多宽：**整个对话区**那么宽（票 10，`.scratch/tui-feedback/spec.md` §11）。
     ///
-    /// 它**向上**开 —— 输入区在屏幕脚下，所以有地方的是那一侧 —— 只有在上面什么都放不下时
-    /// 才落到光标下面。两边都放不下时是 `None`，那是在那么小的终端上诚实的答案。
-    pub fn menu(&self, anchor: Placed, width: u16, rows: u16) -> Option<Rect> {
+    /// 它曾经是「最宽的那一条要占的列数」，封顶在 96 列 —— 票 09 为的是「描述别掉字」。按对话区
+    /// 量之后，那条算式与那个上限一起退场：短的那几条不再只有两三列宽，而菜单与它浮着的那一行
+    /// 输入区左右对齐，读起来是**输入区的一部分**。
+    ///
+    /// 基准是 [`Regions::input`] 而不是屏幕：整个屏幕是左栏与对话区并排，而菜单属于对话区。
+    pub fn menu_width(&self) -> u16 {
+        self.input.width
+    }
+
+    /// 浮动的 `/` 菜单去哪儿：一个**横跨整个对话区**、`rows` 个内容行高的带框盒子，锚在光标上
+    /// （spec §6、票 10）。
+    ///
+    /// 横向与主列左缘对齐 —— 宽度是 [`Self::menu_width`]，所以光标那一列不再左右移动它；跟着光标
+    /// 走的是**纵向**。它**向上**开 —— 输入区在屏幕脚下，所以有地方的是那一侧 —— 只有在上面什么
+    /// 都放不下时才落到光标下面。两边都放不下时是 `None`，那是在那么小的终端上诚实的答案。
+    pub fn menu(&self, anchor: Placed, rows: u16) -> Option<Rect> {
+        let width = self.menu_width();
         if rows == 0 || width < MENU_MIN_WIDTH {
             return None;
         }
@@ -413,16 +426,7 @@ impl Regions {
         } else {
             return None;
         };
-        let left = self.main.x;
-        let right = self.main.right();
-        let width = width.min(right.saturating_sub(left));
-        let x = self
-            .input
-            .x
-            .saturating_add(anchor.column)
-            .min(right.saturating_sub(width))
-            .max(left);
-        Some(Rect::new(x, y, width, height))
+        Some(Rect::new(self.main.x, y, width, height))
     }
 }
 
@@ -751,11 +755,8 @@ const DETAIL_MARGIN_ROWS: u16 = 2;
 /// 防的是「滚一份列表去找一个能打出来的名字」，不是「一次看完这一批」。
 pub const MENU_MAX_ROWS: u16 = 12;
 
-/// `/` 菜单最宽能到多少：一个名字加它那一行描述，不用眼睛来回跑。
-///
-/// 96 而不是 72（同上）：描述被截在半句上，菜单就在教人按 `Tab` 去猜后半句。真变宽的只有
-/// **描述长的那几条**，短的照旧窄 —— 宽度按最宽的一条算，不是固定这么宽。
-pub const MENU_MAX_WIDTH: u16 = 96;
-
 /// 值得画一个菜单盒子的最窄宽度：低于这个，边框就是它的大半。
+///
+/// 菜单的宽度是整个对话区（[`Regions::menu_width`]），于是这条判的是**终端**有多窄 —— 窄到对话区
+/// 装不下这个形状时，不画比画一个框占满屏幕诚实。
 const MENU_MIN_WIDTH: u16 = 12;

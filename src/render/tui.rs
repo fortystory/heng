@@ -9967,6 +9967,9 @@ fn hint_region(row: Rect, offset: usize, columns: usize) -> Option<Rect> {
 /// 记号菜单：`/` 后面能变成哪些名字、`@` 后面能指到哪些文件与目录 —— 浮在光标处，并按
 /// 前缀后面打了什么过滤（spec §2、§3）。
 ///
+/// 它**纵向**跟着光标（向上开，贴着输入区），横向则是**整个对话区那么宽**，于是菜单与那一行输入
+/// 区左右对齐（票 10，`.scratch/tui-feedback/spec.md` §11）。
+///
 /// 它是一个**提示**，不是一个问题：它从不会把某个键从草稿那里拿走，而它确实占着的键（`↑`、
 /// `↓`、`Tab`、`Enter`）只在它立着时才有。
 fn draw_menu(
@@ -9994,23 +9997,18 @@ fn draw_menu(
     };
     let visible = &menu.entries[first..first + room];
 
-    // 左右各一列内边距，名字列与最宽的名字一样宽，然后两个空格，然后是放得下的描述。
+    // 名字列与最宽的那个名字一样宽，于是描述从同一列起 —— 那一列是**排版**的事，与框多宽无关。
     let name_width = visible
         .iter()
         .map(|entry| text_columns(&entry.name) + 1)
         .max()
         .unwrap_or(0);
-    // 一行实际要占的列数：一列左内边距 + 名字列（`/名字` 补齐到最宽的那个名字）+ 两列间隔
-    // + 描述 + 一列右内边距 + 行尾那一列「不碰边框」的留白。少算最后那一列时，最长的一条
-    // 会掉最后两个字 —— 宽度上限抬到多少都救不了它（`.scratch/tui-feedback/spec.md` §11）。
-    let widest = visible
-        .iter()
-        .map(|entry| name_width + 5 + text_columns(&entry.description))
-        .max()
-        .unwrap_or(0);
-    let width = (widest as u16).min(layout::MENU_MAX_WIDTH);
+    // 框多宽由布局定，而且是**整个对话区**那么宽（[`layout::Regions::menu_width`]，票 10）——
+    // 菜单于是与它浮着的那一行输入区左右对齐，不再是一块随候选长短漂的浮层。这里只据此算出内容
+    // 宽度：左右各一列边框，行尾那一列「不碰边框」的留白是 [`menu_row`] 自己的事。
+    let width = panes.menu_width();
     let inner = width.saturating_sub(2) as usize;
-    let Some(area) = panes.menu(anchor, width, room as u16) else {
+    let Some(area) = panes.menu(anchor, room as u16) else {
         return;
     };
 
