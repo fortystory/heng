@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// payload 的形状一变它就涨；跨版本不承诺任何向后兼容。它只是**记号** —— 代码里没有任何
 /// 按版本分派的读取逻辑，兼容性完全由 serde 的形状给出。
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// 定义一个透明序列化的自有字符串标识。
 ///
@@ -367,6 +367,20 @@ pub enum EventPayload {
     CommandRun {
         text: String,
     },
+    /// 人给这场会话起的一个名字（`.scratch/session-tab/spec.md` §4 与决策票 01）。
+    ///
+    /// **只追加**，所以**当前标题 = 流上最后一条**（与目标、`todo` 同一条派生纪律）。自动
+    /// 派生（首条用户消息首行）**不落流**：它每次进程启动重算一遍，只在进程内缓存 —— 落盘
+    /// 就是给标题造第二处真相。
+    ///
+    /// **空串即撤回**：这一条之后不再有手动标题，回落派生。撤回也必须写下这一条，否则最后
+    /// 一条手动标题仍然生效。
+    ///
+    /// **log-only**：投影不把它变成任何一条 `messages`，所以模型读不到自己的名字，前缀缓存
+    /// 也不受它影响（[ADR 0019] 那条先例）。`title` 是人敲的散文，打码。
+    SessionTitled {
+        title: String,
+    },
     /// 这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
     ///
     /// **只追加**，所以**当前目标 = 流上最后一条** —— 切换目标天然就是再记一条，与 `todo`
@@ -514,6 +528,7 @@ impl EventPayload {
             EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
             EventPayload::CommandRun { .. } => "CommandRun",
+            EventPayload::SessionTitled { .. } => "SessionTitled",
             EventPayload::GoalSelected { .. } => "GoalSelected",
             EventPayload::GoalStopped { .. } => "GoalStopped",
             EventPayload::GoalCompleted { .. } => "GoalCompleted",
@@ -559,6 +574,8 @@ impl EventPayload {
             EventPayload::ContextInjected { content, .. } => redactor.redact(content),
             // 命令原文是人敲的那一行散文：粘进 `/goal-new` 的来源路径也在里面，所以打码。
             EventPayload::CommandRun { text } => redactor.redact(text),
+            // 标题是人敲的散文（可能就是带密钥的那一行），照命令原文同一条处理。
+            EventPayload::SessionTitled { title } => redactor.redact(title),
             // 汇总要打码：它是人写的那类叙述文本，而 `goal` 是键，不动。
             EventPayload::GoalCompleted { summary, .. } => redactor.redact(summary),
             // 同上：说明是散文，`goal`、条目 id 与那个计数都是键。

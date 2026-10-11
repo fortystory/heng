@@ -579,6 +579,9 @@ impl Transcript {
             EventPayload::CommandRun { text } => {
                 blocks.push(Block::CommandRun { text });
             }
+            // 名字是会话的元数据、不是一块内容：转录里不画它
+            // （`.scratch/session-tab/spec.md` §4）。
+            EventPayload::SessionTitled { .. } => {}
             // 归属也是**只进日志**的记账：给人看的那一句由循环发（「开始做目标 <名字>」），而这
             // 条事件说的是这个会话在为谁干活。清单本身以一次上下文注入到达，那一行由
             // `ContextInjected` 画出来。

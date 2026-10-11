@@ -18,9 +18,11 @@ use std::sync::{Arc, Mutex};
 pub mod ledger;
 pub mod observe;
 pub mod store;
+pub mod titles;
 
 pub use ledger::DayLedger;
 pub use store::{SessionStore, StoredSession, new_session_id};
+pub use titles::{TitleCache, derive, fallback_title, normalize, title_of};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;

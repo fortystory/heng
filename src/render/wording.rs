@@ -3281,6 +3281,25 @@ pub fn show_needs_id() -> &'static str {
     "sessions show 需要会话 id"
 }
 
+/// 没有 id 的 `sessions title`。
+pub fn title_needs_id() -> &'static str {
+    "sessions title 需要会话 id"
+}
+
+/// 没有文本的 `sessions title`。
+pub fn title_needs_text() -> &'static str {
+    "sessions title 需要一段标题（空串即撤回）"
+}
+
+/// 改完名之后那一行回执。撤回与改名各说一句，因为它们的后果不同。
+pub fn title_changed(id: &str, title: &str) -> String {
+    if title.is_empty() {
+        format!("会话 {id} 的标题已撤回")
+    } else {
+        format!("会话 {id} 现在叫「{title}」")
+    }
+}
+
 /// 没有 id 的 `sessions replay`。
 pub fn replay_needs_id() -> &'static str {
     "sessions replay 需要会话 id"
@@ -3745,6 +3764,8 @@ pub fn help_sessions() -> String {
      （它遵守 --round/--speaker/--tool）。\n  \
      replay <id> --speaker X [--round N] [--model ID] [--json]\n      \
      只从事件流重算某一次调用发给 provider 的内容。\n  \
+     title <id> <text>\n      \
+     给一场会话改名；空串即撤回，回落自动派生。\n  \
      stats <id> [--model ID] [--json]\n      \
      固定的指标集（token、费用、缺席率、编辑匹配层级的降级）。\n\n  \
      标准输出只放结果，诊断走标准错误。"

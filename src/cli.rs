@@ -24,8 +24,8 @@ use ratatui::buffer::CellWidth;
 use crate::agent::{CancelSignal, UndoOutcome, replay};
 use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap, ReasoningEffort};
 use crate::events::{
-    ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage, read_events,
-    total_usage,
+    ContextSource, Event, EventLog, EventPayload, SessionId, SpeakerId, StopReason, Usage,
+    read_events, total_usage,
 };
 use crate::mcp::{self, McpService};
 use crate::permissions::{Mode, Policy};
@@ -39,8 +39,8 @@ use crate::render::{
     PickerOption, PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
-use crate::session::{SessionStore, StoredSession};
-use crate::tools::{self, PathLocks, Registry, Sandbox};
+use crate::session::{SessionStore, StoredSession, titles};
+use crate::tools::{self, Registry, Sandbox};
 use crate::web::WebService;
 use crate::web::fetch_http::HttpFetch;
 use crate::web::search_deepseek::{DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch};
@@ -3286,6 +3286,9 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
 struct SessionsArgs {
     verb: String,
     id: Option<String>,
+    /// `sessions title` 的那一段文本：`None` 与空串不同 —— 前者是「没给」，
+    /// 后者是「撤回」（决策票 01 §3）。
+    title: Option<String>,
     all: bool,
     files: bool,
     only_error: bool,
@@ -3345,6 +3348,10 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
             }
             other if parsed.verb.is_empty() => parsed.verb = other.to_owned(),
             other if parsed.id.is_none() => parsed.id = Some(other.to_owned()),
+            // `sessions title <id> <text>` 是唯一带第二个位置参数的动词。
+            other if parsed.verb == "title" && parsed.title.is_none() => {
+                parsed.title = Some(other.to_owned())
+            }
             other => return Err(render::wording::extra_argument(other)),
         }
         index += 1;
@@ -3379,6 +3386,7 @@ pub fn run_sessions(
         "ls" => sessions_ls(&parsed, env, out, err),
         "show" => sessions_show(&parsed, env, out),
         "replay" => sessions_replay(&parsed, env, out),
+        "title" => sessions_title(&parsed, env, out),
         "stats" => sessions_stats(&parsed, env, out),
         "" => {
             let _ = writeln!(err, "heng: {}", render::wording::sessions_needs_verb());
@@ -3603,6 +3611,44 @@ fn pad_start(text: &str, width: usize) -> String {
         return text.to_owned();
     }
     format!("{}{text}", " ".repeat(width - used))
+}
+
+/// `sessions title <id> <text>`：给一场会话改名。
+///
+/// 写下的是**一条新事件**（`SessionTitled`），所以改名可重放、也能被 `-c` 带上 —— 标题不是
+/// 界面里的一份临时状态（`.scratch/session-tab/spec.md` §4）。空串（或归一化之后为空）就是
+/// **撤回**：那一条照样要写，否则最后一条手动标题仍然生效（决策票 01 §3）。
+///
+/// **已知限制**：别在一场会话正跑着时用 CLI 改它的名。`EventLog::append` 的 `next_seq` 是打开
+/// 时按 `events.len() + 1` 算的，两个进程各持自己的那个数就会写出重复 `seq`。本图不为改名
+/// 引入文件锁（决策票 01 §9）。
+fn sessions_title(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
+    let store = open_store(env)?;
+    let cwd = search_cwd(parsed)?;
+    let id = parsed
+        .id
+        .as_deref()
+        .ok_or_else(render::wording::title_needs_id)?;
+    let raw = parsed
+        .title
+        .as_deref()
+        .ok_or_else(render::wording::title_needs_text)?;
+    let session = find_session(&store, &cwd, id)?;
+    let title = titles::normalize(raw).unwrap_or_default();
+    let mut log = EventLog::open(&session.log_path).map_err(|error| {
+        render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
+    })?;
+    log.append(
+        SpeakerId::User,
+        EventPayload::SessionTitled {
+            title: title.clone(),
+        },
+    )
+    .map_err(|error| {
+        render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
+    })?;
+    let _ = writeln!(out, "{}", render::wording::title_changed(id, &title));
+    Ok(())
 }
 
 fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {

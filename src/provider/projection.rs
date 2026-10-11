@@ -79,6 +79,9 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // 命令记录同样只进日志（`.scratch/command-echo/spec.md`）：它是**手势**，不是用户
             // 说的话 —— 模型不该读到自己从没听见过的 `/clear`、`/undo`。
             EventPayload::CommandRun { .. } => {}
+            // 会话的名字是这个会话的元数据，不是它说过的一句话：模型读不到自己的名字
+            // （`.scratch/session-tab/spec.md` §4、决策票 01 §8）。
+            EventPayload::SessionTitled { .. } => {}
             // 钉住的注入属于钉住的开头，绝不与发言合并：它必须每一回合都看起来一模一样，前缀缓存
             // 才能继续命中（spec §5、§10）。开头那几条注入 —— 项目规矩与技能清单 —— 是**一条**
             // `user` 消息（spec §10、决定 09：「与 AGENTS.md 同一条」），所以连续的一串注入合并成

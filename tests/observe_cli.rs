@@ -15,7 +15,7 @@ use heng::cli::run_sessions;
 use heng::config::EnvMap;
 use heng::events::{
     EventLog, EventPayload, Role, RoundMode, SCHEMA_VERSION, SessionId, SpeakerId, StopReason,
-    ToolCallId,
+    ToolCallId, read_events,
 };
 use heng::session::SessionStore;
 use heng::tools::{MATCH_LEVEL_PREFIX, WROTE_PATH_PREFIX};
@@ -371,4 +371,45 @@ fn show_reports_a_command_record_on_its_own_line() {
     let (code, out, _) = run(&fixture, &["show", fixture.id.as_str()]);
     assert_eq!(code, ExitCode::SUCCESS);
     assert!(out.contains("[命令] /model kimi-k3"), "{out}");
+}
+
+#[test]
+fn the_title_verb_writes_a_new_event_and_an_empty_one_withdraws_it() {
+    // 改名落的是**一条新事件**（`.scratch/session-tab/spec.md` §4）：它可重放、也能被 `-c`
+    // 带上，所以读回来要能看见它。空串是撤回 —— 也得写下来，否则最后一条手动标题仍然生效。
+    let fixture = fixture();
+    let (code, out, err) = run(&fixture, &["title", fixture.id.as_str(), "左栏会话页"]);
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(out.contains("左栏会话页"), "{out}");
+    assert!(err.is_empty(), "诊断留在 stderr 上：{err}");
+
+    let events = read_events(&fixture.log_path).unwrap();
+    let titled: Vec<&String> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::SessionTitled { title } => Some(title),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(titled.len(), 1, "改名只落一条：{titled:?}");
+    assert_eq!(titled[0], "左栏会话页");
+
+    let (code, out, _) = run(&fixture, &["title", fixture.id.as_str(), ""]);
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(out.contains("撤回"), "空串的回执说撤回：{out}");
+    let events = read_events(&fixture.log_path).unwrap();
+    let last = events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::SessionTitled { title } => Some(title.clone()),
+        _ => None,
+    });
+    assert_eq!(last.as_deref(), Some(""), "撤回也是一条事件");
+}
+
+#[test]
+fn the_title_verb_without_text_says_what_is_missing() {
+    let fixture = fixture();
+    let (code, out, err) = run(&fixture, &["title", fixture.id.as_str()]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(out.is_empty(), "{out}");
+    assert!(err.contains("标题"), "{err}");
 }

@@ -47,8 +47,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tokio::task::JoinHandle;
-
 use crate::agent::{CancelSignal, TurnOutcome};
 use crate::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
 use crate::context::skills::Skills;
@@ -59,7 +57,7 @@ use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Provider;
 use crate::questions::UserQuestions;
-use crate::render::{RenderChannel, RenderHandle, Renderer};
+use crate::render::{RenderChannel, RenderHandle};
 use crate::session::{Session, SessionParts, StoredSession};
 use crate::tools::sandbox;
 use crate::tools::{PathLocks, Registry};
