@@ -73,10 +73,13 @@ where
         provider: Box::new(FakeProvider::new(replies)),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-workspace"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),
@@ -458,10 +461,13 @@ async fn assembly_error(sandbox: SandboxSettings) -> String {
         provider: Box::new(FakeProvider::new(vec![Reply::text("unused")])),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-workspace"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace,
             log_path: session.join("log.jsonl"),

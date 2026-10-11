@@ -532,10 +532,13 @@ async fn fixture_with_configs(
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(stdout.clone()),
-            stderr_diagnostic: Box::new(stderr.clone()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(stdout.clone()),
+                stderr_diagnostic: Box::new(stderr.clone()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
     })
     .await
     .unwrap();
@@ -750,10 +753,13 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
     })
     .await;
 
@@ -803,10 +809,13 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
     })
     .await;
 
@@ -858,10 +867,13 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
     })
     .await;
 
@@ -1516,10 +1528,13 @@ async fn session_fixture(replies: Vec<Reply>) -> SessionFixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
         scaffold: SessionScaffold {
             cwd: dir.path().to_path_buf(),
             log_path: log_path.clone(),

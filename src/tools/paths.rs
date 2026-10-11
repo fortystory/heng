@@ -273,3 +273,38 @@ impl PathLocks {
         self.exclusive.clone().lock_owned().await
     }
 }
+
+/// **进程级**的路径锁表：一个 cwd 一张 [`PathLocks`]。
+///
+/// 为什么按 cwd 分表：那把工作区级的 `exclusive` 锁的意思是「同一时刻没有别的工作」，而
+/// 「工作」的边界是**检出** —— 两个不同 cwd 的会话不该互相阻塞。反过来，同一个 cwd 的两场
+/// 会话必须拿到**同一张**表，否则两个执行者会同时写一个文件，那与没有锁是一回事
+/// （`.scratch/session-tab/spec.md` §1、票 13）。
+///
+/// 克隆共享同一张表（内部是一个 `Arc`）。它是组装层的一个值，不是库里的全局量：库不读环境、
+/// 也不持全局状态。
+#[derive(Debug, Clone, Default)]
+pub struct PathLockTable {
+    table: Arc<Mutex<HashMap<PathBuf, PathLocks>>>,
+}
+
+impl PathLockTable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 这个 cwd 的那张锁表。
+    ///
+    /// 键取**规范化**后的 cwd：同一个目录经不同写法（相对 / 绝对 / 夹着 `.`）必须落到同一
+    /// 行，否则「同 cwd 共享一张」就退化成「字符串碰巧相等」。规范化失败（目录还没建出来）
+    /// 就退回原样的路径 —— 那种 cwd 本来就装不成一场会话。
+    pub fn locks(&self, cwd: &Path) -> PathLocks {
+        let key = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        self.table
+            .lock()
+            .expect("路径锁表已中毒")
+            .entry(key)
+            .or_default()
+            .clone()
+    }
+}

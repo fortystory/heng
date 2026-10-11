@@ -326,3 +326,83 @@ pub fn channel(session: SessionId) -> (RenderHandle, broadcast::Receiver<RenderE
     let (sender, receiver) = broadcast::channel(RENDER_CHANNEL_CAPACITY);
     (RenderHandle { session, sender }, receiver)
 }
+
+/// **进程级**的渲染端：那条唯一的通道，以及拥有它的那个任务。
+///
+/// 渲染器只能起一次 —— 它占着终端与键盘 —— 所以它不是一场会话的东西，而是整个进程的
+/// 东西（`.scratch/session-tab/spec.md` §1）。一场会话从它这里取一个带自己身份的
+/// [`RenderHandle`]（[`RenderChannel::handle`]），多场会话因此共用同一个渲染器与同一块
+/// 屏幕，而每一场说得出自己是谁。
+///
+/// 克隆很便宜：内部是一份 `Arc`，克隆之间共享同一个渲染任务。
+#[derive(Clone)]
+pub struct RenderChannel {
+    inner: std::sync::Arc<RenderChannelInner>,
+}
+
+struct RenderChannelInner {
+    /// 进程启动那一场的身份。plain 在 `Lagged` 时自己造一条诊断，而那时手边只有这个值
+    /// —— 多会话本来也不走 plain（会话页只在 TUI 左栏）。
+    session: SessionId,
+    /// 通道那一份发送端。它在 `Option` 里，因为收尾时**必须**把它放掉：渲染任务靠
+    /// 「没有写端了」结束，而握着写端去 await 任务就是死锁（票 13 实现期踩到的那一个）。
+    /// 每一场会话从它克隆出自己那份 [`RenderHandle`]，所以放掉它不影响会话的写端。
+    sender: std::sync::Mutex<Option<broadcast::Sender<RenderEvent>>>,
+    /// 那个唯一的渲染任务。收尾时取走它并 await：任务要等**每一个**写端都丢掉才返回，
+    /// 所以「等渲染器把缓冲写完」在多会话下依然是同一句话（票 13）。
+    task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+}
+
+impl RenderChannel {
+    /// 起那唯一一个渲染器。这是一个进程做的**第一件事**，而它只做一次。
+    pub fn start(renderer: Renderer, session: SessionId) -> Self {
+        let (sender, receiver) = broadcast::channel(RENDER_CHANNEL_CAPACITY);
+        let task = renderer.spawn(receiver, session.clone());
+        Self {
+            inner: std::sync::Arc::new(RenderChannelInner {
+                session,
+                sender: std::sync::Mutex::new(Some(sender)),
+                task: tokio::sync::Mutex::new(Some(task)),
+            }),
+        }
+    }
+
+    /// 进程启动那一场的身份。
+    pub fn session(&self) -> &SessionId {
+        &self.inner.session
+    }
+
+    /// 给一场会话一个带身份的写端。
+    ///
+    /// 通道收尾之后给不出了（那时渲染任务正在等所有写端消失），所以这里 `expect` 一下：
+    /// 唯一会调它的地方是组装，而组装在收尾之前。
+    pub fn handle(&self, session: SessionId) -> RenderHandle {
+        let sender = self
+            .inner
+            .sender
+            .lock()
+            .expect("渲染通道的写端槽已中毒")
+            .clone()
+            .expect("渲染通道已经收尾，给不出新的写端");
+        RenderHandle { session, sender }
+    }
+
+    /// 等那个渲染任务收尾。
+    ///
+    /// 顺序是关键：先放掉**通道那一份**写端，再 await 任务。任务要等每一个
+    /// [`RenderHandle`] 都被丢掉才返回，所以调用方同样得先把自己的那份放掉
+    /// （[`crate::Harness::shutdown`] 就是这么做的）。
+    pub async fn shutdown(&self) {
+        drop(
+            self.inner
+                .sender
+                .lock()
+                .expect("渲染通道的写端槽已中毒")
+                .take(),
+        );
+        let task = self.inner.task.lock().await.take();
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
+}

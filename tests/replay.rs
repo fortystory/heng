@@ -99,10 +99,13 @@ async fn discussion(
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds: None,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(stdout),
-            stderr_diagnostic: Box::new(stderr),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(stdout),
+                stderr_diagnostic: Box::new(stderr),
+            }),
+            heng::events::SessionId::new("s-replay"),
+        ),
     })
     .await
     .unwrap();
@@ -238,10 +241,13 @@ async fn solo(replies: Vec<Reply>) -> SoloFixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("solo".into()),
         config: SessionConfig::new("fake-model"),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(stdout),
-            stderr_diagnostic: Box::new(stderr),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(stdout),
+                stderr_diagnostic: Box::new(stderr),
+            }),
+            heng::events::SessionId::new("s-replay"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace,
             log_path: session.join("log.jsonl"),

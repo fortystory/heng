@@ -411,6 +411,13 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
         })
     };
+    // 渲染器整个进程只起一次：它是**进程级**的值，会话从它取一个带自己身份的写端
+    // （`.scratch/session-tab/spec.md` §1、票 13）。
+    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
+    // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
+    let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
+    let channel = crate::render::RenderChannel::start(renderer, stored.id.clone());
     let mut harness = match assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
@@ -419,7 +426,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // 工具表在上面、在渲染器之前就建好了，就是这一张（内建的那些加上每一个动态声明的
             // 工具，spec §14）。
             tools,
-            locks: PathLocks::new(),
+            locks: path_locks,
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
             policy: Policy::for_mode(mode).with_outside_read(config.outside_read),
@@ -431,7 +438,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater(profile.name.clone().into()),
         config: session_config,
-        renderer,
+        render: channel,
     })
     .await
     {
@@ -774,6 +781,12 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     // `ConsoleRequest::RunState` 记下的那条相同。
     console.set_running(true);
 
+    // 与单 agent 那条同一条纪律：渲染器是进程级的（票 13）。
+    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
+    // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
+    let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
+    let channel = crate::render::RenderChannel::start(renderer, stored.id.clone());
     let mut harness = match assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
             cwd,
@@ -781,7 +794,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             session_id: stored.id.clone(),
             // 工具表在上面、渲染器之前就建好了，就是这一张。
             tools,
-            locks: PathLocks::new(),
+            locks: path_locks,
             // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
             // §15）。
             policy: Policy::for_mode(config.mode).with_outside_read(config.outside_read),
@@ -793,7 +806,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         debaters,
         synthesizer,
         max_rounds: roster.max_rounds,
-        renderer,
+        render: channel,
     })
     .await
     {
@@ -2944,11 +2957,24 @@ async fn probe_model(
         .session_config(model_id)
         .map_err(ProbeError::failed)?;
     let mcp = mcp_service(config, &dir, env, home, None).await;
+    let probe_session = SessionId::new(format!("probe-{model_id}"));
+    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
+    // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
+    let path_locks = crate::tools::PathLockTable::new().locks(&dir);
+    let channel = crate::render::RenderChannel::start(
+        Renderer::headless(RenderSinks {
+            // 探针把自己的报告打在 stdout 上；渲染器只往 stderr 叙述。
+            stdout_result: Box::new(std::io::sink()),
+            stderr_diagnostic: Box::new(std::io::stderr()),
+        }),
+        probe_session.clone(),
+    );
     let mut harness = assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: dir,
             log_path: log_path.clone(),
-            session_id: SessionId::new(format!("probe-{model_id}")),
+            session_id: probe_session,
             // 探针要跑真实回合，所以给它真实的工具表 —— 除了 `ask_user_question`：无头没有应答者，
             // 而一个只能失败的工具会白白浪费一次模型调用（spec §19）。
             tools: tools::with_mcp(
@@ -2958,7 +2984,7 @@ async fn probe_model(
                 ),
                 mcp,
             ),
-            locks: PathLocks::new(),
+            locks: path_locks,
             // 探针是无头的、没有应答者，所以配置那一档的 `ask`（默认）会拒掉写，而不是挂在一个谁也
             // 看不见的问题上。
             policy: Policy::for_mode(config.mode).with_outside_read(config.outside_read),
@@ -2971,11 +2997,7 @@ async fn probe_model(
         provider: Box::new(provider),
         speaker: SpeakerId::Debater(profile.name.clone().into()),
         config: session_config,
-        renderer: Renderer::headless(RenderSinks {
-            // 探针把自己的报告打在 stdout 上；渲染器只往 stderr 叙述。
-            stdout_result: Box::new(std::io::sink()),
-            stderr_diagnostic: Box::new(std::io::stderr()),
-        }),
+        render: channel,
     })
     .await
     .map_err(ProbeError::failed)?;
@@ -4355,10 +4377,13 @@ mod tests {
             ),
             speaker: SpeakerId::Debater("kimi".into()),
             config: config.session_config("kimi-k3").expect("kimi-k3 在配置里"),
-            renderer: crate::render::Renderer::headless(crate::render::RenderSinks {
-                stdout_result: Box::new(std::io::sink()),
-                stderr_diagnostic: Box::new(stderr.clone()),
-            }),
+            render: crate::render::RenderChannel::start(
+                crate::render::Renderer::headless(crate::render::RenderSinks {
+                    stdout_result: Box::new(std::io::sink()),
+                    stderr_diagnostic: Box::new(stderr.clone()),
+                }),
+                crate::events::SessionId::new("s-1"),
+            ),
             scaffold: crate::SessionScaffold {
                 cwd,
                 log_path: dir.path().join("log.jsonl"),
@@ -5415,10 +5440,13 @@ mod tests {
             provider: Box::new(NoCalls),
             speaker: SpeakerId::Debater("kimi".into()),
             config: SessionConfig::new("fake-model"),
-            renderer: Renderer::headless(RenderSinks {
-                stdout_result: Box::new(std::io::sink()),
-                stderr_diagnostic: Box::new(std::io::sink()),
-            }),
+            render: crate::render::RenderChannel::start(
+                Renderer::headless(RenderSinks {
+                    stdout_result: Box::new(std::io::sink()),
+                    stderr_diagnostic: Box::new(std::io::sink()),
+                }),
+                stored.id.clone(),
+            ),
             scaffold: SessionScaffold {
                 cwd: workspace.clone(),
                 log_path: stored.log_path.clone(),
@@ -5501,10 +5529,13 @@ mod tests {
             provider: Box::new(NoCalls),
             speaker: SpeakerId::Debater("kimi".into()),
             config: SessionConfig::new("fake-model"),
-            renderer: Renderer::headless(RenderSinks {
-                stdout_result: Box::new(std::io::sink()),
-                stderr_diagnostic: Box::new(std::io::sink()),
-            }),
+            render: crate::render::RenderChannel::start(
+                Renderer::headless(RenderSinks {
+                    stdout_result: Box::new(std::io::sink()),
+                    stderr_diagnostic: Box::new(std::io::sink()),
+                }),
+                stored.id.clone(),
+            ),
             scaffold: SessionScaffold {
                 cwd: workspace.clone(),
                 log_path: stored.log_path.clone(),
@@ -5652,10 +5683,13 @@ mod tests {
             provider: Box::new(NoCalls),
             speaker: SpeakerId::Debater("kimi".into()),
             config: SessionConfig::new("fake-model").with_session_token_limit(0),
-            renderer: Renderer::headless(RenderSinks {
-                stdout_result: Box::new(std::io::sink()),
-                stderr_diagnostic: Box::new(std::io::sink()),
-            }),
+            render: crate::render::RenderChannel::start(
+                Renderer::headless(RenderSinks {
+                    stdout_result: Box::new(std::io::sink()),
+                    stderr_diagnostic: Box::new(std::io::sink()),
+                }),
+                stored.id.clone(),
+            ),
             scaffold: SessionScaffold {
                 cwd: workspace.clone(),
                 log_path: stored.log_path.clone(),

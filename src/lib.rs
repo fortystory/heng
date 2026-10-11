@@ -59,7 +59,7 @@ use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Provider;
 use crate::questions::UserQuestions;
-use crate::render::{RenderHandle, Renderer};
+use crate::render::{RenderChannel, RenderHandle, Renderer};
 use crate::session::{Session, SessionParts, StoredSession};
 use crate::tools::sandbox;
 use crate::tools::{PathLocks, Registry};
@@ -107,9 +107,10 @@ pub struct AssemblyParts {
     pub speaker: SpeakerId,
     /// 这个 agent 的模型与预算值。
     pub config: SessionConfig,
-    /// 渲染器，启动时选定。三种模式正好跑一种，而组装只创建它要消费的那一条通道
-    /// （spec §19）。
-    pub renderer: Renderer,
+    /// **进程级**的渲染端（票 13）：那个唯一的渲染器与拥有它的任务。一场会话从它取一个
+    /// 带自己身份的写端 —— 渲染器只能起一次，所以它不是一场会话的东西
+    /// （`.scratch/session-tab/spec.md` §1）。
+    pub render: RenderChannel,
 }
 
 /// 一次讨论里的一个讨论者：谁发言，以及替它作答的是什么。
@@ -143,9 +144,8 @@ pub struct DiscussionParts {
     /// （[`discussion::DEFAULT_MAX_ROUNDS`]）；`Some` 是调用方改它的方式，而零是
     /// 拒掉的。
     pub max_rounds: Option<u32>,
-    /// 渲染器，启动时选定。三种模式正好跑一种，而组装只创建它要消费的那一条通道
-    /// （spec §19）。
-    pub renderer: Renderer,
+    /// **进程级**的渲染端，与 [`AssemblyParts::render`] 同一个值（票 13）。
+    pub render: RenderChannel,
 }
 
 /// 组装好之后由调用方驱动的 harness。
@@ -164,6 +164,10 @@ pub struct Harness {
     /// 这场会话自己那一端的取消手势（spec §6）。前端持有一个并举起它；各回合拿到的是
     /// 它的观察端。
     cancel: CancelSignal,
+    /// 这一场说出去的话所带的身份（票 14）。渲染端是进程级的，而写端是按会话给的。
+    render: RenderHandle,
+    /// 那个进程级的渲染端，留着只为收尾时等它（[`Harness::shutdown`]）。
+    channel: RenderChannel,
 }
 
 /// 换完模型/档位之后循环要推回前端的那几条新事实（spec §3）。
@@ -198,7 +202,8 @@ pub struct DiscussionHarness {
     /// 这台机器上有没有可用的沙箱（组装期定下来的那一件事）。`workspace` 档在循环里
     /// 会不会被跳过就看它，见 [`ModeCycle`]。
     workspace_available: bool,
-    render_task: JoinHandle<()>,
+    /// 那个进程级的渲染端，留着只为收尾时等它（票 13）。
+    channel: RenderChannel,
 }
 
 /// 做完它那一次性工作的脚手架：一份日志、一张工具表、一张锁表、一份策略、一个渲染器。
@@ -226,13 +231,11 @@ struct OpenedSession {
     /// 沙箱那一次探测的结果（沙箱 spec §3）：组装期探一次，这场会话开出的每一个 agent 复用同一个
     /// 答案。`mode = "off"` 或者调用方已经给了结果时，这个格子根本不会被填。
     sandbox_probe: OnceLock<SandboxAvailability>,
-    render: RenderHandle,
-    render_task: JoinHandle<()>,
 }
 
 impl OpenedSession {
     /// 那一次性工作：建日志与它的产物目录、发现技能、共享工具表与策略、起渲染器。
-    fn open(scaffold: SessionScaffold, renderer: Renderer) -> Result<Self, Error> {
+    fn open(scaffold: SessionScaffold) -> Result<Self, Error> {
         let SessionScaffold {
             cwd,
             log_path,
@@ -252,10 +255,6 @@ impl OpenedSession {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("outputs");
-        // 通道在这里创建，它的消费端则注入到唯一选中的那个渲染器：一个进程一个
-        // 渲染器，永远没有并发的订阅者（spec §19）。
-        let (render, receiver) = render::channel(session_id.clone());
-        let render_task = renderer.spawn(receiver, session_id.clone());
         // 全新还是继续，由日志是否存在决定，而那是调用方的决定：它交过来的是它刚在新
         // session id 下分配的一条路径，或是更早一次运行留下的那份。这样库就不用去读环境
         // 旗标（spec §1），同时 `--continue` 仍然只有一条代码路径（spec §11）。
@@ -287,8 +286,6 @@ impl OpenedSession {
             agents_md,
             resuming,
             sandbox_probe: OnceLock::new(),
-            render,
-            render_task,
         })
     }
 
@@ -345,17 +342,17 @@ impl OpenedSession {
     /// 继续的流**不会**得到第二条 `SessionStarted`、也不会重新注入上下文 —— 两者都已经
     /// 在日志里，而重放记下来的头部正是让这次继续在前缀缓存面前逐字节稳定的原因
     /// （spec §10、§11）。
-    fn start(&self, session: &mut Session) -> Result<(), Error> {
+    fn start(&self, session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
         if !self.resuming {
-            return self.record_skeleton(session);
+            return self.record_skeleton(session, render);
         }
         // 继续的流不再记骨架，但沙箱状态是**这一刻**的事实：两次运行之间这台机器上的
         // `bwrap` 可能变得可用、也可能用不了了，而它只进日志、不进 `messages`，所以补记
         // 一条不碰前缀稳定性（`spec §8`）。
-        self.record_sandbox_status(session)?;
-        let recovered = agent::recover_pending_calls(session, &self.render)?;
+        self.record_sandbox_status(session, render)?;
+        let recovered = agent::recover_pending_calls(session, render)?;
         if recovered > 0 {
-            self.render.diagnostic(&format!(
+            render.diagnostic(&format!(
                 "继续的会话：收尾了 {recovered} 个结果未知的中断工具调用"
             ));
         }
@@ -364,7 +361,11 @@ impl OpenedSession {
 
     /// 把这一刻的沙箱状态记进流里（沙箱 spec §8）：**只进日志**，投影不把它变成
     /// `messages`，所以钉住的前缀逐字不变。
-    fn record_sandbox_status(&self, session: &mut Session) -> Result<(), Error> {
+    fn record_sandbox_status(
+        &self,
+        session: &mut Session,
+        render: &RenderHandle,
+    ) -> Result<(), Error> {
         let (mode, reason) = {
             let sandbox = &session.config().sandbox;
             let reason = match &sandbox.availability {
@@ -373,7 +374,7 @@ impl OpenedSession {
             };
             (sandbox.mode, reason)
         };
-        agent::record_sandbox_status(session, &self.render, mode, reason.as_deref())
+        agent::record_sandbox_status(session, render, mode, reason.as_deref())
     }
 
     /// 通过其中一场会话记下会话骨架：`SessionStarted`，然后那两条钉住的注入。
@@ -381,21 +382,16 @@ impl OpenedSession {
     /// 身份 -> 规则 -> 技能清单 -> 历史（spec §10）。缺 `AGENTS.md` 不是错误，只表示
     /// 没有那条注入。每条流正好有一场会话做这件事，一次讨论的所有讨论者因此投影出同一个
     /// 钉住的头部。
-    fn record_skeleton(&self, session: &mut Session) -> Result<(), Error> {
-        agent::record_session_started(session, &self.render)?;
-        self.record_sandbox_status(session)?;
+    fn record_skeleton(&self, session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
+        agent::record_session_started(session, render)?;
+        self.record_sandbox_status(session, render)?;
         if let Some(content) = &self.agents_md {
-            agent::record_context_injection(
-                session,
-                &self.render,
-                ContextSource::AgentsMd,
-                content,
-            )?;
+            agent::record_context_injection(session, render, ContextSource::AgentsMd, content)?;
         }
         if let Some(catalog) = self.skills.catalog() {
             agent::record_context_injection(
                 session,
-                &self.render,
+                render,
                 ContextSource::SkillsCatalog,
                 &catalog,
             )?;
@@ -469,14 +465,16 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         provider,
         speaker,
         config,
-        renderer,
+        render,
     } = parts;
 
     workspace_needs_a_sandbox(scaffold.policy.mode(), &config.sandbox, &scaffold.cwd)?;
 
-    let opened = OpenedSession::open(scaffold, renderer)?;
+    // 这一场说出去的话所带的身份：进程级渲染端给出一个按会话的写端（票 13）。
+    let handle = render.handle(scaffold.session_id.clone());
+    let opened = OpenedSession::open(scaffold)?;
     let mut session = opened.session(config, Some(agent::agent_identity()));
-    opened.start(&mut session)?;
+    opened.start(&mut session, &handle)?;
 
     Ok(Harness {
         opened,
@@ -484,6 +482,8 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         provider: provider.into(),
         speaker,
         cancel: CancelSignal::new(),
+        render: handle,
+        channel: render,
     })
 }
 
@@ -632,7 +632,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         debaters,
         synthesizer,
         max_rounds,
-        renderer,
+        render,
     } = parts;
 
     let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
@@ -647,7 +647,8 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
     let workspace_available =
         sandbox_unavailable_reason(&debaters[0].config.sandbox, &scaffold.cwd).is_none();
 
-    let opened = OpenedSession::open(scaffold, renderer)?;
+    let handle = render.handle(scaffold.session_id.clone());
+    let opened = OpenedSession::open(scaffold)?;
 
     let (mut roster, synthesizer) =
         discussion_participants(debaters, synthesizer, |config, identity| {
@@ -656,25 +657,25 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
     // 第一场会话为整条流记下骨架，或者在继续时收尾更早那个进程留下没答完的调用：它就是
     // 每个讨论者随后要投影的那个会话级头部。
     if let Some(first) = roster.first_mut() {
-        opened.start(&mut first.session)?;
+        opened.start(&mut first.session, &handle)?;
     }
 
     let policy = Arc::clone(&opened.policy);
     Ok(DiscussionHarness {
         discussion: agent::Discussion::new(roster, synthesizer, max_rounds),
         log: opened.log.clone(),
-        render: opened.render,
+        render: handle,
         cancel: CancelSignal::new(),
         policy,
         workspace_available,
-        render_task: opened.render_task,
+        channel: render,
     })
 }
 
 impl Harness {
     /// 记下一条用户消息，并把一个回合跑到结束。
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
-        agent::record_user_message(&mut self.session, &self.opened.render, user_input)?;
+        agent::record_user_message(&mut self.session, &self.render, user_input)?;
         self.drive_turn().await
     }
 
@@ -692,7 +693,7 @@ impl Harness {
             &mut self.session,
             &self.speaker,
             &self.provider,
-            &self.opened.render,
+            &self.render,
             agent::TurnScope::Whole,
             &cancelled,
         )
@@ -734,7 +735,7 @@ impl Harness {
         // 一次讨论就是一次运行，像一个回合：手势从干净的地方开始。
         self.cancel.reset();
         let cancelled = self.cancel.observer();
-        agent::run_discussion(&mut discussion, &self.opened.render, question, &cancelled).await
+        agent::run_discussion(&mut discussion, &self.render, question, &cancelled).await
     }
 
     /// **用户**在这场会话里最后问的那句话，或者 `None`。
@@ -799,7 +800,7 @@ impl Harness {
             .map_err(|error| Error::Skill(error.to_string()))?;
         agent::record_context_injection(
             &mut self.session,
-            &self.opened.render,
+            &self.render,
             ContextSource::Skill,
             &body,
         )
@@ -884,7 +885,7 @@ impl Harness {
     ///
     /// 归属是一条只追加的事件，所以当前目标永远是「流上最后一条」，而切换目标就是再记一条。
     pub fn select_goal(&mut self, goal: &str) -> Result<(), Error> {
-        agent::record_goal_selected(&mut self.session, &self.opened.render, goal)
+        agent::record_goal_selected(&mut self.session, &self.render, goal)
     }
 
     /// 记下人刚运行的那一条 `/` 命令，原文入流（`.scratch/command-echo/spec.md`）。
@@ -892,7 +893,7 @@ impl Harness {
     /// 它落**当前**会话：`/clear` 那类命令后面紧跟着一次翻页，而它自己那一条记在翻页**之前**
     /// —— 它是这场会话的最后一个手势，留在这一场里才对得上「我在这场里做过什么」。
     pub fn record_command_run(&mut self, text: &str) -> Result<(), Error> {
-        agent::record_command_run(&mut self.session, &self.opened.render, text)
+        agent::record_command_run(&mut self.session, &self.render, text)
     }
 
     /// 压缩与翻页：**一个动作**，总是成对发生（`.scratch/goal-loop/spec.md` §7）。
@@ -932,7 +933,7 @@ impl Harness {
         config.carried_tokens = 0;
         self.opened.reopen(stored)?;
         let mut session = self.opened.session(config, Some(agent::agent_identity()));
-        self.opened.start(&mut session)?;
+        self.opened.start(&mut session, &self.render)?;
         self.session = session;
         Ok(())
     }
@@ -957,7 +958,7 @@ impl Harness {
         let summary = self.single_shot(&prompt).await?;
         agent::record_history_superseded(
             &mut self.session,
-            &self.opened.render,
+            &self.render,
             targets,
             HistoryReason::Compaction,
             summary.clone(),
@@ -971,7 +972,7 @@ impl Harness {
     /// 它进流、可重放，`--continue` 之后还在。它自己投影成一条 `user` 消息，所以模型看见的
     /// 就是这段内容 —— 转录里也不会出现用户没打过的字。
     pub fn inject_context(&mut self, source: ContextSource, content: &str) -> Result<(), Error> {
-        agent::record_context_injection(&mut self.session, &self.opened.render, source, content)
+        agent::record_context_injection(&mut self.session, &self.render, source, content)
     }
 
     /// 跑一个回合，起头的是**刚刚注入的那条上下文**。
@@ -1059,7 +1060,7 @@ impl Harness {
         agent::run_single_shot(
             &mut self.session,
             provider.as_ref(),
-            &self.opened.render,
+            &self.render,
             prompt,
             &cancelled,
         )
@@ -1068,7 +1069,7 @@ impl Harness {
 
     /// 记下一个目标做完了，连同那份收尾汇总（§1、§11）。
     pub fn complete_goal(&mut self, goal: &str, summary: &str) -> Result<(), Error> {
-        agent::record_goal_completed(&mut self.session, &self.opened.render, goal, summary)
+        agent::record_goal_completed(&mut self.session, &self.render, goal, summary)
     }
 
     /// 记下一个目标停下来了，而它不是做完了（§5、§9）。
@@ -1085,7 +1086,7 @@ impl Harness {
     ) -> Result<(), Error> {
         agent::record_goal_stopped(
             &mut self.session,
-            &self.opened.render,
+            &self.render,
             goal,
             reason,
             detail,
@@ -1127,18 +1128,18 @@ impl Harness {
     /// 它走渲染通道而不是直接写终端，因为从组装那一刻起终端归渲染器：第二个写者会插进
     /// 那个活着的区域里（spec §19）。
     pub fn notice(&self, message: &str) {
-        self.opened.render.notice(message);
+        self.render.notice(message);
     }
 
     /// 渲染通道的一个廉价克隆，供那些**在一次借用之外**还要说一句话的循环手势用
     /// （理由与 [`ModeCycle`] 相同）。
     pub fn render_handle(&self) -> RenderHandle {
-        self.opened.render.clone()
+        self.render.clone()
     }
 
     /// 拼好的系统提示词摆进转录（轨迹页看得到的那一条，不进事件流）。
     pub fn identity(&self, text: &str) {
-        self.opened.render.identity(text);
+        self.render.identity(text);
     }
 
     /// 目前为止的整条流，按 `seq` 顺序。
@@ -1155,7 +1156,7 @@ impl Harness {
     /// `Ok(None)` 表示已经没有可撤销的东西了。手势只在前端存在；这是 `/undo` 调的那个
     /// 操作，而它永远不碰用户的 git。
     pub async fn undo_last_edit(&mut self) -> Result<Option<agent::UndoOutcome>, Error> {
-        agent::undo_last_edit(&mut self.session, &self.opened.render).await
+        agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
     /// 这场会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
@@ -1166,7 +1167,11 @@ impl Harness {
     /// 丢掉渲染通道，并等每一条缓冲中的渲染事件都写进接收端。对捕获的接收端做断言之前
     /// 调它。
     pub async fn shutdown(self) {
-        drain_renderer(self.opened.render, self.opened.render_task).await;
+        let Harness {
+            render, channel, ..
+        } = self;
+        drop(render);
+        channel.shutdown().await;
     }
 }
 
@@ -1212,7 +1217,11 @@ impl DiscussionHarness {
     /// 丢掉渲染通道，并等每一条缓冲中的渲染事件都写进接收端。对捕获的接收端做断言之前
     /// 调它。
     pub async fn shutdown(self) {
-        drain_renderer(self.render, self.render_task).await;
+        let DiscussionHarness {
+            render, channel, ..
+        } = self;
+        drop(render);
+        channel.shutdown().await;
     }
 
     /// 渲染通道的一个廉价克隆，供那些**在一次借用之外**还要说一句话的循环手势用。
@@ -1252,12 +1261,14 @@ impl ModeCycle {
     }
 }
 
-/// 丢掉渲染通道，并等每一条缓冲中的渲染事件都到达接收端。两个 harness 以同样的方式
-/// 收尾；一个进程一个渲染器才是「字面上就是同一个操作」的来由。
-async fn drain_renderer(render: RenderHandle, render_task: JoinHandle<()>) {
-    drop(render);
-    let _ = render_task.await;
-}
+/// 编译期断言：一场会话的 harness 要能交给一个 tokio task 拥有 —— 宿主表（票 15）会把每一场
+/// 会话钉在它自己的任务上，而 `tokio::spawn` 只收 `Send` 的 future
+/// （`.scratch/session-tab/spec.md` §1、票 13）。
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<Harness>();
+    assert_send::<DiscussionHarness>();
+};
 
 /// 停下组装或循环本身的错误。provider 的失败由循环变成 `TurnEnded { Error }`，不是这个
 /// 类型。

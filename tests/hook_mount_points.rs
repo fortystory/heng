@@ -81,10 +81,13 @@ async fn fixture_with_tools(
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(stdout.clone()),
-            stderr_diagnostic: Box::new(stderr.clone()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(stdout.clone()),
+                stderr_diagnostic: Box::new(stderr.clone()),
+            }),
+            heng::events::SessionId::new("s-hooks"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),

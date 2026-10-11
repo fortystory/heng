@@ -128,10 +128,13 @@ async fn fixture() -> Fixture {
         provider: Box::new(before.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("kimi-k3").with_reasoning_effort(ReasoningEffort::Max),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
         scaffold: SessionScaffold {
             cwd,
             log_path: dir.path().join("log.jsonl"),

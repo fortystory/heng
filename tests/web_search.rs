@@ -173,10 +173,13 @@ async fn fixture(
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-web"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace,
             log_path: log_path.clone(),

@@ -49,10 +49,13 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(stdout.clone()),
-            stderr_diagnostic: Box::new(stderr.clone()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(stdout.clone()),
+                stderr_diagnostic: Box::new(stderr.clone()),
+            }),
+            heng::events::SessionId::new("s-1"),
+        ),
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: log_path.clone(),

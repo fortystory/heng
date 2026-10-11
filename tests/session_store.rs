@@ -67,10 +67,13 @@ impl Env {
             provider: Box::new(provider),
             speaker: SpeakerId::Debater("kimi".into()),
             config: SessionConfig::new("fake-model"),
-            renderer: Renderer::headless(RenderSinks {
-                stdout_result: Box::new(self.stdout.clone()),
-                stderr_diagnostic: Box::new(self.stderr.clone()),
-            }),
+            render: heng::render::RenderChannel::start(
+                Renderer::headless(RenderSinks {
+                    stdout_result: Box::new(self.stdout.clone()),
+                    stderr_diagnostic: Box::new(self.stderr.clone()),
+                }),
+                heng::events::SessionId::new("test"),
+            ),
             scaffold: SessionScaffold {
                 cwd: self.cwd.clone(),
                 log_path: stored.log_path.clone(),

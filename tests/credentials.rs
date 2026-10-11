@@ -67,10 +67,13 @@ async fn fixture_with(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-credentials"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),
@@ -549,10 +552,13 @@ async fn a_discussion_refuses_a_roster_whose_redactors_disagree() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-credentials"),
+        ),
     })
     .await;
 

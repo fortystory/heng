@@ -49,7 +49,7 @@ pub use grep::{GREP_TOOL, GrepTool, MAX_MATCHES};
 pub use mcp_call::{MCP_CALL_TOOL, McpCallTool};
 pub use mcp_list::{MCP_LIST_TOOL, MCP_UNTRUSTED_MARKER, McpListTool};
 pub use mcp_resources::{MCP_READ_TOOL, MCP_RESOURCES_TOOL, McpReadTool, McpResourcesTool};
-pub use paths::{PathLocks, SessionPaths, write_owner_only};
+pub use paths::{PathLockTable, PathLocks, SessionPaths, write_owner_only};
 pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
     AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, READ_BEFORE_WRITE_PREFIX,

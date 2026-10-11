@@ -275,10 +275,13 @@ async fn fixture(toml: &str, replies: Vec<Reply>, policy: Policy) -> Fixture {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
         config: heng::config::SessionConfig::new("fake-model"),
-        renderer: Renderer::headless(RenderSinks {
-            stdout_result: Box::new(CaptureBuf::default()),
-            stderr_diagnostic: Box::new(CaptureBuf::default()),
-        }),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            heng::events::SessionId::new("s-custom"),
+        ),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),
