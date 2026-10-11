@@ -36,6 +36,6 @@
 
 ## 后加（2026-09-30，同日）：被否决的那一条被重新打开
 
-「被否决的替代方案」里那条「**把模型可见的那一侧也中文化**」当天就被重新打开了 —— [ADR 0005](0005-model-visible-text-in-chinese.md) 选了它。理由不是审美：**人读的是同一份文本**。工具结果与错误既进 `messages`、又进转录与详情弹窗（`src/render/tui.rs` 的 `DetailKind::Tool` 把错误原文直接画出来），所以「冻结」实际冻的是人眼里的那一段 —— `read before write: … has not been read in this session`（`src/tools/registry.rs:257`）就是这么读到的。本文说的「英文只留给三类东西」随之收窄成「英文只留给**不是散文**的东西」（标识符、schema 值与协议标记、路径与命令、`docs/research/` 的引文）。
+「被否决的替代方案」里那条「**把模型可见的那一侧也中文化**」当天就被重新打开了 —— [ADR 0005](0005-model-visible-text-in-chinese.md) 选了它。理由不是审美：**人读的是同一份文本**。工具结果与错误既进 `messages`、又进转录与详情弹窗（`src/render/tui.rs` 的 `DetailKind::Tool` 把错误原文直接画出来），所以「冻结」实际冻的是人眼里的那一段 —— `read before write: … has not been read in this session`（`src/tools/registry.rs:291`）就是这么读到的。本文说的「英文只留给三类东西」随之收窄成「英文只留给**不是散文**的东西」（标识符、schema 值与协议标记、路径与命令、`docs/research/` 的引文）。
 
 护栏第 ① 条跟着**反过来**：`FROZEN_FILES` 那一侧不再查「不许出现中文」，改成两条棘轮（中文串数只许上升、英文散文串数只许下降）；13 条白名单与「混住文件里必须留英文的 12 条字面量」两条旧检查退休，前者的前提没了，后者那 12 条串「仍然存在」这件事由 `cargo test` 的断言接管。

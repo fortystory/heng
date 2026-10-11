@@ -15,7 +15,7 @@ TUI 渲染器从「行内视口（inline viewport）+ 把转录插进终端回�
 - **代价（用户已知并接受）**：终端原生选择只覆盖可见区；**复制要按住 Shift 拖拽**（为了可点击的「到最下」按钮与滚轮滚动，鼠标捕获已开启）；转录只在进程内存里，退出备用屏幕即清，**不做转储（dump）** —— 完整记录仍在会话日志里，`--continue` 可回看。
 - **鼠标与括号粘贴（bracketed paste）是我们自己开的**：`ratatui::init()` 只负责原始模式（raw mode）+ 备用屏幕 + panic 钩子（panic hook），`TerminalOptions` 连鼠标开关都没有。`EnableMouseCapture` / `EnableBracketedPaste` 必须在 `/quit`、空闲 `Ctrl-C`、panic 三条路径上**成对撤销**，否则退出后终端残留鼠标报告模式（panic 钩子只把终端还原回原样，不顾这两个）。
 - **行内视口这条路径删除**：`insert_before` 循环、`paint_scrollback`（含 `src/render/mod.rs:52` 的再导出）、`Viewport::Inline(LIVE_HEIGHT)`、底部锚定的 `MoveTo(0, rows - 1)` 全部消失。注意 `Terminal::insert_before` 这个 API **本身仍然存在**（对 Fullscreen 是空操作（no-op）），删的是我们的用法，不是它。
-- **保真度唯一变更**：非 assistant 的消息（主要是用户自己的输入）不再压成单行 + `truncate(text, 500)`，改为保留换行的多行渲染 —— 多行输入上线后，粘进来的 20 行正是最需要看全的内容。assistant 的回答本来就是全文 Markdown（`src/render/tui.rs:802-827`），不动；工具输出继续用 4 000 字符的预览（preview）。
+- **保真度唯一变更**：非 assistant 的消息（主要是用户自己的输入）不再压成单行 + `truncate(text, 500)`，改为保留换行的多行渲染 —— 多行输入上线后，粘进来的 20 行正是最需要看全的内容。assistant 的回答本来就是全文 Markdown（`src/render/tui.rs:10396`），不动；工具输出继续用 4 000 字符的预览（preview）。
 - **可测性反而变好**：`TestBackend` 在默认特性下可用（无特性门），布局、降级阶梯、滚动与吸底都能进 `cargo test`，不必依赖伪终端（pty）；`scripts/tui-startup-check.py` 只需改判定（底部块现在带边框，`退出` 后面多了 `│`）而不是重写。
 - **与 ADR 0001 的关系**：本 ADR **不动模型可见文本**，只动呈现。ADR 0001 的冻结清单（讨论者 / 合成者的系统提示词（system prompt）、投影的 `[轮 N · 名字]` 前缀、`AgentError.message`、fs-agent 工具结果）逐条不受影响；本 ADR 新增的字符串全部落在措辞层 `src/render/wording.rs`。
 - **外壳改版（后加，2026-09）**：四分区改成**一圈外框 + 一条全高左栏 + 一条主列**（外框 / 左栏的标记与页签（tab）/ 主列的转录 + 回合条 + 状态行 + 输入 + 提示），见 `.scratch/tui-sidebar/spec.md`。本文标题里的「四分区」、上文「顶部那块后来长成两个变体」一段与下面那条「标记顶栏的代价」自此**只作历史记录**：顶栏连同它的 cwd/时钟退场，标记搬进左栏，左栏的开关尺寸改为按**宽度**（≥ 120 列 40 列宽画标记，80–119 列画文字身份，< 80 列隐藏）。核心决定不变 —— 仍是备用屏幕全屏、转录自己持有滚动缓冲、光标不依赖视口位置。

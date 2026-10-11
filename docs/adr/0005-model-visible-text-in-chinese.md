@@ -10,7 +10,7 @@
 
 ## 为什么重新打开
 
-1. **这一侧的读者不止模型 —— 而人读的是同一份文本。** 工具结果与错误文本既进 `messages`（`project()` 投成 `tool` 消息），又进转录与详情弹窗：`src/render/tui.rs` 的 `DetailKind::Tool` 把错误原文 `pane::wrap_text(error, width)` 直接画出来（成功的调用则读 `session_dir` 里落盘的全文）。按「谁读它」划线，代价落在人这一侧 —— 详情弹窗里那段 `read before write: … has not been read in this session; read it first`（`src/tools/registry.rs:40` / `:257`）就是这么来的。
+1. **这一侧的读者不止模型 —— 而人读的是同一份文本。** 工具结果与错误文本既进 `messages`（`project()` 投成 `tool` 消息），又进转录与详情弹窗：`src/render/tui.rs` 的 `DetailKind::Tool` 把错误原文 `pane::wrap_text(error, width)` 直接画出来（成功的调用则读 `session_dir` 里落盘的全文）。按「谁读它」划线，代价落在人这一侧 —— 详情弹窗里那段 `read before write: … has not been read in this session; read it first`（`src/tools/registry.rs:43` / `:291`）就是这么来的。
 2. **那条线已经在漏，而且是我们自己承认过的。** `AGENTS.md` 在 2026-09-30 翻成中文（`76c1d7f`），理由是「它确实是注入进 `messages` 的 `ContextInjected`，但那一类指的是 provider 按 schema 读的、格式敏感的串，不是这份给人写、给人读的约定」；`src/agent.rs` 的四段身份提示、`src/discussion.rs` 的讨论者身份、`PERMISSION_ASK` 那几条、投影的 `[轮 N · 名字]` 前缀**早就是中文**，模型一直在读中文。ADR 0001 真正要保的是「provider 按 schema 读的、格式敏感的那一半」—— 那是**标识符那一类**，本文一条都没动（见下「代价」第 3 条）。
 3. **代价的性质是「每个版本一次」，不是「每个会话一次」。** 前缀缓存按 `prompt_cache_key` = 会话 id 命中（`.scratch/fs-agent-v1/spec.md` §4）：翻字面量只让**升级之后的新会话**用上新前缀，老会话照旧命中自己那份。翻 `AGENTS.md` 时已经付过这笔钱，当时判定值得；本文只是把它推广到同一侧的其余文本。
 4. **不翻的替代方案更脆。** 想让人眼里的英文消失，就得在渲染层再造一张「英文约定文本 → 中文说明」的映射表：同一个事实两处维护，而且那张表依赖被冻死的英文**不许漂** —— 而 frozen 这一侧的英文一直在漂（第 2 条那些就是），映射表会跟着烂。让文本本身就是中文，只有一处真相。
