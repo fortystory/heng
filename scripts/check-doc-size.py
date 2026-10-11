@@ -380,11 +380,18 @@ def review_rules(unit: Unit) -> list[str]:
 #   信封）时索引行多一条入口，实测 **19,448 / 327**，棘轮 19,410 → **19,500 / 330**。两处都先
 #   从别处省过一轮（把 ADR 0013 / 0014 的括号说明与 feature 那行的功能罗列压短）才动的棘轮，
 #   `DOC_FILES` 也同步补上了 ADR 0021。
+# **2026-10-12 新增 `session-tab` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   13,200 / 72 → **13,784 / 73**（feature 索引天然随 feature 增长，与上面十几次同因；这一行是
+#   一张 wayfinder 决策图 —— 四轮 grilling 折出的 8 张决策票 + 1 张实现期的文档回改票）。
+#   棘轮 13,600 / 72 → **13,900 / 73**；字符终点（13,500）此前已被越过，行数终点（100）仍有余量。
+# **2026-10-12 新增 `skills-builtin` 种子行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   13,784 / 73 → **13,889 / 74**（种子索引行也随 feature 增长）；字符侧靠把这一行压短收在
+#   13,900 内，未动字符棘轮。行数棘轮 73 → **74**。
 ENTRY_BUDGET = {
     "README.md": {"chars": 19800, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 13600,
-        "lines": 72,
+        "chars": 13900,
+        "lines": 74,
         "target_chars": 13500,
         "target_lines": 100,
     },
