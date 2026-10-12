@@ -1157,6 +1157,14 @@ impl Harness {
         agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
+    /// 渲染端的一份克隆。
+    ///
+    /// 主循环要它来在**会话收工之后**等渲染器把缓冲写完（`Harness::shutdown` 的语义），
+    /// 而那时 `Harness` 已经随它那个 task 一起没了。
+    pub fn render_channel(&self) -> RenderChannel {
+        self.channel.clone()
+    }
+
     /// 主循环要的那份**只读快照**（票 15 的接线用）：这一场叫什么、用哪个模型与档位、
     /// 有哪些技能、目标是什么。
     ///

@@ -39,7 +39,7 @@ use crate::render::{
     PickerOption, PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
-use crate::session::{SessionStore, StoredSession, titles};
+use crate::session::{SessionHost, SessionStore, StoredSession, titles};
 use crate::tools::{self, Registry, Sandbox};
 use crate::web::WebService;
 use crate::web::fetch_http::HttpFetch;
@@ -334,7 +334,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 
     // 键盘的两端：循环持有的句柄与手势接收端，以及选定的渲染器（或 plain 逐行读取器）为它服务的那
     // 个端口。
-    let (console, port, mut events) = render::console();
+    let (console, port, events) = render::console();
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
     // 模型的问题走同一个键盘、走它自己的端口（spec §7）。交互式组装总是有一个 —— TUI 或 plain
     // —— 所以工具表提供 `ask_user_question`，而这张表是按端口在不在建的，不是按第二个容易漂移的
@@ -509,31 +509,42 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         &prompts,
     ));
 
-    let code = interactive_loop(
-        &mut harness,
-        &console,
-        &mut events,
-        &config,
-        &GoalSetup {
+    // 这一场交给宿主表：拥有它的那个 task 跑完整段交互循环，主循环从表里驱动它
+    // （`.scratch/session-tab/spec.md` §1）。渲染端先克隆一份 —— 会话收工之后由主循环等它
+    // 把缓冲写完（会话那一份写端随 task 一起没了）。
+    let render_channel = harness.render_channel();
+    let session_id = harness.session_id().clone();
+    let settings = config.goals;
+    let (exit, exit_code) = tokio::sync::oneshot::channel();
+    let actor = CliActor {
+        console,
+        events,
+        config: std::sync::Arc::new(config),
+        goals: GoalSetup {
             dir: goals_dir,
             store: store.clone(),
             cwd: cwd.clone(),
-            settings: config.goals,
+            settings,
         },
-        parsed.resume.is_some(),
-        McpMenu {
-            service: &mcp,
-            prompts: &prompts,
-        },
-    )
-    .await;
-    // 会话 id 先抄下来：`shutdown` 把 harness 收走了，而回执是在那之后才打的。
-    let session_id = harness.session_id().as_str().to_owned();
-    harness.shutdown().await;
+        resumed: parsed.resume.is_some(),
+        mcp,
+        prompts: std::sync::Arc::new(prompts),
+        exit: Some(exit),
+    };
+    let mut host = SessionHost::<CliCommand>::new(session_id.clone());
+    if let Err(error) = host.adopt_with(harness, cwd.clone(), false, Box::new(actor)) {
+        eprintln!("heng: {error}");
+        return ExitCode::FAILURE;
+    }
+    if let Some(entry) = host.get(&session_id) {
+        let _ = entry.cmd.send(CliCommand::Run).await;
+    }
+    let code = exit_code.await.unwrap_or(ExitCode::FAILURE);
+    render_channel.shutdown().await;
     // 终端交还之后那一行（`.scratch/exit-gesture/spec.md` §5）：stdout 只承载最终产物，
     // 所以回执走 stderr；TUI 与 `--plain` 共用这一处收尾。启动不打它（横幅已经有 id），
     // `probe` / `sessions` 一族也不打。
-    finish_session(code, &session_id, &mut std::io::stderr())
+    finish_session(code, session_id.as_str(), &mut std::io::stderr())
 }
 
 /// 交互式会话退出时的收尾：在终端交还之后往 `out` 打一行能直接粘的复盘命令，然后**原样**
@@ -1513,286 +1524,369 @@ fn switch_to_effort(
     Ok(())
 }
 
-async fn interactive_loop(
-    harness: &mut Harness,
-    console: &ConsoleHandle,
-    events: &mut ConsoleEvents,
-    config: &Config,
-    goals: &GoalSetup,
+/// 一场会话自己的交互循环。
+///
+/// 这段代码以前是 `interactive_loop(&mut harness, …)`，由 `interactive` 直接驱动；现在它是
+/// [`CliActor`] 的一次 `Run`，而 `Harness` 归宿主表的那个 task
+/// （`.scratch/session-tab/spec.md` §1）。**行为一个字不变。**
+///
+/// 它为什么整段在 task 里、而不是「主循环解析提交、task 只跑回合」：前端事件接收端是**单一
+/// 消费者**，而这一段的每一处都在与它打交道 —— 提示行、运行中的手势、目标循环。
+struct CliActor {
+    console: render::ConsoleHandle,
+    events: render::ConsoleEvents,
+    config: std::sync::Arc<Config>,
+    goals: GoalSetup,
     resumed: bool,
-    menu: McpMenu<'_>,
-) -> ExitCode {
-    // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
-    // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
-    let mut loop_running = false;
-    // 退出账本：一次运行中途有人举手退出时，回合先收尾，码最后一起兑现
-    // （`.scratch/exit-gesture/spec.md` §3）。
-    let mut quit = ExitRequest::default();
+    mcp: std::sync::Arc<McpService>,
+    prompts: std::sync::Arc<Vec<McpPromptEntry>>,
+    /// 这一场跑完时把退出码寄回主循环。
+    exit: Option<tokio::sync::oneshot::Sender<ExitCode>>,
+}
 
-    // 恢复（§10）。只对**重新打开**的会话做，而且只对认领过目标的那些：普通交互会话的
-    // `--continue` 行为一个字不变。
-    if resumed {
-        if let Some(name) = harness.current_goal() {
-            match harness.resume_goal() {
-                // 正常收尾：回来是空闲等人 —— 人主动停是人的意思，该尊重它。
-                None => harness.notice(&render::wording::heng(
-                    &render::wording::resumed_closed_goal(&name),
-                )),
-                // 异常中断：接着跑，不必人点头。
-                Some(name) => {
-                    harness.notice(&render::wording::heng(&render::wording::resumed_goal(
-                        &name,
-                    )));
-                    console.set_running(true);
-                    if let Err(message) = run_goal_loop(
-                        harness,
-                        console,
-                        events,
-                        goals,
-                        &name,
-                        &mut loop_running,
-                        &mut quit,
-                    )
-                    .await
-                    {
-                        harness.notice(&render::wording::heng(&message));
-                    }
-                    if quit.requested() {
-                        return quit.code();
-                    }
-                }
-            }
+/// 主循环能对一场会话做的事（`.scratch/session-tab/spec.md` §1）。
+///
+/// 它是票 04 §3 的 `Submit(Submission)` 在这条路上的**展开**：主循环只发一条 `Run`（那一场
+/// 自己去读输入），因为前端事件接收端只有一份、归它。多会话的 `Submit` 细分等切换到前台那
+/// 条路（票 20）时再长。
+enum CliCommand {
+    /// 跑这一场的交互循环。
+    ///
+    /// 只有这一个变体：这一场的循环读完输入就收工，而「结束这一场」是宿主表对**别的**一场
+    /// 做的事（票 21）。`Run` 之后再来的命令会落进 `act` 的缺省分支。
+    Run,
+}
+
+#[async_trait::async_trait]
+impl crate::session::SessionActor<CliCommand> for CliActor {
+    async fn act(
+        &mut self,
+        harness: &mut Harness,
+        command: CliCommand,
+        _inbox: &mut tokio::sync::mpsc::Receiver<CliCommand>,
+    ) -> bool {
+        // 只有一条 `Run`：跑完就收工，这一场该结束了。
+        let CliCommand::Run = command;
+        let code = self.run(harness).await;
+        if let Some(exit) = self.exit.take() {
+            let _ = exit.send(code);
         }
+        false
     }
+}
 
-    loop {
-        // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
-        // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
-        console.set_running(false);
-        // 回合之间循环只在等一次提示；这时候到达的手势在没有回合进行中的情况下处理掉。
-        let line = loop {
-            tokio::select! {
-                line = console.prompt() => break line,
-                event = events.recv() => match event {
-                    // 一旦运行之外收到退出举手（第一下在忙碌里举的，而回合已经收尾），它
-                    // 与输入结束一样是「人要求离开」—— 但码走 130 那一档。
-                    Some(event @ (FrontEndEvent::Quit | FrontEndEvent::Cancel)) => {
-                        quit.apply(&event, &harness.cancel_signal());
-                        if quit.requested() {
-                            return quit.code();
-                        }
-                    }
-                    Some(FrontEndEvent::CycleMode) => {
-                        harness.mode_cycle().cycle();
-                    }
-                    // 点状态行那两格或按 `ctrl-t`（spec §7）。这里是**空闲**：这一支的整段
-                    // 期间只有提示行在等，没有回合、没有讨论，所以清单可以真的开出来。
-                    Some(FrontEndEvent::OpenPicker(kind)) => {
-                        open_picker(harness, console, config, kind, false).await;
-                    }
-                    // 会话页里按 `r` 改完名：落流的是**循环**（渲染层不写事件流）。
-                    Some(FrontEndEvent::SessionTitled { id, title }) => {
-                        // 这一片只认得当前这场；多场的那一半由票 20 接。
-                        if id == *harness.session_id()
-                            && let Err(error) = harness.set_title(&title)
-                        {
-                            harness.notice(&format!(
-                                "heng: {}",
-                                render::wording::error_report(&error)
-                            ));
-                        }
-                    }
-                    None => return ExitCode::SUCCESS,
-                },
-            }
-        };
-        let Some(submitted) = line else {
-            return ExitCode::SUCCESS;
-        };
-        // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
-        // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
-        console.set_running(true);
-        let submission = submission(&submitted, |name| harness.has_skill(name), menu.prompts);
-        // 命令在转录里留一条**原文**（`.scratch/command-echo/spec.md`）：判据是「这一条提交
-        // 会不会变成一句 user 消息」。会的那几条（普通消息、带任务的 `/<skill>`）在流上已经有
-        // 了，而不会的那些 —— `/clear`、`/model …`、裸 `/<skill>` —— 一个字都不留，而回执只有
-        // 成功才有。记在执行之前，所以 `/clear` 自己的那一条留在**这场**会话里。
-        if records_itself(&submission)
-            && let Err(error) = harness.record_command_run(submitted.trim_end())
-        {
-            harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
-        }
-        match submission {
-            // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
-            // 况就在上面处理。
-            Submission::Ignore => {}
-            Submission::Quit => return ExitCode::SUCCESS,
-            Submission::Undo => {
-                let receipt = undo_receipt(harness.undo_last_edit().await);
-                harness.notice(&receipt);
-            }
-            // 一次模板调用：收参数（命令行上的位置参数 + 缺的用问卷问）→ `prompts/get` → 那段
-            // 文本**就是这一轮的输入**（server 渲染出来的那条消息）。
-            Submission::McpPrompt {
-                server,
-                prompt,
-                inline,
-            } => {
-                match run_mcp_prompt(
-                    console,
-                    menu.service,
-                    menu.prompts,
-                    &server,
-                    &prompt,
-                    &inline,
-                )
-                .await
-                {
-                    Ok(Some(text)) => {
-                        if let Err(error) =
-                            run_one_turn(harness, events, TurnStart::Prompt(&text), &mut quit).await
-                        {
-                            harness.notice(&format!(
-                                "heng: {}",
-                                render::wording::error_report(&error)
-                            ));
-                        }
-                    }
-                    // 人把这次询问丢掉了：什么都不发生，回到提示行。
-                    Ok(None) => {}
-                    Err(message) => harness.notice(&format!("heng: {}", message)),
-                }
-            }
-            Submission::Unknown(line) => {
-                let names = harness.skill_names();
-                harness.notice(&format!(
-                    "heng: {}",
-                    render::wording::unknown_command(&line, &names)
-                ));
-            }
-            // `/<skill> [task]` 是用户侧的技能调用（spec §9）：`disable-model-invocation: true`
-            // 的技能为用户留下的那条路。正文进上下文尾部。光秃秃的 `/<skill>` 就地跑 —— 正文**就
-            // 是**指令 —— 而打了任务时，**整条原文**（技能名在内）作为一条普通 user 消息跟在它
-            // 后面（`.scratch/ui-trim/spec.md` §2）。
-            Submission::Skill { name, task, bare } => {
-                if bare {
-                    harness.notice(&format!("heng: {}", render::wording::skill_started(&name)));
-                    if let Err(error) =
-                        run_one_turn(harness, events, TurnStart::Skill(&name), &mut quit).await
-                    {
-                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
-                    }
-                } else if let Err(error) = harness.load_skill(&name) {
-                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
-                } else {
-                    harness.notice(&format!("heng: {}", render::wording::skill_loaded(&name)));
-                    if let Err(error) =
-                        run_one_turn(harness, events, TurnStart::Prompt(&task), &mut quit).await
-                    {
-                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
-                    }
-                }
-            }
-            // `/discuss [问题]`：在**当前会话的流上**的一场讨论（spec §15）。讨论者是这场会话的兄
-            // 弟，所以继承它的上下文，并把轮次追加到它的日志上；之后用户回到提示符前。
-            Submission::Discuss(question) => {
-                if let Err(error) =
-                    discuss_in_session(harness, events, config, question, &mut quit).await
-                {
-                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
-                }
-            }
-            // `/goal-new <名字> <来源>…`：从一批票生成一份目标清单（§2）。手势，不进流。
-            Submission::Goal(args) => {
-                let message = run_goal_command(harness, goals.dir.as_deref(), &args);
-                harness.notice(&render::wording::heng(&message));
-            }
-            // `/clear`：结束当前会话、开一个新的（§12）。它复用翻页那条机制 —— 两段入口、
-            // 一段机制 —— 只是不带压缩、不带摘要注入：人是主动清场，没有「要带过去的历史」
-            // 这回事。
-            Submission::Clear => {
-                if loop_running {
-                    // 循环跑着的时候输入区是禁言的，所以这一行本来打不出来；这条拒绝是那件事
-                    // 的名字，而不是一条能走到的路径。
-                    harness.notice(&render::wording::heng(
-                        render::wording::clear_while_looping(),
-                    ));
-                } else {
-                    let message = clear_session(harness, goals);
-                    harness.notice(&render::wording::heng(&message));
-                }
-            }
-            // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
-            Submission::Loop(args) => {
-                let message = match parse_loop_line(&args) {
-                    Err(message) => message,
-                    Ok(name) => {
-                        let result = run_goal_loop(
+impl CliActor {
+    /// 这一场的交互循环本身（原来的 `interactive_loop` 函数体）。
+    async fn run(&mut self, harness: &mut Harness) -> ExitCode {
+        // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
+        // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
+        let mut loop_running = false;
+        // 退出账本：一次运行中途有人举手退出时，回合先收尾，码最后一起兑现
+        // （`.scratch/exit-gesture/spec.md` §3）。
+        let mut quit = ExitRequest::default();
+
+        // 恢复（§10）。只对**重新打开**的会话做，而且只对认领过目标的那些：普通交互会话的
+        // `--continue` 行为一个字不变。
+        if self.resumed {
+            if let Some(name) = harness.current_goal() {
+                match harness.resume_goal() {
+                    // 正常收尾：回来是空闲等人 —— 人主动停是人的意思，该尊重它。
+                    None => harness.notice(&render::wording::heng(
+                        &render::wording::resumed_closed_goal(&name),
+                    )),
+                    // 异常中断：接着跑，不必人点头。
+                    Some(name) => {
+                        harness.notice(&render::wording::heng(&render::wording::resumed_goal(
+                            &name,
+                        )));
+                        self.console.set_running(true);
+                        if let Err(message) = run_goal_loop(
                             harness,
-                            console,
-                            events,
-                            goals,
+                            &self.console,
+                            &mut self.events,
+                            &self.goals,
                             &name,
                             &mut loop_running,
                             &mut quit,
                         )
-                        .await;
-                        result.err().unwrap_or_default()
-                    }
-                };
-                if !message.is_empty() {
-                    harness.notice(&render::wording::heng(&message));
-                }
-            }
-            // `/model <id>`：换模型。**不带参数不给开弹窗而是说一句用法** —— 选择器是 TUI
-            // 独占的交互，而这一路必须能一步到位（plain 前端就靠它换模型，spec §7）。
-            Submission::Model(args) => {
-                let model = args.trim();
-                if model.is_empty() {
-                    harness.notice(&render::wording::heng(render::wording::model_usage()));
-                } else if let Err(message) =
-                    switch_to_model(harness, console, config, model, harness.effort())
-                {
-                    harness.notice(&render::wording::heng(&message));
-                }
-            }
-            // `/effort <档>`：换档。这一条到达时一定**空闲**（提交只在回合之间被读），所以
-            // 不必判忙闲 —— 忙闲是那三个运行中到达的入口的事。
-            Submission::Effort(args) => {
-                let arg = args.trim();
-                if arg.is_empty() {
-                    harness.notice(&render::wording::heng(&render::wording::effort_usage()));
-                } else if let Some(effort) = ReasoningEffort::from_token(arg) {
-                    // 当前模型认不认这一档 —— 换模型才可能得到它，而「它有哪几档」本身就是答案的
-                    // 一半，所以这句说清，而不是默默落回「默认」。
-                    match effort_supported(harness.model(), effort) {
-                        Err(message) => harness.notice(&render::wording::heng(&message)),
-                        Ok(()) => {
-                            let label = effort.as_str();
-                            let outcome = switch_to_effort(harness, console, config, label);
-                            report(harness, outcome);
+                        .await
+                        {
+                            harness.notice(&render::wording::heng(&message));
+                        }
+                        if quit.requested() {
+                            return quit.code();
                         }
                     }
-                } else {
-                    // `默认` 与「不是一档」都由 [`switch_to_effort`] 自己判、自己说 —— 选择器那条
-                    // 路与它共用同一段判断，所以命令这一层不重写一遍。
-                    let outcome = switch_to_effort(harness, console, config, arg);
-                    report(harness, outcome);
-                }
-            }
-            // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
-            Submission::Prompt(text) => {
-                if let Err(error) =
-                    run_one_turn(harness, events, TurnStart::Prompt(&text), &mut quit).await
-                {
-                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
             }
         }
-        // 一次运行中途有人举手退出：那个回合（或那场讨论、那趟目标循环）已经拿到它的收尾，
-        // 现在把码兑现 —— 于是渲染器与终端的收尾都会跑（spec §3）。
-        if quit.requested() {
-            return quit.code();
+
+        loop {
+            // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
+            // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
+            self.console.set_running(false);
+            // 回合之间循环只在等一次提示；这时候到达的手势在没有回合进行中的情况下处理掉。
+            let line = loop {
+                tokio::select! {
+                    line = self.console.prompt() => break line,
+                    event = self.events.recv() => match event {
+                        // 一旦运行之外收到退出举手（第一下在忙碌里举的，而回合已经收尾），它
+                        // 与输入结束一样是「人要求离开」—— 但码走 130 那一档。
+                        Some(event @ (FrontEndEvent::Quit | FrontEndEvent::Cancel)) => {
+                            quit.apply(&event, &harness.cancel_signal());
+                            if quit.requested() {
+                                return quit.code();
+                            }
+                        }
+                        Some(FrontEndEvent::CycleMode) => {
+                            harness.mode_cycle().cycle();
+                        }
+                        // 点状态行那两格或按 `ctrl-t`（spec §7）。这里是**空闲**：这一支的整段
+                        // 期间只有提示行在等，没有回合、没有讨论，所以清单可以真的开出来。
+                        Some(FrontEndEvent::OpenPicker(kind)) => {
+                            open_picker(harness, &self.console, &self.config, kind, false).await;
+                        }
+                        // 会话页里按 `r` 改完名：落流的是**循环**（渲染层不写事件流）。
+                        Some(FrontEndEvent::SessionTitled { id, title }) => {
+                            // 这一片只认得当前这场；多场的那一半由票 20 接。
+                            if id == *harness.session_id()
+                                && let Err(error) = harness.set_title(&title)
+                            {
+                                harness.notice(&format!(
+                                    "heng: {}",
+                                    render::wording::error_report(&error)
+                                ));
+                            }
+                        }
+                        None => return ExitCode::SUCCESS,
+                    },
+                }
+            };
+            let Some(submitted) = line else {
+                return ExitCode::SUCCESS;
+            };
+            // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
+            // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
+            self.console.set_running(true);
+            let submission = submission(&submitted, |name| harness.has_skill(name), &self.prompts);
+            // 命令在转录里留一条**原文**（`.scratch/command-echo/spec.md`）：判据是「这一条提交
+            // 会不会变成一句 user 消息」。会的那几条（普通消息、带任务的 `/<skill>`）在流上已经有
+            // 了，而不会的那些 —— `/clear`、`/model …`、裸 `/<skill>` —— 一个字都不留，而回执只有
+            // 成功才有。记在执行之前，所以 `/clear` 自己的那一条留在**这场**会话里。
+            if records_itself(&submission)
+                && let Err(error) = harness.record_command_run(submitted.trim_end())
+            {
+                harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+            }
+            match submission {
+                // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
+                // 况就在上面处理。
+                Submission::Ignore => {}
+                Submission::Quit => return ExitCode::SUCCESS,
+                Submission::Undo => {
+                    let receipt = undo_receipt(harness.undo_last_edit().await);
+                    harness.notice(&receipt);
+                }
+                // 一次模板调用：收参数（命令行上的位置参数 + 缺的用问卷问）→ `prompts/get` → 那段
+                // 文本**就是这一轮的输入**（server 渲染出来的那条消息）。
+                Submission::McpPrompt {
+                    server,
+                    prompt,
+                    inline,
+                } => {
+                    match run_mcp_prompt(
+                        &self.console,
+                        &self.mcp,
+                        &self.prompts,
+                        &server,
+                        &prompt,
+                        &inline,
+                    )
+                    .await
+                    {
+                        Ok(Some(text)) => {
+                            if let Err(error) = run_one_turn(
+                                harness,
+                                &mut self.events,
+                                TurnStart::Prompt(&text),
+                                &mut quit,
+                            )
+                            .await
+                            {
+                                harness.notice(&format!(
+                                    "heng: {}",
+                                    render::wording::error_report(&error)
+                                ));
+                            }
+                        }
+                        // 人把这次询问丢掉了：什么都不发生，回到提示行。
+                        Ok(None) => {}
+                        Err(message) => harness.notice(&format!("heng: {}", message)),
+                    }
+                }
+                Submission::Unknown(line) => {
+                    let names = harness.skill_names();
+                    harness.notice(&format!(
+                        "heng: {}",
+                        render::wording::unknown_command(&line, &names)
+                    ));
+                }
+                // `/<skill> [task]` 是用户侧的技能调用（spec §9）：`disable-model-invocation: true`
+                // 的技能为用户留下的那条路。正文进上下文尾部。光秃秃的 `/<skill>` 就地跑 —— 正文**就
+                // 是**指令 —— 而打了任务时，**整条原文**（技能名在内）作为一条普通 user 消息跟在它
+                // 后面（`.scratch/ui-trim/spec.md` §2）。
+                Submission::Skill { name, task, bare } => {
+                    if bare {
+                        harness.notice(&format!("heng: {}", render::wording::skill_started(&name)));
+                        if let Err(error) = run_one_turn(
+                            harness,
+                            &mut self.events,
+                            TurnStart::Skill(&name),
+                            &mut quit,
+                        )
+                        .await
+                        {
+                            harness.notice(&format!(
+                                "heng: {}",
+                                render::wording::error_report(&error)
+                            ));
+                        }
+                    } else if let Err(error) = harness.load_skill(&name) {
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+                    } else {
+                        harness.notice(&format!("heng: {}", render::wording::skill_loaded(&name)));
+                        if let Err(error) = run_one_turn(
+                            harness,
+                            &mut self.events,
+                            TurnStart::Prompt(&task),
+                            &mut quit,
+                        )
+                        .await
+                        {
+                            harness.notice(&format!(
+                                "heng: {}",
+                                render::wording::error_report(&error)
+                            ));
+                        }
+                    }
+                }
+                // `/discuss [问题]`：在**当前会话的流上**的一场讨论（spec §15）。讨论者是这场会话的兄
+                // 弟，所以继承它的上下文，并把轮次追加到它的日志上；之后用户回到提示符前。
+                Submission::Discuss(question) => {
+                    if let Err(error) = discuss_in_session(
+                        harness,
+                        &mut self.events,
+                        &self.config,
+                        question,
+                        &mut quit,
+                    )
+                    .await
+                    {
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+                    }
+                }
+                // `/goal-new <名字> <来源>…`：从一批票生成一份目标清单（§2）。手势，不进流。
+                Submission::Goal(args) => {
+                    let message = run_goal_command(harness, self.goals.dir.as_deref(), &args);
+                    harness.notice(&render::wording::heng(&message));
+                }
+                // `/clear`：结束当前会话、开一个新的（§12）。它复用翻页那条机制 —— 两段入口、
+                // 一段机制 —— 只是不带压缩、不带摘要注入：人是主动清场，没有「要带过去的历史」
+                // 这回事。
+                Submission::Clear => {
+                    if loop_running {
+                        // 循环跑着的时候输入区是禁言的，所以这一行本来打不出来；这条拒绝是那件事
+                        // 的名字，而不是一条能走到的路径。
+                        harness.notice(&render::wording::heng(
+                            render::wording::clear_while_looping(),
+                        ));
+                    } else {
+                        let message = clear_session(harness, &self.goals);
+                        harness.notice(&render::wording::heng(&message));
+                    }
+                }
+                // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
+                Submission::Loop(args) => {
+                    let message = match parse_loop_line(&args) {
+                        Err(message) => message,
+                        Ok(name) => {
+                            let result = run_goal_loop(
+                                harness,
+                                &self.console,
+                                &mut self.events,
+                                &self.goals,
+                                &name,
+                                &mut loop_running,
+                                &mut quit,
+                            )
+                            .await;
+                            result.err().unwrap_or_default()
+                        }
+                    };
+                    if !message.is_empty() {
+                        harness.notice(&render::wording::heng(&message));
+                    }
+                }
+                // `/model <id>`：换模型。**不带参数不给开弹窗而是说一句用法** —— 选择器是 TUI
+                // 独占的交互，而这一路必须能一步到位（plain 前端就靠它换模型，spec §7）。
+                Submission::Model(args) => {
+                    let model = args.trim();
+                    if model.is_empty() {
+                        harness.notice(&render::wording::heng(render::wording::model_usage()));
+                    } else if let Err(message) = switch_to_model(
+                        harness,
+                        &self.console,
+                        &self.config,
+                        model,
+                        harness.effort(),
+                    ) {
+                        harness.notice(&render::wording::heng(&message));
+                    }
+                }
+                // `/effort <档>`：换档。这一条到达时一定**空闲**（提交只在回合之间被读），所以
+                // 不必判忙闲 —— 忙闲是那三个运行中到达的入口的事。
+                Submission::Effort(args) => {
+                    let arg = args.trim();
+                    if arg.is_empty() {
+                        harness.notice(&render::wording::heng(&render::wording::effort_usage()));
+                    } else if let Some(effort) = ReasoningEffort::from_token(arg) {
+                        // 当前模型认不认这一档 —— 换模型才可能得到它，而「它有哪几档」本身就是答案的
+                        // 一半，所以这句说清，而不是默默落回「默认」。
+                        match effort_supported(harness.model(), effort) {
+                            Err(message) => harness.notice(&render::wording::heng(&message)),
+                            Ok(()) => {
+                                let label = effort.as_str();
+                                let outcome =
+                                    switch_to_effort(harness, &self.console, &self.config, label);
+                                report(harness, outcome);
+                            }
+                        }
+                    } else {
+                        // `默认` 与「不是一档」都由 [`switch_to_effort`] 自己判、自己说 —— 选择器那条
+                        // 路与它共用同一段判断，所以命令这一层不重写一遍。
+                        let outcome = switch_to_effort(harness, &self.console, &self.config, arg);
+                        report(harness, outcome);
+                    }
+                }
+                // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
+                Submission::Prompt(text) => {
+                    if let Err(error) = run_one_turn(
+                        harness,
+                        &mut self.events,
+                        TurnStart::Prompt(&text),
+                        &mut quit,
+                    )
+                    .await
+                    {
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+                    }
+                }
+            }
+            // 一次运行中途有人举手退出：那个回合（或那场讨论、那趟目标循环）已经拿到它的收尾，
+            // 现在把码兑现 —— 于是渲染器与终端的收尾都会跑（spec §3）。
+            if quit.requested() {
+                return quit.code();
+            }
         }
     }
 }
@@ -2170,11 +2264,6 @@ fn prompt_inline_arguments(
 /// `/` 菜单的动态那一半：连接与这一轮的模板条目。
 ///
 /// 打包成一个值，只因为 `interactive_loop` 的参数已经够多了 —— 这两样总是成对出现。
-struct McpMenu<'a> {
-    service: &'a McpService,
-    prompts: &'a [McpPromptEntry],
-}
-
 /// `/` 菜单里的一条 MCP 模板：`/<server>:<模板名>`。
 struct McpPromptEntry {
     server: String,

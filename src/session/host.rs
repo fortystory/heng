@@ -188,16 +188,6 @@ pub struct SessionHost<C = SessionCommand> {
 }
 
 impl SessionHost<SessionCommand> {
-    /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一场会话由 [`adopt`](Self::adopt)
-    /// 入表。
-    pub fn new(foreground: SessionId) -> Self {
-        let (foreground, _receiver) = watch::channel(foreground);
-        Self {
-            entries: Vec::new(),
-            foreground,
-        }
-    }
-
     /// 把一场组装好的会话交给它自己的 task，并**入表**。
     ///
     /// `cwd` 由调用方给：表里记的是这一场的工作目录，而它不必等于进程的 cwd（票 18 的装载路径
@@ -216,6 +206,16 @@ impl SessionHost<SessionCommand> {
 }
 
 impl<C: Send + 'static> SessionHost<C> {
+    /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一场会话由 `adopt`（缺省那一
+    /// 型）或 [`adopt_with`](Self::adopt_with) 入表。
+    pub fn new(foreground: SessionId) -> Self {
+        let (foreground, _receiver) = watch::channel(foreground);
+        Self {
+            entries: Vec::new(),
+            foreground,
+        }
+    }
+
     /// 同上，但换一个动作解释器、也换命令的类型 —— cli 那一侧走这条（它的命令里装着整条
     /// `Submission`，会话级手势都在那边）。
     pub fn adopt_with(

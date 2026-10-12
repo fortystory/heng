@@ -63,7 +63,23 @@ Part of: ../map.md
 - `SessionActor::act` 多一个 `inbox: &mut mpsc::Receiver<C>`：跑长动作（一个回合、一场讨论、
   一趟目标循环）时要一边跑一边收**运行中的手势**（主循环把 `FrontEndEvent` 转成命令转发）。
 
-**还没做**（这一票剩下的部分，也是最大的一块）：
+**2026-10-12 · 交互循环搬进 task**：
+
+- `interactive_loop` 那 273 行函数体整体搬进 **`CliActor::run`**，而 `Harness` 归宿主表的 task
+  （`.scratch/session-tab/spec.md` §1）。`interactive` 现在只做：组装 → 建宿主表 →
+  `adopt_with(harness, cwd, false, CliActor)` → 发一条 `CliCommand::Run` → 等回执 →
+  `finish_session`。
+- 它为什么整段在 task 里、而不是「主循环解析提交、task 只跑回合」：**前端事件接收端是单一
+  消费者**，而这一段每一处都在与它打交道（提示行、运行中的手势、目标循环）。票 04 §3 的
+  `Submit(Submission)` 在这条路上因此展开成一条 `Run`。
+- `Harness::render_channel()`（克隆渲染端）：会话收工之后主循环拿它等渲染器把缓冲写完 ——
+  `Harness::shutdown` 的语义改由主循环做，因为 `Harness` 已经随 task 没了。
+- 顺带删掉 `McpMenu`（它的两个字段成了 `CliActor` 的 `Arc<McpService>` / `Arc<Vec<…>>`）。
+- **欠账（写在这里）**：cli 交互路径没有自动化覆盖 —— 它要真终端与 API key。这一步的验证是
+  `cargo test` 全量 0 failed、`cargo test --lib` 227 条、`cargo run -- --help` 冒烟退出码 0，
+  以及逐条核对搬进来的代码只在借用形状上变了。
+
+**还没做**（这一票剩下的部分）：
 
 - **cli 接线**：`interactive_loop(&mut harness, ...)` 现在直接持有 `Harness`（45 处调用），
   要改成「组装 → `adopt` → 主循环发命令、读状态」。`run_one_turn` / `run_goal_loop` /
