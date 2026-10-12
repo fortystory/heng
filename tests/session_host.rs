@@ -318,7 +318,12 @@ struct RecordingActor {
 
 #[async_trait::async_trait]
 impl SessionActor for RecordingActor {
-    async fn act(&mut self, harness: &mut Harness, command: SessionCommand) {
+    async fn act(
+        &mut self,
+        harness: &mut Harness,
+        command: SessionCommand,
+        _inbox: &mut tokio::sync::mpsc::Receiver<SessionCommand>,
+    ) -> bool {
         let label = match &command {
             SessionCommand::Turn(_) => "turn".to_owned(),
             other => format!("{other:?}"),
@@ -330,6 +335,7 @@ impl SessionActor for RecordingActor {
         if let SessionCommand::Turn(SessionTurn::Prompt(text)) = command {
             let _ = harness.run_turn(&text).await;
         }
+        true
     }
 }
 

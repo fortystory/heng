@@ -50,6 +50,19 @@ Part of: ../map.md
 - 新增 2 条用例：命令真的送到 `adopt_with` 给的那个解释器手里（且它拿到的 harness 就是那一
   场）、前台快照的字段对得上。
 
+**2026-10-12 · 宿主表泛型化（命令的形状交回调用方）**：
+
+- `SessionHost<C>` / `HostEntry<C>` / `SessionActor<C>` 泛型化：**宿主完全不认识命令的语义** ——
+  连「取消」与「关闭」都不认识。`act` 因此答一个 `bool`（`false` = 这一场该结束了），
+  `close_with(id, shutdown)` 由调用方给那条结束命令。
+- 缺省那一型（`SessionHost<SessionCommand>`）仍是「跑回合」：`adopt` / `adopt_read_only` /
+  `close` 在那一层，`attach::check<C>` 跟着泛型化。
+- **`SessionCommand` 扩展**为：`Turn` / `RecordCommand` / `LoadSkill` / `Undo` / `SwitchModel`
+  / `SwitchEffort` / `Cancel` / `Close` —— 这是票 04 §3 的 `Submit(Submission)` 那份意图的
+  **展开**：主循环仍独占前端事件接收端（单一消费者），于是它解析提交、发具体动作。
+- `SessionActor::act` 多一个 `inbox: &mut mpsc::Receiver<C>`：跑长动作（一个回合、一场讨论、
+  一趟目标循环）时要一边跑一边收**运行中的手势**（主循环把 `FrontEndEvent` 转成命令转发）。
+
 **还没做**（这一票剩下的部分，也是最大的一块）：
 
 - **cli 接线**：`interactive_loop(&mut harness, ...)` 现在直接持有 `Harness`（45 处调用），

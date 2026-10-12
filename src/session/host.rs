@@ -65,11 +65,31 @@ pub struct FrontFacts {
     pub goal: Option<String>,
 }
 
-/// 主循环能对一场会话做的事 —— **只有三个**（决策票 04 §3）。
+/// 主循环能对一场会话做的事。
+///
+/// 决策票 04 §3 把它写成三个（`Submit(Submission)` / `Cancel` / `Close`）—— 那份形状的**意图**
+/// 是「一次提交整条交给 task 办」，而这里按同一意图把它**展开**成主循环解析得出的具体动作：
+/// 主循环仍独占前端事件接收端（那是单一消费者，参见票 15 的实现记录），于是它解析提交、发具体
+/// 命令，而 task 侧只负责办。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionCommand {
-    /// 跑一次动作。
+    /// 跑一次动作：一句提示 / 一个裸技能 / 一次注入。
     Turn(SessionTurn),
+    /// 把一条 `/` 命令的**原文**记进流（log-only，投影零产出）。
+    ///
+    /// 它落在这场会话自己的流上，所以必须由拥有 `Harness` 的那一方写。
+    RecordCommand(String),
+    /// 把一个技能正文装进上下文尾部（`/<skill> <task>` 的前半步）。
+    LoadSkill(String),
+    /// 撤销这场会话最近一次 `edit_file`。
+    Undo,
+    /// 换这一场用的模型。`effort` 是**当前**档位（换模型要重新校验它认不认这一档）。
+    SwitchModel {
+        model: String,
+        effort: Option<String>,
+    },
+    /// 换思考档位。
+    SwitchEffort(String),
     /// 取消这场会话当前在跑的动作。
     Cancel,
     /// 关闭并结束 task。
@@ -85,9 +105,18 @@ pub enum SessionCommand {
 ///
 /// 默认的实现是 [`TurnActor`]：只跑回合。cli 那一侧会换上一个更全的。
 #[async_trait::async_trait]
-pub trait SessionActor: Send {
+pub trait SessionActor<C = SessionCommand>: Send {
     /// 办一条命令。`Cancel` 与 `Close` 不会到达这里。
-    async fn act(&mut self, harness: &mut Harness, command: SessionCommand);
+    ///
+    /// `inbox` 是这一场自己的命令通道：跑长动作（一个回合、一场讨论、一趟目标循环）时它要一边
+    /// 跑一边收**运行中的手势** —— 主循环把那边的 `FrontEndEvent` 转成命令转发过来（前端事件
+    /// 接收端是单一消费者，只归它）。
+    async fn act(
+        &mut self,
+        harness: &mut Harness,
+        command: C,
+        inbox: &mut mpsc::Receiver<C>,
+    ) -> bool;
 }
 
 /// 默认的动作解释器：只会跑一次动作（一句提示 / 一个裸技能 / 一次注入）。
@@ -96,19 +125,31 @@ pub trait SessionActor: Send {
 pub struct TurnActor;
 
 #[async_trait::async_trait]
-impl SessionActor for TurnActor {
-    async fn act(&mut self, harness: &mut Harness, command: SessionCommand) {
-        let SessionCommand::Turn(start) = command else {
-            return;
-        };
-        let outcome = match start {
-            SessionTurn::Prompt(text) => harness.run_turn(&text).await,
-            SessionTurn::Skill(name) => harness.run_skill(&name).await,
-            SessionTurn::Injected => harness.run_injected_turn().await,
-        };
-        if let Err(error) = outcome {
-            harness.notice(&format!("heng: {error}"));
+impl SessionActor<SessionCommand> for TurnActor {
+    async fn act(
+        &mut self,
+        harness: &mut Harness,
+        command: SessionCommand,
+        _inbox: &mut mpsc::Receiver<SessionCommand>,
+    ) -> bool {
+        match command {
+            // 取消走既有的手势：信号是每场一份的，所以它只停这一场。
+            SessionCommand::Cancel => harness.cancel_signal().cancel(),
+            SessionCommand::Close => return false,
+            SessionCommand::Turn(start) => {
+                let outcome = match start {
+                    SessionTurn::Prompt(text) => harness.run_turn(&text).await,
+                    SessionTurn::Skill(name) => harness.run_skill(&name).await,
+                    SessionTurn::Injected => harness.run_injected_turn().await,
+                };
+                if let Err(error) = outcome {
+                    harness.notice(&format!("heng: {error}"));
+                }
+            }
+            // 缺省解释器只会跑回合：其余会话级手势由 cli 那一侧的解释器办。
+            _ => {}
         }
+        true
     }
 }
 
@@ -122,14 +163,15 @@ pub enum HostError {
 }
 
 /// 宿主表的一行（决策票 04 §1）。
-pub struct HostEntry {
+pub struct HostEntry<C = SessionCommand> {
     pub id: SessionId,
     /// 这一场的工作目录。
     pub cwd: PathBuf,
     /// 三态。接收端在这里 —— 发送端在拥有它的那个 task 手里。
     pub state: watch::Receiver<SessionState>,
-    /// 主循环往这一场发命令的那条通道。
-    pub cmd: mpsc::Sender<SessionCommand>,
+    /// 主循环往这一场发命令的那条通道。命令的形状由调用方定 —— cli 那一侧装的是
+    /// `Submit(Submission)` 与手势，缺省那一型只是「跑回合」。
+    pub cmd: mpsc::Sender<C>,
     /// 只读预览（票 18）：流半读装起来的那一场 —— 凡写流的一律禁，三态不动。
     pub read_only: bool,
     /// 每场一份的取消手势（决策票 04 §3）。
@@ -139,13 +181,13 @@ pub struct HostEntry {
 }
 
 /// 宿主表。由主循环持有，位于 CLI 组装点之上。
-pub struct SessionHost {
-    entries: Vec<HostEntry>,
+pub struct SessionHost<C = SessionCommand> {
+    entries: Vec<HostEntry<C>>,
     /// 全进程一个前台指针。
     foreground: watch::Sender<SessionId>,
 }
 
-impl SessionHost {
+impl SessionHost<SessionCommand> {
     /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一场会话由 [`adopt`](Self::adopt)
     /// 入表。
     pub fn new(foreground: SessionId) -> Self {
@@ -171,14 +213,17 @@ impl SessionHost {
     pub fn adopt_read_only(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
         self.adopt_with(harness, cwd, true, Box::new(TurnActor))
     }
+}
 
-    /// 同上，但换一个动作解释器 —— cli 那一侧走这条（会话级手势都在那边）。
+impl<C: Send + 'static> SessionHost<C> {
+    /// 同上，但换一个动作解释器、也换命令的类型 —— cli 那一侧走这条（它的命令里装着整条
+    /// `Submission`，会话级手势都在那边）。
     pub fn adopt_with(
         &mut self,
         harness: Harness,
         cwd: PathBuf,
         read_only: bool,
-        mut actor: Box<dyn SessionActor>,
+        mut actor: Box<dyn SessionActor<C>>,
     ) -> Result<(), HostError> {
         let id = harness.session_id().clone();
         if self.contains(&id) {
@@ -190,18 +235,14 @@ impl SessionHost {
         let join = tokio::spawn(async move {
             let mut harness = harness;
             while let Some(command) = cmd_rx.recv().await {
-                match command {
-                    // 取消走既有的手势：信号是每场一份的，所以它只停这一场。
-                    SessionCommand::Cancel => harness.cancel_signal().cancel(),
-                    SessionCommand::Close => break,
-                    other => {
-                        // 状态由宿主自己管：解释器只负责把这条命令办完。
-                        let _ = state_tx.send(SessionState::RunningTurn);
-                        actor.act(&mut harness, other).await;
-                        // 一场「等在一个人答」的动作（票 22）会在中间把状态置成
-                        // `AwaitingHuman`；回到 `Idle` 是它收尾之后的事。
-                        let _ = state_tx.send(SessionState::Idle);
-                    }
+                // 状态由宿主自己管：解释器只负责把这条命令办完。
+                let _ = state_tx.send(SessionState::RunningTurn);
+                let keep_going = actor.act(&mut harness, command, &mut cmd_rx).await;
+                // 一场「等在一个人答」的动作（票 22）会在中间把状态置成 `AwaitingHuman`；
+                // 回到 `Idle` 是它收尾之后的事。
+                let _ = state_tx.send(SessionState::Idle);
+                if !keep_going {
+                    break;
                 }
             }
         });
@@ -238,11 +279,11 @@ impl SessionHost {
         self.entries.iter().any(|entry| &entry.id == id)
     }
 
-    pub fn get(&self, id: &SessionId) -> Option<&HostEntry> {
+    pub fn get(&self, id: &SessionId) -> Option<&HostEntry<C>> {
         self.entries.iter().find(|entry| &entry.id == id)
     }
 
-    pub fn entries(&self) -> &[HostEntry] {
+    pub fn entries(&self) -> &[HostEntry<C>] {
         &self.entries
     }
 
@@ -262,19 +303,31 @@ impl SessionHost {
             .count()
     }
 
-    /// 把一场会话从表里卸下来：发 `Close`、等它那个 task 结束。
+    /// 把一场会话从表里卸下来：发一条**结束命令**、等它那个 task 结束。
     ///
-    /// **不写盘、不删盘** —— 盘上那份还在，随时能再装载（票 18）。前台自己不许关、正在跑回合
-    /// 的那一场怎么处理是票 21 的规则，这一层只保证「表里真的少了一行、task 真的结束了」。
-    pub async fn close(&mut self, id: &SessionId) -> Result<(), HostError> {
+    /// 宿主不认识命令的语义，所以「结束」得由调用方给 —— cli 那一型的结束命令就是
+    /// `SessionCommand::Close`（见 [`SessionHost::close`] 那一层）。
+    ///
+    /// **不写盘、不删盘** —— 盘上那份还在，随时能再装载（票 18）。
+    pub async fn close_with(&mut self, id: &SessionId, shutdown: C) -> Result<(), HostError> {
         let index = self
             .entries
             .iter()
             .position(|entry| &entry.id == id)
             .ok_or_else(|| HostError::NotHosted(id.clone()))?;
         let entry = self.entries.remove(index);
-        let _ = entry.cmd.send(SessionCommand::Close).await;
+        let _ = entry.cmd.send(shutdown).await;
         let _ = entry.join.await;
         Ok(())
+    }
+}
+
+impl SessionHost<SessionCommand> {
+    /// 关掉一场缺省命令类型的会话：发 `Close`、等它那个 task 结束。
+    ///
+    /// 前台自己不许关、正在跑回合的那一场怎么处理是票 21 的规则，这一层只保证「表里真的少了
+    /// 一行、task 真的结束了」。
+    pub async fn close(&mut self, id: &SessionId) -> Result<(), HostError> {
+        self.close_with(id, SessionCommand::Close).await
     }
 }
