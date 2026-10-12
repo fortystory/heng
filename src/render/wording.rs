@@ -2268,6 +2268,19 @@ pub const SESSIONS_UNREADABLE: &str = "读不出会话列表";
 pub const SESSIONS_NONE: &str = "没有会话";
 pub const SESSIONS_NO_HIT: &str = "没有命中的会话";
 
+/// 旧流缺了几样会话事实、回退到了**进程配置默认**（`.scratch/session-tab/spec.md` §2）。
+pub fn facts_filled(names: &[&str]) -> String {
+    format!(
+        "这一场是旧格式的流，缺 {}；那几样按进程配置默认补上了",
+        names.join("、")
+    )
+}
+
+/// 在**只读预览**里按了一次要写流的东西（票 18）。
+pub fn read_only_session() -> String {
+    "这一场是只读预览：它的事件流中间有坏行，写下去会把洞留在那里".to_owned()
+}
+
 /// 页顶右端的两个入口，以及一行的「流损坏」尾标。
 pub const SESSION_NEW: &str = "新建";
 pub const SESSION_CLOSE: &str = "关闭";

@@ -102,7 +102,11 @@ impl SessionFacts {
         let mut take = |slot: &mut Option<String>, value: &Option<String>, name: &'static str| {
             if slot.is_none() {
                 *slot = value.clone();
-                filled.push(name);
+                // 只有**真的填上了值**才算「补上了」：默认也是空的时候，这一格本来就空着 ——
+                // 那不是「回退到了进程配置默认」，而是那一档本来就没设。
+                if value.is_some() {
+                    filled.push(name);
+                }
             }
         };
         take(&mut self.model, &fallback.model, "模型");

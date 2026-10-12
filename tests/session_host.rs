@@ -379,3 +379,91 @@ async fn the_front_facts_snapshot_carries_what_the_loop_parses_with() {
     );
     assert_eq!(facts.goal, None);
 }
+
+/// 与 [`session`] 同一场，但走**装载**那条路（`load`）：它会补一条会话事实快照、并判只读。
+async fn load_session(root: &Path, id: &str, replies: Vec<Reply>) -> (heng::Loaded, PathBuf) {
+    let session_dir = root.join(id);
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let log_path = session_dir.join("log.jsonl");
+    let loaded = heng::load(AssemblyParts {
+        provider: Box::new(FakeProvider::new(replies)),
+        speaker: SpeakerId::Debater("kimi".into()),
+        config: heng::config::SessionConfig::new("fake-model"),
+        render: heng::render::RenderChannel::start(
+            Renderer::headless(RenderSinks {
+                stdout_result: Box::new(CaptureBuf::default()),
+                stderr_diagnostic: Box::new(CaptureBuf::default()),
+            }),
+            SessionId::new(id),
+        ),
+        scaffold: SessionScaffold {
+            cwd: workspace,
+            log_path: log_path.clone(),
+            session_id: SessionId::new(id),
+            tools: builtin(false),
+            locks: PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            questions: None,
+            hook: None,
+            home: None,
+        },
+    })
+    .await
+    .unwrap();
+    (loaded, log_path)
+}
+
+#[tokio::test]
+async fn loading_a_session_snapshots_its_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (loaded, log_path) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    assert!(!loaded.read_only, "好流不是只读预览");
+    assert!(
+        loaded.filled.is_empty(),
+        "新流五格齐全：{:?}",
+        loaded.filled
+    );
+    let events = read_events(&log_path).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionFactsChanged { .. })),
+        "装载之后补了一条完整快照：{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_half_read_stream_loads_as_a_read_only_preview() {
+    // 中间有坏行的流：严格那条路会直接报错，而它该降级成只读预览、不是装不起来（票 18）。
+    let dir = tempfile::tempdir().unwrap();
+    let (_, log_path) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let lines: Vec<String> = std::fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let mut patched = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index == 1 {
+            patched.push_str("这不是一行 JSON\n");
+        }
+        patched.push_str(line);
+        patched.push('\n');
+    }
+    std::fs::write(&log_path, patched).unwrap();
+
+    let (loaded, _) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    assert!(loaded.read_only, "半读的流装起来是只读预览");
+    // 读得出来的那些历史仍在（宽松那一档跳过了坏行）。
+    assert!(
+        loaded
+            .harness
+            .events()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionStarted { .. })),
+        "坏行被跳过，前面那段历史还在"
+    );
+}

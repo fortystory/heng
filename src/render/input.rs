@@ -166,6 +166,11 @@ pub enum ConsoleRequest {
         facts: super::tui::SessionFacts,
         events: Vec<Event>,
     },
+    /// 这一场是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
+    ///
+    /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
+    /// 路径，得由它自己挡住。
+    ReadOnly { read_only: bool },
     /// 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
     ///
     /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事（它会阻塞 TUI），
@@ -257,6 +262,11 @@ impl ConsoleHandle {
         let _ = self
             .requests
             .send(ConsoleRequest::SwitchSession { facts, events });
+    }
+
+    /// 说这一场是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
+    pub fn read_only(&self, read_only: bool) {
+        let _ = self.requests.send(ConsoleRequest::ReadOnly { read_only });
     }
 
     /// 推一份会话页要的列表。与 [`catalog`](Self::catalog) 一样发完就完。
@@ -501,6 +511,8 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::Sessions { .. } => {}
                 // 换会话也是 TUI 左栏的事：plain 前端一个进程只跑一场。
                 ConsoleRequest::SwitchSession { .. } => {}
+                // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
+                ConsoleRequest::ReadOnly { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

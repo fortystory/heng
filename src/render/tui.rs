@@ -2522,6 +2522,8 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 这一场是不是**只读预览**（票 18）：凡写流的一律禁，包括渲染器自己发起的那几处。
+    read_only: bool,
     /// 每场会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
     /// （`.scratch/session-tab/spec.md` §6）。
     light: std::collections::HashMap<crate::events::SessionId, SessionLight>,
@@ -3945,6 +3947,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             tab: Tab::Usage,
+            read_only: false,
             light: std::collections::HashMap::new(),
             sessions: SessionsPage::default(),
             files_page: FilesPage::default(),
@@ -6085,6 +6088,11 @@ impl TuiState {
             // 页内 `/`：进过滤。页签条仍只走鼠标 —— 这是**页内**键位。
             Key::Char('/') => self.begin_sessions_filter(),
             Key::Char('r') => {
+                // 只读预览里改名是写流（票 18）：说一句，不进改名模式。
+                if self.read_only {
+                    self.notice = Some((std::time::Instant::now(), wording::read_only_session()));
+                    return true;
+                }
                 let target = self
                     .sessions
                     .focused_row()
@@ -6824,6 +6832,10 @@ impl TuiState {
                     });
                 }
                 self.dirty = true;
+            }
+            // 这一场是不是只读预览（票 18）。
+            ConsoleRequest::ReadOnly { read_only } => {
+                self.read_only = read_only;
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
             ConsoleRequest::Sessions { listing } => {

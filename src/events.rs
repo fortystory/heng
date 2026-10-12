@@ -1085,6 +1085,26 @@ impl EventLog {
         })
     }
 
+    /// 打开一份**半读**的日志：跳过读不出的行，而且**绝不 repair**（那会改文件）。
+    ///
+    /// 它只给**只读预览**用（`.scratch/session-tab/spec.md` §2、票 18）：一条流中间有坏行时，
+    /// 写下去会把洞留在那里，所以这一份 `EventLog` 只该被读。`seq` 与行号在这种流上不再相等
+    /// —— 而那一场本来就不追加，所以无害。
+    pub fn open_read_only(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        let events = read_events_lenient(&path)?;
+        let next_seq = events.len() as u64 + 1;
+        let file = OpenOptions::new().append(true).open(&path)?;
+        Ok(Self {
+            path,
+            inner: Arc::new(Mutex::new(Inner {
+                writer: BufWriter::new(file),
+                events,
+                next_seq,
+            })),
+        })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -1156,6 +1176,25 @@ pub fn read_events(path: impl AsRef<Path>) -> io::Result<Vec<Event>> {
                     format!("事件流 {}：第 {} 行：{error}", path.display(), index + 1),
                 ));
             }
+        }
+    }
+    Ok(events)
+}
+
+/// 读一条流，**跳过**读不出的行。
+///
+/// 与 [`read_events`] 的差别只有这一条：那个对中间坏行报错（那是默认的严格纪律），而这个
+/// 跳过它们 —— 半读的流因此还读得出来一段历史，只是不能写（票 18 的只读预览）。
+fn read_events_lenient(path: &Path) -> io::Result<Vec<Event>> {
+    let file = File::open(path)?;
+    let mut events = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(event) = serde_json::from_str::<Event>(&line) {
+            events.push(event);
         }
     }
     Ok(events)

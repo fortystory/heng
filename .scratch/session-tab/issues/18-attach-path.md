@@ -1,7 +1,7 @@
 # 18: 装载路径：切入历史会话
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 15
 Part of: ../map.md
 
@@ -53,3 +53,24 @@ Part of: ../map.md
   cli 接线：`-c <id>` 与界面点选走同一条路径。
 - 提示行那句「旧流缺字段，已回退进程配置默认」的具体措辞与常驻标记。
 - 环境类事实（沙箱 / 技能 / `AGENTS.md`）重探：组装时本来就是重探，但还没有一条测试钉住它。
+
+
+## 收口（2026-10-12）
+
+装载函数与只读预览落地，这一票收口：
+
+- **`load(AssemblyParts) -> Loaded`**（`src/lib.rs`）：一条共用路径 —— 组装 → `record_facts()`
+  补一条完整快照 → 按 `attach::health` 判只读 → 用 `SessionFacts::with_fallback` 报出旧流缺了
+  哪几样。`Loaded { harness, read_only, filled }`。`-c <id>` 已经走它（票 20 的界面点选也走）。
+- **只读预览真的装得起来了**：`read_events` 对**中间**坏行是报错的（严格纪律），于是半读的流
+  以前根本进不了 `assemble`。补了 `EventLog::open_read_only`（跳过错行、**绝不 repair**），
+  `OpenedSession::open` 按 `health` 选严格 / 宽松那一档。**尾行坏仍走严格那一档** —— `open`
+  会把那条坏尾巴收拾掉，所以它可写。
+- **只读禁令**：`CliActor` 在提交之前判 `read_only`（退出与空行放行，其余各回一句
+  `read_only_session`）；空闲段那个 `Shift+Tab` 也挡住；渲染侧经新 `ConsoleRequest::ReadOnly`
+  拿到标志，页内 `r` 改名在只读下只回一句提示、不进改名模式。
+- `with_fallback` 的语义收紧：只有**默认真的填上了值**才算「补上了」—— 默认也是空的时候那一
+  格本来就空着，不是「回退到了进程配置默认」。
+- 新增 `tests/session_host.rs` 2 条（装载后补快照且 `filled` 为空、半读的流装起来是只读预览）。
+- **环境类事实（沙箱 / 技能 / `AGENTS.md`）重探**：组装期本来就是每次重探（`OpenedSession::open`
+  现读），这一票不改它，也没有为它单写一条测试。

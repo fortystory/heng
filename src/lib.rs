@@ -257,7 +257,15 @@ impl OpenedSession {
         // session id 下分配的一条路径，或是更早一次运行留下的那份。这样库就不用去读环境
         // 旗标（spec §1），同时 `--continue` 仍然只有一条代码路径（spec §11）。
         let log = if log_path.exists() {
-            EventLog::open(&log_path)?
+            // **半读**的流（中间有坏行）用宽松那一档打开：严格的 `open` 会直接报错，而那一场
+            // 该降级成**只读预览**、不是装不起来（`.scratch/session-tab/spec.md` §2、票 18）。
+            // 尾行坏仍是严格那一档 —— `open` 会把那条坏尾巴收拾掉。
+            let health = crate::session::attach::health(&log_path);
+            if matches!(health, crate::session::StreamHealth::ReadOnly { .. }) {
+                EventLog::open_read_only(&log_path)?
+            } else {
+                EventLog::open(&log_path)?
+            }
         } else {
             EventLog::create(&log_path)?
         };
@@ -454,6 +462,44 @@ fn roster_needs_a_sandbox(
         workspace_needs_a_sandbox(mode, &debater.config.sandbox, cwd)?;
     }
     workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, cwd)
+}
+
+/// 一次装载的结果（`.scratch/session-tab/spec.md` §2、票 18）。
+pub struct Loaded {
+    /// 装起来的那一场。
+    pub harness: Harness,
+    /// 它是**只读预览**：流半读（坏行后面还有好行），装起来只能看。
+    pub read_only: bool,
+    /// 旧流缺的那几样会话级事实 —— 它们回退成了**进程配置默认**，这一条就是「如实说明」的原料。
+    pub filled: Vec<&'static str>,
+}
+
+/// 装载一场磁盘上的会话（`.scratch/session-tab/spec.md` §2、票 18）。
+///
+/// 一条共用路径：`-c <id>` 与界面点选都走它。三件事：
+///
+/// * 组装（[`assemble`] 那份工作照旧）；
+/// * **每次装载之后补一条完整的会话事实快照** —— `SessionStarted` 那五格是开幕那一刻的值；
+/// * 判它是不是**只读预览**（半读的流），以及旧流缺了哪几样事实。
+///
+/// 「装不成」的那两档不在这里：`cwd` 目录不存在与流读不出该在**更早**的
+/// [`crate::session::attach::check`] 里答掉，那时还不用付一次组装的代价。
+pub async fn load(parts: AssemblyParts) -> Result<Loaded, Error> {
+    let log_path = parts.scaffold.log_path.clone();
+    let mut harness = assemble(parts).await?;
+    harness.record_facts()?;
+    let read_only = matches!(
+        crate::session::attach::health(&log_path),
+        crate::session::StreamHealth::ReadOnly { .. }
+    );
+    // 流上那五格缺的，回退的就是这一场自己的装配值（进程配置默认）。
+    let from_stream = crate::session::SessionFacts::current(&harness.events());
+    let (_, filled) = from_stream.with_fallback(&harness.session_facts());
+    Ok(Loaded {
+        harness,
+        read_only,
+        filled,
+    })
 }
 
 /// 组装一场单 agent 会话。不读任何环境。
@@ -1177,6 +1223,24 @@ impl Harness {
             effort: self.effort().map(|effort| effort.as_str().to_owned()),
             skills: self.skill_names().into_iter().map(str::to_owned).collect(),
             goal: self.current_goal(),
+        }
+    }
+
+    /// 这场会话**此刻**的五样会话级事实（库层那一份，`.scratch/session-tab/spec.md` §2）。
+    ///
+    /// 与 [`Harness::front_facts`] 不是一回事：那一份是主循环解析提交要的（技能名、目标名），
+    /// 这一份是**进流**的那五样。
+    pub fn session_facts(&self) -> crate::session::SessionFacts {
+        let config = self.session.config();
+        crate::session::SessionFacts {
+            model: Some(config.model.clone()),
+            provider: config.provider.clone(),
+            effort: config
+                .params
+                .reasoning_effort
+                .map(|effort| effort.as_str().to_owned()),
+            permission_mode: Some(self.session.mode().as_str().to_owned()),
+            sandbox_mode: Some(config.sandbox.mode.as_str().to_owned()),
         }
     }
 

@@ -45,8 +45,8 @@ use crate::web::WebService;
 use crate::web::fetch_http::HttpFetch;
 use crate::web::search_deepseek::{DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch};
 use crate::{
-    AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts, Harness, SessionScaffold,
-    SynthesizerParts, assemble, assemble_discussion,
+    AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts, Harness, Loaded,
+    SessionScaffold, SynthesizerParts, assemble, assemble_discussion, load,
 };
 
 /// 探针第二个回合的提示词；它让转录继续变长，好让第一个回合的前缀成为缓存必须匹配的那些内容。
@@ -418,7 +418,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
     let channel = crate::render::RenderChannel::start(renderer, stored.id.clone());
-    let mut harness = match assemble(AssemblyParts {
+    let loaded = match load(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: stored.log_path.clone(),
@@ -442,12 +442,17 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     })
     .await
     {
-        Ok(harness) => harness,
+        Ok(loaded) => loaded,
         Err(error) => {
             eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
+    let Loaded {
+        mut harness,
+        read_only,
+        filled,
+    } = loaded;
 
     // 重新打开的会话组装时带上的历史，在横幅之前推给前端，好让 TUI 先把它铺好、横幅落在接缝**之
     // 后**，而不是落在接缝中间（`.scratch/tui-history-replay/spec.md` §1）。payload 就是组装好的
@@ -484,6 +489,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 拼给模型的那段私有身份，给读的人留一条记录。它**不进事件流**（身份每次请求现拼、
     // 从不落盘，spec §15），所以轨迹页看到的是「按当前代码拼的一份」—— 那句话由来源名自己
     // 说出来。摆在横幅之前：那是模型看到的**第一样东西**。
+    // 旧流缺字段：那几样是按**进程配置默认**补上的，如实说一句（票 18 §2）。
+    if !filled.is_empty() {
+        harness.notice(&render::wording::heng(&render::wording::facts_filled(
+            &filled,
+        )));
+    }
     harness.identity(&crate::agent::agent_identity());
     harness.notice(&render::wording::banner(
         harness.session_id().as_str(),
@@ -515,6 +526,11 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let render_channel = harness.render_channel();
     let session_id = harness.session_id().clone();
     let settings = config.goals;
+    // 只读预览也告诉渲染器：页内改名那种「渲染器自己发起」的写动作要挡住（票 18）。
+    // 要在 `console` 被移进 actor 之前说。
+    if read_only {
+        console.read_only(true);
+    }
     let (exit, exit_code) = tokio::sync::oneshot::channel();
     let actor = CliActor {
         console,
@@ -529,10 +545,11 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         resumed: parsed.resume.is_some(),
         mcp,
         prompts: std::sync::Arc::new(prompts),
+        read_only,
         exit: Some(exit),
     };
     let mut host = SessionHost::<CliCommand>::new(session_id.clone());
-    if let Err(error) = host.adopt_with(harness, cwd.clone(), false, Box::new(actor)) {
+    if let Err(error) = host.adopt_with(harness, cwd.clone(), read_only, Box::new(actor)) {
         eprintln!("heng: {error}");
         return ExitCode::FAILURE;
     }
@@ -1540,6 +1557,8 @@ struct CliActor {
     resumed: bool,
     mcp: std::sync::Arc<McpService>,
     prompts: std::sync::Arc<Vec<McpPromptEntry>>,
+    /// 只读预览（票 18）：半读的流装起来只能看 —— 凡写流的一律禁。
+    read_only: bool,
     /// 这一场跑完时把退出码寄回主循环。
     exit: Option<tokio::sync::oneshot::Sender<ExitCode>>,
 }
@@ -1639,7 +1658,14 @@ impl CliActor {
                             }
                         }
                         Some(FrontEndEvent::CycleMode) => {
-                            harness.mode_cycle().cycle();
+                            // 只读预览：换权限模式落在这一场的策略上，也算写流（票 18）。
+                            if self.read_only {
+                                harness.notice(&render::wording::heng(
+                                    &render::wording::read_only_session(),
+                                ));
+                            } else {
+                                harness.mode_cycle().cycle();
+                            }
                         }
                         // 点状态行那两格或按 `ctrl-t`（spec §7）。这里是**空闲**：这一支的整段
                         // 期间只有提示行在等，没有回合、没有讨论，所以清单可以真的开出来。
@@ -1669,6 +1695,12 @@ impl CliActor {
             // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
             self.console.set_running(true);
             let submission = submission(&submitted, |name| harness.has_skill(name), &self.prompts);
+            // **只读预览**：凡写流的一律禁 —— 提交、所有 `/` 命令、页内改名都不行（票 18）。
+            // 退出不是写流，照旧放行。
+            if self.read_only && !matches!(submission, Submission::Quit | Submission::Ignore) {
+                harness.notice(&render::wording::heng(&render::wording::read_only_session()));
+                continue;
+            }
             // 命令在转录里留一条**原文**（`.scratch/command-echo/spec.md`）：判据是「这一条提交
             // 会不会变成一句 user 消息」。会的那几条（普通消息、带任务的 `/<skill>`）在流上已经有
             // 了，而不会的那些 —— `/clear`、`/model …`、裸 `/<skill>` —— 一个字都不留，而回执只有
