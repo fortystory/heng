@@ -26,6 +26,8 @@ pub mod titles;
 
 pub use attach::{AttachCheck, StreamHealth};
 pub use facts::SessionFacts;
+pub mod asker;
+pub use asker::SessionAsker;
 pub use host::{
     CloseRefusal, FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost, SessionState,
     SessionTurn, TurnActor, close_check,

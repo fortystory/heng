@@ -418,6 +418,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
     let channel = crate::render::RenderChannel::start(renderer, stored.id.clone());
+    // 宿主表在组装**之前**就立起来（票 15 说它是这一层的持有者），因为按会话包的应答者与
+    // 渲染侧的开关都要先拿到前台指针那一份订阅（票 22）。
+    let mut host = SessionHost::<CliCommand>::new(stored.id.clone());
+    let foreground = host.subscribe_foreground();
+    // 第一场的应答者：真正的作答仍然是 `ConsoleAsker`，外面包一层「不是前台就挂住」。
+    let session_asker = Arc::new(crate::session::SessionAsker::new(
+        Arc::clone(&asker) as Arc<dyn Asker>,
+        stored.id.clone(),
+        foreground.clone(),
+    ));
     let config = std::sync::Arc::new(config);
     let outside_read = config.outside_read;
     // 装载另一场要的那批材料（票 20）：同一批配置、同一个渲染端、同一张锁表。
@@ -428,7 +438,8 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         store: store.clone(),
         locks: path_locks.clone(),
         channel: channel.clone(),
-        asker: Some(asker.clone()),
+        console_asker: asker.clone(),
+        foreground,
         questions: questions.clone(),
         mcp: std::sync::Arc::clone(&mcp),
         home: home.clone(),
@@ -452,7 +463,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
             policy: Policy::for_mode(mode).with_outside_read(outside_read),
-            asker: Some(asker.clone()),
+            asker: Some(session_asker.clone()),
             questions: questions.clone(),
             hook: None,
             home: home.clone(),
@@ -579,10 +590,13 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         quit: ExitRequest::default(),
         requests: requests.clone(),
     };
-    let mut host = SessionHost::<CliCommand>::new(session_id.clone());
     if let Err(error) = host.adopt_with(harness, cwd.clone(), read_only, Box::new(actor)) {
         eprintln!("heng: {error}");
         return ExitCode::FAILURE;
+    }
+    // 入表之后把这一场的三态发送端交给应答者（票 22）—— 它得能置 `AwaitingHuman`。
+    if let Some(entry) = host.get(&stored.id) {
+        session_asker.attach(entry.state_tx.clone());
     }
     // 恢复（§10）：只对**重新打开**的会话做，而且只对认领过目标的那些。
     if parsed.resume.is_some() && front.goal.is_some() {
@@ -1738,7 +1752,10 @@ struct AssemblyKit {
     store: SessionStore,
     locks: crate::tools::PathLocks,
     channel: crate::render::RenderChannel,
-    asker: Option<Arc<dyn Asker>>,
+    /// 真正往下送的应答者（票 22 在这上面包一层按会话的）。
+    console_asker: Arc<dyn Asker>,
+    /// 全进程一个前台指针：按会话包的应答者等自己成为前台要用它。
+    foreground: tokio::sync::watch::Receiver<SessionId>,
     questions: Option<Arc<dyn UserQuestions>>,
     mcp: Arc<McpService>,
     home: Option<PathBuf>,
@@ -1747,12 +1764,24 @@ struct AssemblyKit {
 }
 
 impl AssemblyKit {
+    /// 按会话包一个应答者（票 22）。
+    ///
+    /// 装完之后调用方要用 [`SessionAsker::attach`] 把那一场的三态发送端填进去。
+    fn session_asker(&self, id: &SessionId) -> Arc<crate::session::SessionAsker> {
+        Arc::new(crate::session::SessionAsker::new(
+            Arc::clone(&self.console_asker),
+            id.clone(),
+            self.foreground.clone(),
+        ))
+    }
+
     /// 按这份材料装一场 —— 走的是 `-c <id>` 那条共用路径（`crate::load`）。
     async fn load(
         &self,
         stored: StoredSession,
         cwd: PathBuf,
         inherit: Option<&crate::session::FrontFacts>,
+        asker: Arc<crate::session::SessionAsker>,
     ) -> Result<crate::Loaded, String> {
         // 新建的那一场**继承前台**的模型 / 档位 / 权限模式（票 21）；装载历史会话时不继承。
         let model = inherit
@@ -1790,7 +1819,7 @@ impl AssemblyKit {
                 tools,
                 locks: self.locks.clone(),
                 policy: Policy::for_mode(mode).with_outside_read(self.config.outside_read),
-                asker: self.asker.clone(),
+                asker: Some(asker),
                 questions: self.questions.clone(),
                 hook: None,
                 home: self.home.clone(),
@@ -1878,8 +1907,14 @@ async fn open_new(
         kit.notice(&inherit.id, "开不了新会话：会话目录建不出来");
         return;
     };
+    let asker = kit.session_asker(&stored.id);
     match kit
-        .load(stored.clone(), cwd.to_path_buf(), Some(inherit))
+        .load(
+            stored.clone(),
+            cwd.to_path_buf(),
+            Some(inherit),
+            Arc::clone(&asker),
+        )
         .await
     {
         Ok(loaded) => {
@@ -1902,6 +1937,9 @@ async fn open_new(
             ) {
                 kit.notice(&inherit.id, &error.to_string());
                 return;
+            }
+            if let Some(entry) = host.get(&stored.id) {
+                asker.attach(entry.state_tx.clone());
             }
             host.switch(&stored.id);
             // **翻页交接**（票 21）：新会话接过这一趟的额度、目标与压缩摘要，然后接着跑。
@@ -2000,7 +2038,11 @@ async fn open_session(
         }
         // 装载期间提示行一句（票 20）—— 不新增列表标记态。
         kit.notice(id, &format!("正在装载会话 {}…", id.as_str()));
-        match kit.load(stored.clone(), cwd, None).await {
+        let asker = kit.session_asker(&stored.id);
+        match kit
+            .load(stored.clone(), cwd, None, Arc::clone(&asker))
+            .await
+        {
             Ok(loaded) => {
                 let actor = CliActor {
                     console: console.clone(),
@@ -2021,6 +2063,9 @@ async fn open_session(
                 ) {
                     kit.notice(id, &error.to_string());
                     return;
+                }
+                if let Some(entry) = host.get(&stored.id) {
+                    asker.attach(entry.state_tx.clone());
                 }
             }
             Err(message) => {

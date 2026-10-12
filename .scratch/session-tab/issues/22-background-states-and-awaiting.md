@@ -1,7 +1,7 @@
 # 22: 后台三态与待答挂住
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 20
 Part of: ../map.md
 
@@ -40,3 +40,22 @@ Part of: ../map.md
 把 future 挂在 `foreground` 的 `watch` 上并置 `AwaitingHuman`，切到前台再原样送出去（请求从没
 被消费过）。它是「后台那一场跑出询问时停在原地、永不自动作答」这句话的实现，也是「切到前台即
 唤醒」的实现。留待下一轮。
+
+## 收口（2026-10-12）：按会话包装的应答者
+
+`SessionAsker`（`src/session/asker.rs`）—— 票 22 的核心那一半落地：
+
+- 它知道自己属于哪一场，也持一份**前台指针的订阅**（`SessionHost::subscribe_foreground`）。
+  **不是前台就不往前端送请求** —— 那会把一场后台会话的问题弹到另一场的脸上；它把 future 挂在
+  `watch::for` 上、把这一场置成 `AwaitingHuman`。
+- **切到前台即唤醒**：请求**从没被消费过**，所以前端不需要记 N 个悬浮请求 —— 谁切到前台谁弹
+  自己那一个。唤醒后状态回到 `RunningTurn`，回答仍然走既有的 reply 通道（宿主表不代答）。
+- 三态的发送端是一个**槽**：应答者在组装期就建好了，而那一对通道由宿主表在 `adopt` 里创建。
+  调用方在入表之后用 `SessionAsker::attach` 填进去（`HostEntry` 因此多暴露一个 `state_tx`）。
+- 第一场与每一条装载路径（`open_session`、`open_new`）都用 `AssemblyKit::session_asker`
+  按 id 现包一个 —— **多场同时待答时各挂各的**。
+- 测试：`tests/session_asker.rs` 2 条 —— 后台发问挂住（问题没到前端）、切前台唤醒并回到在跑；
+  前台的询问直接穿过、不进「待答」那一档。
+
+**欠账**：状态行还没有把 `AwaitingHuman` 写成一句话（列表上的 `?` 有）；那一条与票 25 的终端
+标题一起做更合适。

@@ -205,6 +205,8 @@ pub struct HostEntry<C = SessionCommand> {
     pub cwd: PathBuf,
     /// 三态。接收端在这里 —— 发送端在拥有它的那个 task 手里。
     pub state: watch::Receiver<SessionState>,
+    /// 三态的发送端。按会话包装的应答者要它（票 22）：它得把这一场置成 `AwaitingHuman`。
+    pub state_tx: watch::Sender<SessionState>,
     /// 主循环往这一场发命令的那条通道。命令的形状由调用方定 —— cli 那一侧装的是
     /// `Submit(Submission)` 与手势，缺省那一型只是「跑回合」。
     pub cmd: mpsc::Sender<C>,
@@ -274,6 +276,7 @@ impl<C: Send + 'static> SessionHost<C> {
         }
         let cancel = harness.cancel_signal();
         let (state_tx, state_rx) = watch::channel(SessionState::Idle);
+        let state_handle = state_tx.clone();
         let (cmd_tx, mut cmd_rx) = mpsc::channel(8);
         let join = tokio::spawn(async move {
             let mut harness = harness;
@@ -294,6 +297,7 @@ impl<C: Send + 'static> SessionHost<C> {
             cwd,
             read_only,
             state: state_rx,
+            state_tx: state_handle,
             cmd: cmd_tx,
             cancel,
             join,
@@ -336,6 +340,11 @@ impl<C: Send + 'static> SessionHost<C> {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// 订一份前台指针（票 22 的应答者等自己成为前台要用它）。
+    pub fn subscribe_foreground(&self) -> watch::Receiver<SessionId> {
+        self.foreground.subscribe()
     }
 
     /// 有几场正在跑回合 —— 页顶读数 `M 场在跑` 数的就是它。
