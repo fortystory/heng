@@ -246,6 +246,10 @@ pub enum PickerKind {
 ///
 /// 请求发送端与手势接收端是**两个值**，不是一个：循环同时 select 一条提示与一个没人要的
 /// 手势，而合成一个结构体会被借两次。
+///
+/// 克隆很便宜（内部是一条 `mpsc` 发送端）：输入归主循环之后，会话那一侧还要一份来问答案
+/// （`/model` 的清单、问卷那些）。
+#[derive(Clone)]
 pub struct ConsoleHandle {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }

@@ -42,3 +42,19 @@ Part of: ../map.md
   另一条路）；
 - 运行中的手势由主循环**转发**成命令（它独占那个接收端）；
 - 于是每一场都是「只执行」的，而输入只有一处 —— 切换前台就是换一个命令的收件人。
+
+**2026-10-12 · 架构前置已解决**：输入段从会话的 task 搬回了主循环。
+
+- 主循环持 `ConsoleEvents` 与 `console.prompt()`，解析出 `Submission` 之后发命令；task 侧只
+  执行 —— 这正是决策票 04 §3 的 `Submit(Submission)` 本意（票 15 当时按「整段搬」走了另一条
+  路，这一轮改回来）。
+- `CliCommand { Submit { submission, raw }, Gesture { event, running }, ResumeGoal, Close }`；
+  `CliActor` 只剩 `execute`（原 `match submission` 那段）/ `gesture`（原 `events.recv()` 那几支）/
+  `resume_goal`（原「恢复（§10）」那一段）三个入口。
+- `run_one_turn` / `discuss_in_session` / `run_goal_loop` 改为从命令通道收**运行中的手势**
+  （`CliCommand::Gesture`），不再吃 `ConsoleEvents`。
+- **切换前台于是只是「换一个命令的收件人」** —— 每一场都只执行，输入只有一处。
+- 行为与拆分前一致：`Submission::Quit` 仍走 `ExitCode::SUCCESS`，举手退出仍走 `quit.code()`。
+
+**这一票剩下**：`open_session`（三条结局：已在表里取回 / 装载后切 / 拒绝）、装载那条路要的
+`AssemblyKit`、以及「切换不因为目标在跑回合而阻挡」的联调测试。
