@@ -1,7 +1,7 @@
 # 15: 宿主表与前台指针：一场会话与今天等价
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 13
 Part of: ../map.md
 
@@ -91,3 +91,20 @@ Part of: ../map.md
   闸门取消。
 - 权限策略「一场一份」（现状已经是 per-`assemble`，接线时钉一条断言即可）。
 - `RenderEvent::SessionState`（状态变更点推给渲染器，票 22 的标记列读它）。
+
+
+## 收口（2026-10-12）
+
+两条验收与票 21 逐字重叠，随票 21 落：
+
+- 「`/clear` 与阈值 rollover 走『新建一场 + 入表 + 切前台』；旧的留表里、不写收尾事件」——
+  票 21 的第 1、2 条正是这句话（「新建 = 同 cwd 再加载一场空会话 + 立即成为前台；旧的留宿主表
+  里」与「`/clear` = 阈值 rollover = 页签新建 是同一个动作」）。它们要求「组装一场新会话」的
+  能力，而那件事的入口（页签 `新建` 与关闭语义）在票 21 才立起来。
+- 「`clear_while_looping` 闸门取消」——它是 `/clear` 那一条的附属：闸门存在的理由是「翻页会
+  换掉这一场」，而新的语义让旧会话留着，于是没有必要拦。票 21 落地时一并删。
+
+其余全部落地：一场会话 = 一个 `Harness` + 一个拥有它的 task；宿主表六格字段与表级前台指针；
+同 id 只有一行；切换只改指针、忙闲不阻挡；`Harness: Send` 的编译期断言；权限策略一场一份
+（本来就是 per-`assemble`）；`goal_loop` / `e2e_single_turn` / `modes` / `cancellation` 全绿；
+`tests/session_host.rs` 11 条 + `tests/session_attach.rs` 9 条。
