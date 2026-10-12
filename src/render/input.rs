@@ -174,8 +174,13 @@ pub enum ConsoleRequest {
         id: crate::events::SessionId,
         empty: bool,
     },
-    /// 宿主表现在有几场（票 21 的 `N 场` 读数）。
-    HostCount { sessions: usize },
+    /// 宿主表现在有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
+    HostCount { sessions: usize, running: usize },
+    /// 一场会话的忙闲（票 22）。
+    SessionState {
+        id: crate::events::SessionId,
+        state: crate::session::host::SessionState,
+    },
     /// 这一场是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
     ///
     /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
@@ -294,9 +299,22 @@ impl ConsoleHandle {
             .send(ConsoleRequest::SessionClosed { id, empty });
     }
 
-    /// 说宿主表现在有几场。
-    pub fn host_count(&self, sessions: usize) {
-        let _ = self.requests.send(ConsoleRequest::HostCount { sessions });
+    /// 说宿主表现在有几场、其中几场在跑。
+    pub fn host_count(&self, sessions: usize, running: usize) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::HostCount { sessions, running });
+    }
+
+    /// 说一场会话现在忙不忙。
+    pub fn session_state(
+        &self,
+        id: crate::events::SessionId,
+        state: crate::session::host::SessionState,
+    ) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::SessionState { id, state });
     }
 
     /// 说这一场是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
@@ -549,7 +567,9 @@ pub fn spawn_plain_console_with(
                 // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
                 ConsoleRequest::ReadOnly { .. } => {}
                 // 多会话那两件同理：plain 一个进程只跑一场。
-                ConsoleRequest::SessionClosed { .. } | ConsoleRequest::HostCount { .. } => {}
+                ConsoleRequest::SessionClosed { .. }
+                | ConsoleRequest::HostCount { .. }
+                | ConsoleRequest::SessionState { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

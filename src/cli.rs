@@ -595,6 +595,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 单一消费者，只有这一处读得动它。主循环读一次提交、解析成 `Submission`，再交给宿主表里
     // **前台**那一场执行 —— 切换前台于是只是「换一个命令的收件人」。
     let mut quit = ExitRequest::default();
+    // 忙闲（票 22）：宿主表里每一场读一遍，变了就往渲染通道发一条。**轮询**而不是在变更点
+    // 推送 —— 变更点散在宿主表 task、应答者与循环三处，而这里能看到全部。
+    let mut states: std::collections::HashMap<SessionId, crate::session::host::SessionState> =
+        std::collections::HashMap::new();
     let code = loop {
         console.set_running(false);
         tokio::select! {
@@ -643,6 +647,17 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                         }
                     }
                 }
+            }
+            // 忙闲那份读数（票 22）。间隔取 80ms：它是**给人看**的，不是同步手段。
+            _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
+                for entry in host.entries() {
+                    let state = *entry.state.borrow();
+                    if states.get(&entry.id) != Some(&state) {
+                        states.insert(entry.id.clone(), state);
+                        console.session_state(entry.id.clone(), state);
+                    }
+                }
+                console.host_count(host.len(), host.running());
             }
             // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
             request = open_requests.recv() => match request {
@@ -1905,7 +1920,7 @@ async fn open_new(
             }
             let events = read_events(&stored.log_path).unwrap_or_default();
             console.switch_session(kit.ui_facts(&stored, &events), events);
-            console.host_count(host.len());
+            console.host_count(host.len(), host.running());
             // 回执口径：新开一场，旧会话留在列表里（票 21）。翻页有它自己那一句（在旧会话里
             // 就说了），所以这里不重复。
             if !is_rollover {
@@ -1936,7 +1951,7 @@ async fn close_session(
     let empty = host.is_empty();
     // 先让渲染器把这一场忘掉、并把读数与空宿主态更新。
     console.session_closed(id.clone(), empty);
-    console.host_count(host.len());
+    console.host_count(host.len(), host.running());
     if empty {
         kit.notice(id, "没有会话了：按 `新建` 开一场");
     }

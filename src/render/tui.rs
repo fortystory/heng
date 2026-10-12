@@ -2524,6 +2524,8 @@ pub struct TuiState {
     tab: Tab,
     /// 这一场是不是**只读预览**（票 18）：凡写流的一律禁，包括渲染器自己发起的那几处。
     read_only: bool,
+    /// 每场会话现在忙不忙（票 22）。它按**会话 id** 存，切走切回都还在。
+    states: std::collections::HashMap<crate::events::SessionId, crate::session::host::SessionState>,
     /// 每场会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
     /// （`.scratch/session-tab/spec.md` §6）。
     light: std::collections::HashMap<crate::events::SessionId, SessionLight>,
@@ -3948,6 +3950,7 @@ impl TuiState {
             slash: MenuSelection::default(),
             tab: Tab::Usage,
             read_only: false,
+            states: std::collections::HashMap::new(),
             light: std::collections::HashMap::new(),
             sessions: SessionsPage::default(),
             files_page: FilesPage::default(),
@@ -6849,6 +6852,15 @@ impl TuiState {
                 }
                 self.dirty = true;
             }
+            // 一场会话的忙闲（票 22）。
+            ConsoleRequest::SessionState { id, state } => {
+                if state == crate::session::host::SessionState::Idle {
+                    self.states.remove(&id);
+                } else {
+                    self.states.insert(id, state);
+                }
+                self.dirty = true;
+            }
             // 这一场是不是只读预览（票 18）。
             ConsoleRequest::ReadOnly { read_only } => {
                 self.read_only = read_only;
@@ -6864,9 +6876,10 @@ impl TuiState {
                 }
                 self.dirty = true;
             }
-            // 宿主表里有几场（票 21 的 `N 场` 读数）。
-            ConsoleRequest::HostCount { sessions } => {
+            // 宿主表里有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
+            ConsoleRequest::HostCount { sessions, running } => {
                 self.sessions.host_sessions = Some(sessions);
+                self.sessions.host_running = Some(running);
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
             ConsoleRequest::Sessions { listing } => {
@@ -8592,7 +8605,14 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 rect: Rect::new(page.x, page.y + line as u16, page.width, 1),
                 action: HitAction::SessionRow(line),
             });
-            lines.push(session_line(row, focus.as_ref(), title_w, time_w, now));
+            lines.push(session_line(
+                row,
+                focus.as_ref(),
+                title_w,
+                time_w,
+                now,
+                state.states.get(&row.id).copied(),
+            ));
             drawn_rows += 1;
         }
         state.sessions.shown = rows;
@@ -8630,7 +8650,7 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
     // 列表总数 —— 票 17 那一版就是这么读的。
     let left = wording::session_count(
         state.sessions.host_sessions.unwrap_or(state.sessions.total),
-        running,
+        state.sessions.host_running.unwrap_or(running),
     );
     let left_w = text_columns(&left) as u16;
     let new_w = text_columns(wording::SESSION_NEW) as u16;
@@ -8703,9 +8723,20 @@ fn session_line(
     title_w: u16,
     time_w: u16,
     now: std::time::SystemTime,
+    live: Option<crate::session::host::SessionState>,
 ) -> Line<'static> {
+    use crate::session::host::SessionState;
     use crate::session::listing::SessionMark;
     let focused = focus == Some(&row.id);
+    // **内存里的三态优先**（票 22）：它比 store 扫描出来的那一份准，也更新 —— 后台那一场刚
+    // 开始跑、或者正等着人答，只有它知道。
+    let live = match live {
+        Some(SessionState::AwaitingHuman) => Some(SessionMark::Awaiting),
+        Some(SessionState::RunningTurn) => Some(SessionMark::Running),
+        Some(SessionState::Idle) => Some(SessionMark::Idle),
+        // 还没报过三态：退回列表自己那份（store 扫出来的「上次没跑完」仍有意义）。
+        None => None,
+    };
     // 整行的那一档样式：焦点是 `ACCENT` + `BOLD`；cwd 不存在的那一行整行 `MUTED`。
     let row_style = if focused {
         Style::default()
@@ -8720,7 +8751,7 @@ fn session_line(
     let (mark, mark_style) = if row.foreground {
         ("▍", Style::default().fg(palette::ACCENT))
     } else {
-        match row.mark {
+        match live.clone().unwrap_or(row.mark.clone()) {
             SessionMark::Awaiting => ("?", Style::default().fg(palette::WARN)),
             SessionMark::Running => ("●", Style::default().fg(palette::PLAIN)),
             SessionMark::Idle => (" ", row_style),
@@ -9390,6 +9421,8 @@ struct SessionsPage {
     host_empty: bool,
     /// 宿主表里有几场（票 21 的 `N 场` 读数）；还没报过就用列表总数。
     host_sessions: Option<usize>,
+    /// 宿主表里有几场在跑（票 22 的 `M`）；还没报过就用列表里的读数。
+    host_running: Option<usize>,
     /// 过滤态；`None` 就是没在过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
     filter: Option<SessionsFilter>,
     /// 这一页**现在要画**的那些行：没过滤时就是 `rows`，过滤时只剩命中的那些（且不钉顶）。
@@ -11536,6 +11569,8 @@ fn event_at(event: &RenderEvent) -> DateTime<Utc> {
         RenderEvent::Logged { event, .. } => event.at,
         RenderEvent::Diagnostic { at, .. } | RenderEvent::Notice { at, .. } => *at,
         RenderEvent::Delta { .. } => Utc::now(),
+        // 忙闲不是「一件事」，是**现在**的一个值（票 22）。
+        RenderEvent::SessionState { .. } => Utc::now(),
         // 系统提示词不属于任何一刻：它是**当前**的拼法，不是"那时"发生的事。
         RenderEvent::Identity { .. } => Utc::now(),
         // 它到不了这里：`apply` 在那之前就把它接走了。给一个当下的时刻只是为了 match 完整。

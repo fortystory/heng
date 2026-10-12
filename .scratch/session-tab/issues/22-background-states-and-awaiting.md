@@ -1,7 +1,7 @@
 # 22: 后台三态与待答挂住
 
 Type: implement
-Status: ready-for-agent
+Status: in-progress
 Blocked by: 20
 Part of: ../map.md
 
@@ -19,3 +19,24 @@ Part of: ../map.md
 - [ ] 多场同时待答：各挂各的，谁切到前台谁弹
 - [ ] 后台会话的「需人答」**永不自动作答**
 - [ ] 测试（宿主接缝）：后台跑出询问 → 状态变待答且请求没被消费；切前台 → 请求弹出；作答 → 回到 `RunningTurn`
+
+
+## 进度（2026-10-12）
+
+**已落地（渲染侧那一半）**：
+
+- **`RenderEvent::SessionState { session, state }`**：带 session id 的第三态事件。四类消费者各
+  自表态 —— TUI 收下、headless 与 transcript 忽略（忙闲是界面的事）、`event_at` 给它「现在」。
+- **`ConsoleRequest::SessionState { id, state }`** 与 `HostCount { sessions, running }`：
+  `TuiState` 按**会话 id** 存三态（切走切回都还在），列表标记与页顶读数读它。
+- **列表标记**：内存三态优先（`?`+`WARN` / `●`+`PLAIN` / 留空），**没报过的退回列表自己那份**
+  （store 扫出来的「上次没跑完」仍有意义）；前台 `▍` 压过一切。
+- **页顶读数** `N 场 · M 场在跑`：`M` 取宿主表的 `running()`。
+- **推送**：主循环每 80ms 把宿主表里每一场的 `watch<SessionState>` 读一遍，变了才发一条
+  ——**轮询**而不是在变更点推送，因为变更点散在宿主表 task、应答者与循环三处，而主循环这里能
+  看到全部。
+
+**还没做（这一票的核心）**：**asker 按会话包装**（`SessionAsker`）—— 不是前台就不往前端送请求、
+把 future 挂在 `foreground` 的 `watch` 上并置 `AwaitingHuman`，切到前台再原样送出去（请求从没
+被消费过）。它是「后台那一场跑出询问时停在原地、永不自动作答」这句话的实现，也是「切到前台即
+唤醒」的实现。留待下一轮。

@@ -108,7 +108,9 @@ pub enum RenderEvent {
     /// 它是一条**静默信号**，不是给人看的一行：不画进转录、不进事件流 —— 握着会话级文件
     /// 索引的那一端靠它知道该重扫一次（`.scratch/files-page/spec.md` §2）。三个渲染器里
     /// 只有 TUI 养着那份索引，另外两个把它当没看见。
-    WorkspaceChanged { session: SessionId },
+    WorkspaceChanged {
+        session: SessionId,
+    },
     /// 一行不为任何事件说话的界面文字：启动横幅与交互循环的朴素反馈。
     ///
     /// 不是 [`RenderEvent::Diagnostic`]：诊断是系统在报什么，并且被标成那样，而一条告知
@@ -123,7 +125,17 @@ pub enum RenderEvent {
     /// 它不是事件、也永远不进事件流（身份在每次请求里现拼、从不落盘 —— `build_messages`，
     /// spec §15）。所以这一条是**按当前代码拼的一份**：`--continue` 重开看到的是今天的拼法，
     /// 不是当时那份。它点得开、看得全，但不进模型上下文、也不写 `log.jsonl`。
-    Identity { session: SessionId, text: String },
+    /// 这一场现在忙不忙（`.scratch/session-tab/spec.md` §1、票 22）。
+    ///
+    /// 三态：空闲、在跑回合、**等在一个人答**。列表标记与页顶读数读的就是它。
+    SessionState {
+        session: SessionId,
+        state: crate::session::host::SessionState,
+    },
+    Identity {
+        session: SessionId,
+        text: String,
+    },
 }
 
 impl RenderEvent {
@@ -138,6 +150,7 @@ impl RenderEvent {
             | Self::Diagnostic { session, .. }
             | Self::WorkspaceChanged { session }
             | Self::Notice { session, .. }
+            | Self::SessionState { session, .. }
             | Self::Identity { session, .. } => session,
         }
     }

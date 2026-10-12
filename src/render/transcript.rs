@@ -288,6 +288,8 @@ impl Transcript {
             // 拼好的系统提示词：一条**可点开**的注入记录，与别处那一排注入同一个画法。
             // 类型上它与进流的注入长得一样（同一个 `Block`），差别在来源那一枚的措辞里
             // —— 那是这一条唯一说得清事实的地方：它不是事件。
+            // 忙闲是**界面**的事（票 22）：转录里没有它的位置。
+            RenderEvent::SessionState { .. } => Vec::new(),
             RenderEvent::Identity { text, .. } => {
                 let mut blocks = self.flush();
                 blocks.push(Block::ContextInjected {
