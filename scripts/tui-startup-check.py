@@ -62,7 +62,12 @@ STATUS_TAIL = "退出"
 # ratatui 每画一个宽字符都要显式移动光标，所以界面一旦是中文，原始字节流就不再是一串
 # 连续字符串了。就绪判定与最终判定都改读仿真出来的屏幕；这几个 ASCII 锚点在原始流里
 # 依然成立。
-STATUS_ANCHOR = "ctrl-c"
+#
+# 锚点取**空闲态那个出口键**。它曾经是 `ctrl-c`，而 `Ctrl-C` 从票 23 起**只取消、永不退出**
+# （`.scratch/session-tab/spec.md` §1），空闲提示行因此只写 `ctrl-d 退出` —— 旧锚点让这份
+# 脚本在票 23 落地后一直红，红的却不是产品。**2026-10-12 校准**：锚点与出口清单一起按当前
+# 语义改，这份脚本重新成为「退得出去」的可红守卫。
+STATUS_ANCHOR = "ctrl-d"
 # 光有 `heng` 也会命中会话目录的路径与桶的 slug，所以横幅锚点带上它的全角冒号 ——
 # 这个冒号写在 ASCII 前缀后面、是连续的一串。
 BANNER_ANCHOR = "heng："
@@ -111,14 +116,14 @@ ALT_ENTER = "\x1b[?1049h"
 # 横幅那一行会因此再出现一次，那不是重复打印。
 CLEAR_ALL = "\x1b[2J"
 
-# 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮（spec §1：`/quit`、
-# 空闲时 `Ctrl-C` 与 `Ctrl-D` 都是双击 —— `.scratch/exit-gesture/spec.md` §1；panic 那条
-# 路走同一个函数，但没法按需触发 —— 见手工清单）。两下要在 500 毫秒窗口内，所以一次
-# `write` 发两个字节即可。
+# 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮。`Ctrl-C` **不在**这里：
+# 票 23 之后它只取消、不退出（`.scratch/session-tab/spec.md` §1、§3）。第三个数是这个出口该
+# 留下的退出码 —— `/quit` 是明确说出口的意图，走 0；`Ctrl-D` 是举手双击退出，走 130
+# （`.scratch/exit-gesture/spec.md` §3、票 23）。两下要在 500 毫秒窗口内，所以一次 `write`
+# 发两个字节即可。
 GESTURES = [
-    ("ctrl-c", b"\x03\x03"),
-    ("/quit", b"/quit\r"),
-    ("ctrl-d", b"\x04\x04"),
+    ("/quit", b"/quit\r", 0),
+    ("ctrl-d", b"\x04\x04", 130),
 ]
 
 # shell 必须拿回去的 tty 标志：规范输入、回显与信号。
@@ -307,11 +312,15 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
             break
         raw += text
         if settle_by is None and BANNER_ANCHOR in raw and any(
-            STATUS_ANCHOR in row for row in screen.rows()
+            STATUS_ANCHOR in row and "enter" in row for row in screen.rows()
         ):
             settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
+    # 启动安定不等于**主循环已经在等第一行**：技能、MCP 与会话目录的组装还在它后面。
+    # 早到的那些字节会被静默吃掉（前端那时还没有可交付的提示），于是 `/quit` 这一轮会
+    # 因为一个与出口无关的原因变红。宽限一会儿再开始打手势。
+    time.sleep(1.5)
     # 先来一个空 Enter：循环会丢掉这条空行、再问一次，所以会话必须还在。这就是当年
     # 把会话退掉的那个回归。
     write(fd, b"\r")
@@ -392,11 +401,16 @@ def busy_config(directory, port):
 
 
 def capture_busy(binary, data_home, config, timeout=20.0):
-    """跑一轮忙碌双击：点着一个回合，再在它跑着的时候连按两下 `Ctrl-C`。
+    """跑一轮「忙碌时退不出去」：点着一个回合，双击 `Ctrl-D` 被闸门拒，取消之后再退。
 
     与 `capture` 的两处不同：先发一条 prompt（并在同一个 write 里立刻跟上两下 `Ctrl-C`
     之前留一段宽限期，好让回合真的起来），且不做那个「空 Enter 之后会话还在吗」的检查
     —— 这条路的终点就是进程结束。
+
+    **2026-10-12 校准**：票 23 之后忙碌时第二下不再直接退，而是被退出闸门拒（那一场还在
+    跑，不能替用户取消）。所以这条路的形状是三步：双击 `Ctrl-D` 被拒 → `Ctrl-C` 取消回合
+    → 再双击 `Ctrl-D` 真的走（130）。它也顺带守着 2026-10-12 那个退出死锁：主循环握着
+    自己的渲染写端去 await 渲染任务，进程会卡在这一轮不结束。
     """
     pid, fd = pty.fork()
     if pid == 0:
@@ -412,15 +426,24 @@ def capture_busy(binary, data_home, config, timeout=20.0):
             break
         raw += text
         if settle_by is None and BANNER_ANCHOR in raw and any(
-            STATUS_ANCHOR in row for row in screen.rows()
+            STATUS_ANCHOR in row and "enter" in row for row in screen.rows()
         ):
             settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
     # 点着一个回合：假 provider 会把这次调用挂住，所以宽限期之后它一定还在跑。
+    # 与 `capture` 同一个理由先让主循环到位，否则这条 prompt 只会落进草稿。
+    time.sleep(1.2)
     write(fd, b"say hi\r")
     time.sleep(0.6)
-    write(fd, b"\x03\x03")
+    # 忙碌时双击 `Ctrl-D`：闸门拒（那一场还没收尾），屏幕上给一句，进程不退。
+    write(fd, b"\x04\x04")
+    time.sleep(1.0)
+    # 取消这个回合 —— `Ctrl-C` 只取消，永远不退出（票 23）。
+    write(fd, b"\x03")
+    time.sleep(1.5)
+    # 收尾之后再双击 `Ctrl-D`：这一次该真的走。
+    write(fd, b"\x04\x04")
     exited, status = False, None
     end = time.time() + 6.0
     while time.time() < end:
@@ -516,7 +539,9 @@ def fork_with_controlling_tty(binary, data_home, args=()):
         os.write(ready_w, b"%d" % pid)
         os.close(ready_w)
         _, status = os.waitpid(pid, 0)
-        os._exit(0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1)
+        # 把孙进程的**退出码**（不是「成没成」的 0/1）原样带回来：挂起那一轮要断言
+        # TUI 出口是 130、plain 出口是 0，翻成 0/1 就量不出这个差别。
+        os._exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
     os.close(slave)
     os.close(ready_w)
     pid = int(os.read(ready_r, 32))
@@ -576,7 +601,16 @@ def capture_suspend(binary, data_home, args=(), plain=False):
             break
         raw += text
         if settle_by is None and BANNER_ANCHOR in raw:
-            if plain or any(STATUS_ANCHOR in row for row in screen.rows()):
+            # plain 的「就绪」是那条提示符：行缓冲的前端要等 `next_line` 把 `> ` 打到
+            # stderr 才收得下一行；TUI 则等**空闲形态**的提示行（含 `enter 发送`）。
+            ready = (
+                ("> " in raw)
+                if plain
+                else any(
+                    STATUS_ANCHOR in row and "enter" in row for row in screen.rows()
+                )
+            )
+            if ready:
                 settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
@@ -626,9 +660,9 @@ def capture_suspend(binary, data_home, args=(), plain=False):
                     if ALT_ENTER in raw[len(before_stop) :]:
                         resumed = True
                         break
-            # 正常出口：TUI 是双击 `Ctrl-C`，plain 走那条命令（它的 `Ctrl-C` 是信号，
-            # 会被终端驱动直接送到进程，测不出别的东西）。
-            write(fd, b"/quit\r" if plain else b"\x03\x03")
+            # 正常出口：TUI 是双击 `Ctrl-D`（票 23 之后 `Ctrl-C` 只取消、不退出），plain
+            # 走那条命令（它的 `Ctrl-C` 是信号，会被终端驱动直接送到进程，测不出别的东西）。
+            write(fd, b"/quit\r" if plain else b"\x04\x04")
             deadline = time.time() + 6.0
             gone = False
             while time.time() < deadline:
@@ -683,10 +717,11 @@ def capture_suspend(binary, data_home, args=(), plain=False):
 
 
 def verdict_busy(run):
-    """忙碌双击那条路的判定：进程结束、退出码 130、终端交还干净。
+    """忙碌那条路的判定：闸门拒过之后仍然能退出（进程结束、码 130、终端交还干净）。
 
-    这条正是 `std::process::exit(130)` 那个缺陷的回归：旧实现跳过一切析构，所以会红在
-    termios / `TEARDOWN` 上，而不是红在退出码上（`.scratch/exit-gesture/spec.md` §3）。
+    这条是 `std::process::exit(130)` 那个缺陷的回归（旧实现跳过一切析构，所以会红在
+    termios / `TEARDOWN` 上），也是 2026-10-12 那个**退出死锁**的回归：退出流程若再握着
+    渲染写端去 await，进程根本不会结束，这一条就先红在「没有结束进程」上。
     进不了忙碌态时它红得可读 —— 屏幕尾部一起打出来，而不是随机变绿。
     """
     if not run.exited:
@@ -700,7 +735,7 @@ def verdict_busy(run):
     return True, "exit 130, terminal handed back"
 
 
-def verdict(run, devnull, identity, replay=False, cwd_base=""):
+def verdict(run, devnull, identity, replay=False, cwd_base="", expect_status=0):
     """判定一轮运行：它画出的第一帧，以及它留下的东西。
 
     整个抓取内容都被重放一遍，而不是在第一帧处切片：宽字符是带显式光标移动写出来的，
@@ -713,13 +748,19 @@ def verdict(run, devnull, identity, replay=False, cwd_base=""):
 
     `cwd_base` 是这个工作目录的基名：进入那一头必须有一条含它的标题到达终端
     （`.scratch/terminal-title/spec.md` §4）。
+
+    `expect_status` 是这个出口该留下的退出码（见 `GESTURES`）。
     """
     if not run.survived_empty_enter:
         return False, "the session did not survive an empty Enter"
     if not run.exited:
         return False, "the quit gesture did not end the process"
-    if run.status != 0:
-        return False, "the quit gesture left exit status %r" % (run.status,)
+    code = os.waitstatus_to_exitcode(run.status)
+    if code != expect_status:
+        return False, "the quit gesture left exit status %r, not %r" % (
+            code,
+            expect_status,
+        )
     frame = Screen(devnull)
     frame.feed(run.raw)
     rows = frame.rows()
@@ -823,8 +864,12 @@ def verdict_suspend(run, plain=False):
             return False, "the screen was not cleared after the resume"
     if not run.exited:
         return False, "the quit gesture did not end the process"
-    if run.status != 0:
-        return False, "the quit gesture left exit status %r" % (run.status,)
+    expect_status = 0 if plain else 130
+    if run.status != expect_status:
+        return False, "the quit gesture left exit status %r, not %r" % (
+            run.status,
+            expect_status,
+        )
     if not plain:
         handed_back = terminal_handed_back(run)
         if handed_back is not None:
@@ -864,9 +909,11 @@ def main():
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
             for i in range(runs):
-                for label, gesture in GESTURES:
+                for label, gesture, expect in GESTURES:
                     run = capture(binary, data_home, gesture)
-                    ok, why = verdict(run, devnull, identity, cwd_base=cwd_base)
+                    ok, why = verdict(
+                        run, devnull, identity, cwd_base=cwd_base, expect_status=expect
+                    )
                     print(
                         "run %d (%s): %s -- %s"
                         % (i + 1, label, "GREEN" if ok else "RED", why)
@@ -876,10 +923,15 @@ def main():
                 # 就落在启动路径上，而它是否收敛、交还回来的终端是什么样，正是 pty
                 # 能看到的。
                 run = capture(
-                    binary, data_home, gesture=b"\x03\x03", args=("--continue",)
+                    binary, data_home, gesture=b"\x04\x04", args=("--continue",)
                 )
                 ok, why = verdict(
-                    run, devnull, identity, replay=True, cwd_base=cwd_base
+                    run,
+                    devnull,
+                    identity,
+                    replay=True,
+                    cwd_base=cwd_base,
+                    expect_status=130,
                 )
                 print(
                     "run %d (--continue): %s -- %s"
