@@ -607,6 +607,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     |name| front.skills.iter().any(|skill| skill == name),
                     &prompts_shared,
                 );
+                // **空宿主**：一场都没有的时候没有可提交的对象 —— 回一句，别让它静默消失
+                // （票 21）。退出与空行照旧放行。
+                if host.is_empty()
+                    && !matches!(submission, Submission::Quit | Submission::Ignore)
+                {
+                    render.notice(&render::wording::heng(
+                        &render::wording::no_sessions_left(),
+                    ));
+                    continue;
+                }
                 // **只读预览**：凡写流的一律禁 —— 提交、所有 `/` 命令、页内改名都不行
                 // （票 18）。退出不是写流，照旧放行。
                 if read_only && !matches!(submission, Submission::Quit | Submission::Ignore) {
@@ -635,11 +645,22 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 }
             }
             // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
-            request = open_requests.recv() => {
-                if let Some(CliRequest::Open(id)) = request {
+            request = open_requests.recv() => match request {
+                Some(CliRequest::Open(id)) => {
                     open_session(&mut host, &kit, &console, &requests, &id).await;
                 }
-            }
+                Some(CliRequest::New) => {
+                    let cwd = host
+                        .get(&host.foreground())
+                        .map(|entry| entry.cwd.clone())
+                        .unwrap_or_else(|| cwd.clone());
+                    open_new(&mut host, &kit, &console, &requests, &cwd, &front).await;
+                }
+                Some(CliRequest::Close(id)) => {
+                    close_session(&mut host, &kit, &console, &id).await;
+                }
+                None => {}
+            },
             event = events.recv() => match event {
                 Some(FrontEndEvent::Quit) => {
                     quit.apply(&FrontEndEvent::Quit, &signal);
@@ -1652,6 +1673,10 @@ fn switch_to_effort(
 enum CliRequest {
     /// 切到这一场（不在表里就先装载）。
     Open(SessionId),
+    /// 同 cwd 再加载一场空会话，并切过去（票 21）。`/clear` 与阈值 rollover 走的是同一条。
+    New,
+    /// 把这一场从宿主表里卸下来（盘上留着）。
+    Close(SessionId),
 }
 
 /// 组装一场会话所需的那些**可重复取用**的材料（票 20 的装载路径要它）。
@@ -1679,13 +1704,29 @@ struct AssemblyKit {
 
 impl AssemblyKit {
     /// 按这份材料装一场 —— 走的是 `-c <id>` 那条共用路径（`crate::load`）。
-    async fn load(&self, stored: StoredSession, cwd: PathBuf) -> Result<crate::Loaded, String> {
-        let provider = OpenAiProvider::build(&self.config, &self.model, stderr_warnings())
+    async fn load(
+        &self,
+        stored: StoredSession,
+        cwd: PathBuf,
+        inherit: Option<&crate::session::FrontFacts>,
+    ) -> Result<crate::Loaded, String> {
+        // 新建的那一场**继承前台**的模型 / 档位 / 权限模式（票 21）；装载历史会话时不继承。
+        let model = inherit
+            .map(|facts| facts.model.clone())
+            .unwrap_or_else(|| self.model.clone());
+        let mode = inherit.map(|facts| facts.mode).unwrap_or(self.mode);
+        let provider = OpenAiProvider::build(&self.config, &model, stderr_warnings())
             .map_err(|error| error.to_string())?;
-        let session_config = self
+        let mut session_config = self
             .config
-            .session_config(&self.model)
+            .session_config(&model)
             .map_err(|error| error.to_string())?;
+        if let Some(effort) = inherit
+            .and_then(|facts| facts.effort.as_deref())
+            .and_then(effort_from_token)
+        {
+            session_config.params.reasoning_effort = Some(effort);
+        }
         let tools = tools::with_mcp(
             tools::with_web(
                 tools::with_dynamic(&self.config.tools, self.questions.is_some()),
@@ -1704,7 +1745,7 @@ impl AssemblyKit {
                 session_id: stored.id.clone(),
                 tools,
                 locks: self.locks.clone(),
-                policy: Policy::for_mode(self.mode).with_outside_read(self.config.outside_read),
+                policy: Policy::for_mode(mode).with_outside_read(self.config.outside_read),
                 asker: self.asker.clone(),
                 questions: self.questions.clone(),
                 hook: None,
@@ -1761,6 +1802,98 @@ impl AssemblyKit {
     }
 }
 
+/// 把流上那个档位词读回一档（新建时的继承，票 21）。
+fn effort_from_token(token: &str) -> Option<crate::config::ReasoningEffort> {
+    use crate::config::ReasoningEffort;
+    [
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Xhigh,
+        ReasoningEffort::Max,
+    ]
+    .into_iter()
+    .find(|effort| effort.as_str() == token)
+}
+
+/// 新建一场：同 cwd 再加载一场**空**会话，并切过去（票 21）。
+///
+/// 继承前台的模型 / 档位 / 权限模式；沙箱与技能按同 cwd 重探（那两样是组装期的事）；
+/// `carried_tokens` 清 0 —— 新会话本来就不带。
+async fn open_new(
+    host: &mut SessionHost<CliCommand>,
+    kit: &AssemblyKit,
+    console: &ConsoleHandle,
+    requests: &tokio::sync::mpsc::UnboundedSender<CliRequest>,
+    cwd: &Path,
+    inherit: &crate::session::FrontFacts,
+) {
+    let Ok(stored) = kit.store.create(cwd) else {
+        kit.notice(&inherit.id, "开不了新会话：会话目录建不出来");
+        return;
+    };
+    match kit
+        .load(stored.clone(), cwd.to_path_buf(), Some(inherit))
+        .await
+    {
+        Ok(loaded) => {
+            let actor = CliActor {
+                console: console.clone(),
+                config: Arc::clone(&kit.config),
+                goals: kit.goals.clone(),
+                mcp: Arc::clone(&kit.mcp),
+                prompts: Arc::new(Vec::new()),
+                read_only: loaded.read_only,
+                loop_running: false,
+                quit: ExitRequest::default(),
+                requests: requests.clone(),
+            };
+            if let Err(error) = host.adopt_with(
+                loaded.harness,
+                cwd.to_path_buf(),
+                loaded.read_only,
+                Box::new(actor),
+            ) {
+                kit.notice(&inherit.id, &error.to_string());
+                return;
+            }
+            host.switch(&stored.id);
+            let events = read_events(&stored.log_path).unwrap_or_default();
+            console.switch_session(kit.ui_facts(&stored, &events), events);
+            console.host_count(host.len());
+            // 回执口径：新开一场，旧会话留在列表里（票 21）。
+            kit.notice(&stored.id, &render::wording::new_session_opened());
+        }
+        Err(message) => kit.notice(&inherit.id, &message),
+    }
+}
+
+/// 关掉一场（票 21 的四条规则）。
+///
+/// 四条：前台自己禁止、正在跑回合拒绝、空闲会话单击即关不二次确认、只读预览也能关。
+async fn close_session(
+    host: &mut SessionHost<CliCommand>,
+    kit: &AssemblyKit,
+    console: &ConsoleHandle,
+    id: &SessionId,
+) {
+    if let Err(refusal) = crate::session::close_check(host, id) {
+        kit.notice(&host.foreground(), &refusal.to_string());
+        return;
+    }
+    if let Err(error) = host.close_with(id, CliCommand::Close).await {
+        kit.notice(&host.foreground(), &error.to_string());
+        return;
+    }
+    let empty = host.is_empty();
+    // 先让渲染器把这一场忘掉、并把读数与空宿主态更新。
+    console.session_closed(id.clone(), empty);
+    console.host_count(host.len());
+    if empty {
+        kit.notice(id, "没有会话了：按 `新建` 开一场");
+    }
+}
+
 /// 点会话页上的一行：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
 ///
 /// 三条结局：**已在宿主表** —— 零延迟取回（忙闲不阻挡）；**不在** —— 先做能立即判定的检查
@@ -1804,7 +1937,7 @@ async fn open_session(
         }
         // 装载期间提示行一句（票 20）—— 不新增列表标记态。
         kit.notice(id, &format!("正在装载会话 {}…", id.as_str()));
-        match kit.load(stored.clone(), cwd).await {
+        match kit.load(stored.clone(), cwd, None).await {
             Ok(loaded) => {
                 let actor = CliActor {
                     console: console.clone(),
@@ -1945,6 +2078,13 @@ impl CliActor {
             // 换会话：转成一条请求，交给主循环（宿主表在它手里）。
             FrontEndEvent::OpenSession { id } => {
                 let _ = self.requests.send(CliRequest::Open(id));
+            }
+            // 新建与关闭同理（票 21）。
+            FrontEndEvent::NewSession => {
+                let _ = self.requests.send(CliRequest::New);
+            }
+            FrontEndEvent::CloseSession { id } => {
+                let _ = self.requests.send(CliRequest::Close(id));
             }
         }
     }
@@ -2093,18 +2233,11 @@ impl CliActor {
             // 一段机制 —— 只是不带压缩、不带摘要注入：人是主动清场，没有「要带过去的历史」
             // 这回事。
             Submission::Clear => {
-                if self.loop_running {
-                    // 循环跑着的时候输入区是禁言的，所以这一行本来打不出来；这条拒绝是那件事
-                    // 的名字，而不是一条能走到的路径。
-                    harness.notice(&render::wording::heng(
-                        render::wording::clear_while_looping(),
-                    ));
-                } else {
-                    let message = clear_session(harness, &self.goals);
-                    harness.notice(&render::wording::heng(&message));
-                }
+                // `/clear` 与阈值 rollover 与页签 `新建` 是**同一个动作**（票 21）：同 cwd 再
+                // 加载一场空会话、切过去，旧的留在宿主表里。**闸门取消** —— 旧会话不再被换
+                // 掉，拦它没有理由。
+                let _ = self.requests.send(CliRequest::New);
             }
-            // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
             Submission::Loop(args) => {
                 let message = match parse_loop_line(&args) {
                     Err(message) => message,
@@ -3152,6 +3285,7 @@ impl ExitRequest {
             FrontEndEvent::SessionTitled { .. } => {}
             // 换会话更不是：它由调用点处理（那边才有宿主表）。
             FrontEndEvent::OpenSession { .. } => {}
+            FrontEndEvent::NewSession | FrontEndEvent::CloseSession { .. } => {}
             // 切换由调用点自己处理（忙闲判据在那一侧）。
             FrontEndEvent::OpenPicker(_) => {}
         }

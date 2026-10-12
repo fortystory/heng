@@ -487,3 +487,79 @@ async fn loading_a_second_session_hosts_it_and_moves_the_foreground() {
     assert_eq!(host.len(), 2, "旧的留在表里");
     assert!(host.contains(&SessionId::new("s-1")), "切走的那一场不卸载");
 }
+
+#[tokio::test]
+async fn the_close_rules_refuse_only_the_foreground_and_the_busy() {
+    use heng::session::close_check;
+    use heng::session::host::CloseRefusal;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let (first, _) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(first.harness, workspace.clone()).unwrap();
+
+    // 前台自己：禁止 —— 它是脚下那块地板。
+    assert_eq!(
+        close_check(&host, &SessionId::new("s-1")),
+        Err(CloseRefusal::Foreground(SessionId::new("s-1")))
+    );
+
+    // 空闲的非前台：单击即关（不二次确认）。
+    let (second, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
+    host.adopt(second.harness, workspace.clone()).unwrap();
+    assert_eq!(close_check(&host, &SessionId::new("s-2")), Ok(()));
+
+    // 只读预览：也能关。
+    let (third, _) = load_session(dir.path(), "s-3", vec![Reply::text("在")]).await;
+    host.adopt_read_only(third.harness, workspace.clone())
+        .unwrap();
+    assert_eq!(close_check(&host, &SessionId::new("s-3")), Ok(()));
+
+    // 正在跑回合的非前台：拒绝。
+    let opened = Arc::new(Notify::new());
+    let (busy, _) = load_session(
+        dir.path(),
+        "s-4",
+        vec![Reply::Stall(
+            opened,
+            vec![StreamEvent::TextDelta("半句话".to_owned())],
+        )],
+    )
+    .await;
+    host.adopt(busy.harness, workspace).unwrap();
+    host.get(&SessionId::new("s-4"))
+        .unwrap()
+        .cmd
+        .send(turn("跑起来"))
+        .await
+        .unwrap();
+    let mut state = host.get(&SessionId::new("s-4")).unwrap().state.clone();
+    wait_for_entry(&mut state, SessionState::RunningTurn).await;
+    assert_eq!(
+        close_check(&host, &SessionId::new("s-4")),
+        Err(CloseRefusal::Running(SessionId::new("s-4")))
+    );
+}
+
+#[tokio::test]
+async fn closing_the_last_session_empties_the_host_and_a_new_one_comes_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let (first, _) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(first.harness, workspace.clone()).unwrap();
+
+    // 唯一一场永远是前台，所以规则上关不掉；直接卸下来就是「关掉最后一场」。
+    host.close_with(&SessionId::new("s-1"), SessionCommand::Close)
+        .await
+        .unwrap();
+    assert!(host.is_empty(), "关掉最后一场就是空宿主");
+
+    // 空宿主里再新建一场回来（票 21）：加载一场空会话、入表、切前台。
+    let (fresh, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
+    host.adopt(fresh.harness, workspace).unwrap();
+    host.switch(&SessionId::new("s-2"));
+    assert_eq!(host.len(), 1, "新建之后表里又有一场");
+    assert_eq!(host.foreground().as_str(), "s-2");
+}

@@ -60,6 +60,8 @@ pub struct FrontFacts {
     pub model: String,
     /// 推理档位；`None` 是「默认」那一档。
     pub effort: Option<String>,
+    /// 权限模式 —— 新建一场时它要被继承过去（票 21）。
+    pub mode: crate::permissions::Mode,
     pub skills: Vec<String>,
     /// 正在推进的目标名。
     pub goal: Option<String>,
@@ -151,6 +153,40 @@ impl SessionActor<SessionCommand> for TurnActor {
         }
         true
     }
+}
+
+/// 关闭被拒的理由（`.scratch/session-tab/spec.md` §5、票 21 的四条规则）。
+///
+/// 两条拒绝各有各的说法：前台是自己脚下那块地板，先切走；正在跑的那一场先取消 —— 别的都是
+/// **单击即关、不二次确认**（只读预览也一样）。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CloseRefusal {
+    #[error("别关脚下这一场：先切到别的会话再关")]
+    Foreground(SessionId),
+    #[error("这一场正在跑回合：先在那一场按 ctrl-c 取消")]
+    Running(SessionId),
+    #[error("会话 {0} 不在宿主表里")]
+    NotHosted(SessionId),
+}
+
+/// 能不能关这一场。
+///
+/// 它只回答「能不能」，不动那张表：真的卸下来是 [`SessionHost::close_with`]。
+pub fn close_check<C: Send + 'static>(
+    host: &SessionHost<C>,
+    id: &SessionId,
+) -> Result<(), CloseRefusal> {
+    let entry = host
+        .get(id)
+        .ok_or_else(|| CloseRefusal::NotHosted(id.clone()))?;
+    // 前台优先：它是脚下那块地板，别的理由都排在它后面。
+    if &host.foreground() == id {
+        return Err(CloseRefusal::Foreground(id.clone()));
+    }
+    if *entry.state.borrow() == SessionState::RunningTurn {
+        return Err(CloseRefusal::Running(id.clone()));
+    }
+    Ok(())
 }
 
 /// 宿主表拒绝一次操作的理由。

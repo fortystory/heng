@@ -2268,6 +2268,16 @@ pub const SESSIONS_UNREADABLE: &str = "读不出会话列表";
 pub const SESSIONS_NONE: &str = "没有会话";
 pub const SESSIONS_NO_HIT: &str = "没有命中的会话";
 
+/// 新建一场之后的回执（票 21 的口径：新开一场，旧会话留在列表里）。
+pub fn new_session_opened() -> String {
+    "新开一场会话；刚才那场还在会话页里".to_owned()
+}
+
+/// 宿主表空了之后有人还提交了一句（票 21）。
+pub fn no_sessions_left() -> String {
+    "没有会话了：先在会话页按 `新建` 开一场".to_owned()
+}
+
 /// 旧流缺了几样会话事实、回退到了**进程配置默认**（`.scratch/session-tab/spec.md` §2）。
 pub fn facts_filled(names: &[&str]) -> String {
     format!(

@@ -166,6 +166,16 @@ pub enum ConsoleRequest {
         facts: super::tui::SessionFacts,
         events: Vec<Event>,
     },
+    /// 一场被从宿主表里卸下来了，以及卸完之后表空不空（票 21）。
+    ///
+    /// 渲染器要它做三件事：删掉轻状态表里那一行、把页顶读数改成宿主表的场数、空宿主时禁用
+    /// 输入区。
+    SessionClosed {
+        id: crate::events::SessionId,
+        empty: bool,
+    },
+    /// 宿主表现在有几场（票 21 的 `N 场` 读数）。
+    HostCount { sessions: usize },
     /// 这一场是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
     ///
     /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
@@ -216,6 +226,10 @@ pub enum FrontEndEvent {
     CycleMode,
     /// 用户要求离开。
     Quit,
+    /// 会话页页顶点了 `新建`：开一场空会话（`.scratch/session-tab/spec.md` §3、票 21）。
+    NewSession,
+    /// 会话页页顶点了 `关闭`：把焦点行那一场从内存里卸下来（票 21）。
+    CloseSession { id: crate::events::SessionId },
     /// 会话页上点了**别的**一场：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
     ///
     /// 渲染层只上报「有人点了这一行」—— 能不能切（cwd 还在不在、流坏没坏、在不在宿主表里）
@@ -271,6 +285,18 @@ impl ConsoleHandle {
         let _ = self
             .requests
             .send(ConsoleRequest::SwitchSession { facts, events });
+    }
+
+    /// 说一场被卸下来了，以及表空不空。
+    pub fn session_closed(&self, id: crate::events::SessionId, empty: bool) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::SessionClosed { id, empty });
+    }
+
+    /// 说宿主表现在有几场。
+    pub fn host_count(&self, sessions: usize) {
+        let _ = self.requests.send(ConsoleRequest::HostCount { sessions });
     }
 
     /// 说这一场是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
@@ -522,6 +548,8 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::SwitchSession { .. } => {}
                 // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
                 ConsoleRequest::ReadOnly { .. } => {}
+                // 多会话那两件同理：plain 一个进程只跑一场。
+                ConsoleRequest::SessionClosed { .. } | ConsoleRequest::HostCount { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

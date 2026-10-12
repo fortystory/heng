@@ -27,8 +27,8 @@ pub mod titles;
 pub use attach::{AttachCheck, StreamHealth};
 pub use facts::SessionFacts;
 pub use host::{
-    FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost, SessionState, SessionTurn,
-    TurnActor,
+    CloseRefusal, FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost, SessionState,
+    SessionTurn, TurnActor, close_check,
 };
 pub use ledger::DayLedger;
 pub use listing::{SessionListing, SessionMark, SessionRow, sessions};

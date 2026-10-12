@@ -1221,6 +1221,7 @@ impl Harness {
             id: self.session.id().clone(),
             model: self.model().to_owned(),
             effort: self.effort().map(|effort| effort.as_str().to_owned()),
+            mode: self.session.mode(),
             skills: self.skill_names().into_iter().map(str::to_owned).collect(),
             goal: self.current_goal(),
         }

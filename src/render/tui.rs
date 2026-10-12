@@ -4789,7 +4789,15 @@ impl TuiState {
         match self.regions.action_at(column, row) {
             Some(HitAction::SessionRow(line)) => self.sessions_click(line),
             // 页顶那两个入口的动作由票 21 接：这一片只把位置与命中立起来。
-            Some(HitAction::SessionNew | HitAction::SessionClose) => {}
+            // 页顶那两个入口（票 21）：渲染层只上报，能不能关、怎么新建由循环判。
+            Some(HitAction::SessionNew) => {
+                self.events.push(FrontEndEvent::NewSession);
+            }
+            Some(HitAction::SessionClose) => {
+                if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) {
+                    self.events.push(FrontEndEvent::CloseSession { id });
+                }
+            }
             Some(HitAction::SwitchTab(tab)) => {
                 self.tab = tab;
                 // 点页签条也是一次「点左栏」：切到能走键盘的那两页时键盘跟着交给它们，并先给
@@ -6845,6 +6853,21 @@ impl TuiState {
             ConsoleRequest::ReadOnly { read_only } => {
                 self.read_only = read_only;
             }
+            // 一场被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
+            ConsoleRequest::SessionClosed { id, empty } => {
+                self.light.remove(&id);
+                self.sessions.host_empty = empty;
+                // 空宿主：输入区禁用（提交时循环回一句）。
+                self.muted = empty;
+                if self.sessions.focus.as_ref() == Some(&id) {
+                    self.sessions.focus = None;
+                }
+                self.dirty = true;
+            }
+            // 宿主表里有几场（票 21 的 `N 场` 读数）。
+            ConsoleRequest::HostCount { sessions } => {
+                self.sessions.host_sessions = Some(sessions);
+            }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
             ConsoleRequest::Sessions { listing } => {
                 let focus = self.sessions.focus.clone();
@@ -8603,7 +8626,12 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
         .iter()
         .filter(|row| row.mark == crate::session::listing::SessionMark::Running)
         .count();
-    let left = wording::session_count(state.sessions.total, running);
+    // `N 场` 是**宿主表**的读数（几场同时活着），不是 store 里的条数（票 21）。还没报过就退回
+    // 列表总数 —— 票 17 那一版就是这么读的。
+    let left = wording::session_count(
+        state.sessions.host_sessions.unwrap_or(state.sessions.total),
+        running,
+    );
     let left_w = text_columns(&left) as u16;
     let new_w = text_columns(wording::SESSION_NEW) as u16;
     let close_w = text_columns(wording::SESSION_CLOSE) as u16;
@@ -9358,8 +9386,10 @@ struct SessionsPage {
     total: usize,
     /// store 整个读不出（与「没有会话」是两件事）。
     unreadable: bool,
-    /// 空宿主（票 21 填）：宿主表里一场都没有。
+    /// 空宿主（票 21）：宿主表里一场都没有。
     host_empty: bool,
+    /// 宿主表里有几场（票 21 的 `N 场` 读数）；还没报过就用列表总数。
+    host_sessions: Option<usize>,
     /// 过滤态；`None` 就是没在过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
     filter: Option<SessionsFilter>,
     /// 这一页**现在要画**的那些行：没过滤时就是 `rows`，过滤时只剩命中的那些（且不钉顶）。
