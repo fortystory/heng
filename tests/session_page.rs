@@ -507,3 +507,66 @@ fn the_more_line_still_counts_what_this_page_holds() {
     assert!(text.contains(&wording::hit_count(2)), "命中两句：{text}");
     assert!(!text.contains("别的一场"), "{text}");
 }
+
+/// 某一行的标题是什么颜色：找到含那个标题的那一行，取它第一个字的颜色。
+fn title_colour(state: &mut TuiState, title: &str) -> ratatui::style::Color {
+    let frame = buffer(120, 24, state);
+    let first = title.chars().next().expect("标题非空").to_string();
+    for y in 0..24u16 {
+        let text = row_text(&frame, y, 120);
+        if !text.contains(title) {
+            continue;
+        }
+        for x in 0..120u16 {
+            if frame[(x, y)].symbol() == first {
+                return frame[(x, y)].fg;
+            }
+        }
+    }
+    panic!("{title} 不在屏幕上");
+}
+
+#[test]
+fn the_title_colour_says_where_a_session_is() {
+    // 三档必须一眼分得开（票 29）：**当前前台**、**已装载**（切过去零延迟、`关闭`对它可用）、
+    // **只在盘上**（切过去要先装载）。此前「已装载但空闲」与「只在盘上」共用一个空标记，于是
+    // 读的人判断不了 `关闭` 对哪一行可用（2026-10-12 维护者报告）。
+    let mut state = fresh();
+    let mut front = row("s-front", "当前这一场", "heng", SessionMark::Idle, 1);
+    front.foreground = true;
+    load(
+        &mut state,
+        vec![
+            front,
+            row("s-hosted", "已装载空闲", "heng", SessionMark::Idle, 2),
+            row("s-cold", "只在盘上", "heng", SessionMark::Idle, 3),
+        ],
+        3,
+    );
+    state.request(ConsoleRequest::Hosted {
+        ids: vec![SessionId::new("s-front"), SessionId::new("s-hosted")],
+    });
+    open_sessions(&mut state, 120, 24);
+
+    let live = title_colour(&mut state, "当前这一场");
+    let hosted = title_colour(&mut state, "已装载空闲");
+    let cold = title_colour(&mut state, "只在盘上");
+    assert_ne!(live, hosted, "前台与已装载撞了颜色");
+    assert_ne!(hosted, cold, "已装载与只在盘上撞了颜色");
+    assert_ne!(live, cold, "前台与只在盘上撞了颜色");
+    assert_eq!(live, heng::render::palette::LIVE, "前台那一行");
+    assert_eq!(hosted, heng::render::palette::HOSTED, "已装载那一行");
+    assert_eq!(cold, heng::render::palette::MUTED, "只在盘上那一行");
+
+    // 关掉一场之后它退回「只在盘上」那一档 —— 盘上那份还在，只是这个进程不再装着它。
+    state.request(ConsoleRequest::SessionClosed {
+        id: SessionId::new("s-hosted"),
+        empty: false,
+    });
+    open_sessions(&mut state, 120, 24);
+    assert_eq!(
+        title_colour(&mut state, "已装载空闲"),
+        heng::render::palette::MUTED,
+        "卸下来之后就是只在盘上了"
+    );
+}

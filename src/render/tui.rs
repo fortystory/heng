@@ -4084,23 +4084,42 @@ impl TuiState {
         }
     }
 
-    /// `Ctrl-C` 与 `Ctrl-D` 的两条路（`.scratch/session-tab/spec.md` §1、票 23）。
+    /// `Ctrl-C` 与 `Ctrl-D` 的两条路（`.scratch/session-tab/spec.md` §1、票 23、票 28）。
     ///
-    /// * **`Ctrl-C` 只取消前台当前的动作，永不退出**。「第二下变退出」那条旧语义
-    ///   （`.scratch/exit-gesture/spec.md` §1）在有多场会话之后不成立了 —— 它会把别的场一起
-    ///   按下去。没有可取消的东西时由循环回一句（它才知道后台有几场）。
-    /// * **`Ctrl-D` 是退出请求**：过不过闸门由循环判（票 23 的退出闸门）—— 渲染层不知道有几场
-    ///   在跑，也不该替它决定。
+    /// * **`Ctrl-C` 只取消前台当前的动作，永不退出**（票 23）。没有可取消的东西时由循环回一句
+    ///   （它才知道后台有几场）。它**不碰退出的举手**：取消是一次完整手势，把另一把尚未兑现的
+    ///   举手作废掉，才不会让「我按 Ctrl-C 想停下来，结果它顺手退出了」发生（一次手势一层）。
+    /// * **`Ctrl-D` 是退出请求**，而它走**双击**：第一下只举手，提示行出口那段换成「再按一次
+    ///   ctrl-d 退出」，500 毫秒内第二下才真的发出去（`.scratch/exit-gesture/spec.md` §1）。
+    ///   多会话之后误触的代价是一次按掉**几场**，所以这一层回来了。过不过**退出闸门**仍由循环判
+    ///   （票 23）—— 渲染层不知道有几场在跑。闸门拒了的时候主循环会推一条 `ExitBlocked`，
+    ///   那一把举手随之作废：拒了之后下一次按下仍然只是第一下。
+    /// * **立着的那一层先归它**（详情覆盖层、问题框那些）：`Ctrl-D` **关掉**它而不是被它静默
+    ///   吞掉 —— 静默的那一版让人以为键盘坏了（2026-10-12 维护者报告）。唯一的例外是**问卷**：
+    ///   那里 `Ctrl-D` 仍是被忽略的键（`.scratch/questionnaire-keys/spec.md` §5），而它自己的
+    ///   页脚正说着那些键。
     fn exit_key(&mut self, key: Key) {
         match key {
-            Key::CtrlC => self.events.push(FrontEndEvent::Cancel),
+            Key::CtrlC => {
+                self.expire_exit_gesture();
+                self.events.push(FrontEndEvent::Cancel);
+            }
             Key::CtrlD => {
-                // 任何问题立着时它是「被忽略」，不是「别的键」（`.scratch/questionnaire-keys/
-                // spec.md` §5）：那一把手的语义归问卷。
-                if self.pending.is_some() {
+                if matches!(self.pending, Some(Pending::Questionnaire(_))) {
                     return;
                 }
-                self.events.push(FrontEndEvent::Quit);
+                if let Some(pending) = self.pending.take() {
+                    self.decline(pending);
+                    self.dirty = true;
+                    return;
+                }
+                let now = std::time::Instant::now();
+                if self.exit_gesture_raised(now) {
+                    self.expire_exit_gesture();
+                    self.events.push(FrontEndEvent::Quit);
+                } else {
+                    self.raise_exit_gesture_at(now);
+                }
             }
             _ => {}
         }
@@ -6871,6 +6890,14 @@ impl TuiState {
                 self.sessions.focus = Some(id);
                 self.dirty = true;
             }
+            // 退出被闸门拒了（票 28）：那一把举手随之作废，于是下一次按下仍然只是第一下。
+            ConsoleRequest::ExitBlocked { first, .. } => {
+                self.expire_exit_gesture();
+                self.tab = Tab::Sessions;
+                self.sidebar_keyboard = true;
+                self.sessions.focus = Some(first);
+                self.dirty = true;
+            }
             // 一场会话的忙闲（票 22）。
             ConsoleRequest::SessionState { id, state } => {
                 if state == crate::session::host::SessionState::Idle {
@@ -6887,6 +6914,7 @@ impl TuiState {
             // 一场被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
             ConsoleRequest::SessionClosed { id, empty } => {
                 self.light.remove(&id);
+                self.sessions.hosted.remove(&id);
                 self.sessions.host_empty = empty;
                 // 空宿主：输入区禁用（提交时循环回一句）。
                 self.muted = empty;
@@ -6899,6 +6927,11 @@ impl TuiState {
             ConsoleRequest::HostCount { sessions, running } => {
                 self.sessions.host_sessions = Some(sessions);
                 self.sessions.host_running = Some(running);
+            }
+            // 宿主表里装着哪几场（票 29）：会话页那三档标题色。
+            ConsoleRequest::Hosted { ids } => {
+                self.sessions.hosted = ids.into_iter().collect();
+                self.dirty = true;
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
             ConsoleRequest::Sessions { listing } => {
@@ -7177,11 +7210,12 @@ impl TuiState {
             self.switch_main_tab();
             return;
         }
-        // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
-        // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键；问卷立着时的 `Esc`
-        // 也不是「别的键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
+        // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-D`
+        // 自己不在这里清 —— 它正是要摸这把举手的那一个键；`Ctrl-C` 在 [`exit_key`] 里清
+        // （它只取消，顺手把没兑现的退出手势作废）。问卷立着时的 `Esc` 也不是「别的
+        // 键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
         match key {
-            Key::CtrlC | Key::CtrlD => {}
+            Key::CtrlD => {}
             Key::Esc if matches!(self.pending, Some(Pending::Questionnaire(_))) => {}
             _ => self.expire_exit_gesture(),
         }
@@ -7921,12 +7955,14 @@ impl TuiState {
     /// [`wording::status_line_with`]，轨迹页那套见 [`wording::trace_status_line_with`]
     /// （`.scratch/trace-shortcuts/spec.md` §2）。出口那一段两页共用。
     fn hint_line(&self, width: u16) -> String {
+        // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句「再按一次
+        // ctrl-d 退出」是错的（问卷的举手由它自己的页脚说，见票 04）。
+        let raised = self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit);
         // 重放自己会说话：它临时用自己的进度替换掉提示集合。举手时那句催促压在进度行前面
-        // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。**只有重放里**
-        // 才有举手：主路径上的 `Ctrl-C` 与 `Ctrl-D` 都不举手（票 23），问卷的举手由它自己的
-        // 页脚说（票 04）。
+        // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。重放里举手的是
+        // `Ctrl-C` 那一把（`replay_key`），所以那句是另一条文案。
         if let Some(replay) = &self.replay {
-            if self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit) {
+            if raised {
                 return wording::EXIT_HINT_REPLAY_RAISED.to_owned();
             }
             return wording::history_progress_line(replay.next, replay.events.len(), width);
@@ -7946,12 +7982,12 @@ impl TuiState {
         // 的 `enter` 是开详情、不是发送，而它在讨论会话里也照样成立（与 `viewer_status_line`
         // 那条区分同一个理由：提示说的是键盘*现在*干什么）。
         if self.main_tab == MainTab::Trace {
-            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width);
+            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width, raised);
         }
         if self.prompt_reply.is_some() {
-            wording::status_line_with(receipt.as_deref(), self.busy(), width)
+            wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
         } else {
-            wording::viewer_status_line_with(receipt.as_deref(), self.busy(), width)
+            wording::viewer_status_line_with(receipt.as_deref(), self.busy(), width, raised)
         }
     }
 
@@ -8639,6 +8675,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 time_w,
                 now,
                 state.states.get(&row.id).copied(),
+                state.sessions.hosted.contains(&row.id),
             ));
             drawn_rows += 1;
         }
@@ -8751,6 +8788,7 @@ fn session_line(
     time_w: u16,
     now: std::time::SystemTime,
     live: Option<crate::session::host::SessionState>,
+    hosted: bool,
 ) -> Line<'static> {
     use crate::session::host::SessionState;
     use crate::session::listing::SessionMark;
@@ -8764,15 +8802,28 @@ fn session_line(
         // 还没报过三态：退回列表自己那份（store 扫出来的「上次没跑完」仍有意义）。
         None => None,
     };
-    // 整行的那一档样式：焦点是 `ACCENT` + `BOLD`；cwd 不存在的那一行整行 `MUTED`。
-    let row_style = if focused {
-        Style::default()
-            .fg(palette::ACCENT)
-            .add_modifier(Modifier::BOLD)
-    } else if row.missing_cwd {
+    // **标题色回答「这一场在哪儿」**（票 29）：当前前台、已在宿主表（切过去零延迟、`关闭`对它
+    // 可用）、只在盘上（切过去要先装载）。三档必须有别 —— 撞成同一个颜色就是「看不出来哪些已装载」。
+    //
+    // **焦点是字重，不是颜色**：那一档与「在不在前台」是两个正交的问题，而焦点那一行往往不是
+    // 前台（键盘可以在会话页的任意一行上），所以拿颜色去表达焦点会盖掉这一行真正的身份。
+    // 焦点另有两条独立信号：时间列用 `ACCENT`，以及粗体。
+    let title_colour = if row.foreground {
+        palette::LIVE
+    } else if hosted {
+        palette::HOSTED
+    } else {
+        palette::MUTED
+    };
+    // cwd 不存在的那一行整行 `MUTED`：它切不过去（票 02），而它必然也不在宿主表里。
+    let row_style = if row.missing_cwd {
         Style::default().fg(palette::MUTED)
     } else {
-        Style::default().fg(palette::PLAIN)
+        Style::default().fg(title_colour).add_modifier(if focused {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        })
     };
     // 标记列：四态互斥，前台压过一切。
     let (mark, mark_style) = if row.foreground {
@@ -9450,6 +9501,11 @@ struct SessionsPage {
     host_sessions: Option<usize>,
     /// 宿主表里有几场在跑（票 22 的 `M`）；还没报过就用列表里的读数。
     host_running: Option<usize>,
+    /// 宿主表里此刻装着**哪几场**（票 29）：会话页那三档标题色靠它。
+    ///
+    /// 它是**渲染器自己的轻状态**，与 `light` 同一格 —— 数据经 `ConsoleRequest::Hosted` 推过来，
+    /// 渲染层自己不问宿主表要什么在场。
+    hosted: std::collections::HashSet<crate::events::SessionId>,
     /// 过滤态；`None` 就是没在过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
     filter: Option<SessionsFilter>,
     /// 这一页**现在要画**的那些行：没过滤时就是 `rows`，过滤时只剩命中的那些（且不钉顶）。

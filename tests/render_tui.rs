@@ -1173,3 +1173,121 @@ fn a_suspend_rewrites_the_title_even_when_it_did_not_change() {
     assert_eq!(state.retitle(), "~/code/heng", "恢复后照旧写一遍");
     assert!(state.sync_title().is_none(), "写完之后比对重新成立");
 }
+
+/// 提示行末尾那一段（出口）在当前这一帧是什么。
+fn exit_hint_on_screen(state: &mut TuiState) -> String {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("TestBackend");
+    terminal
+        .draw(|frame| heng::render::draw_frame(frame, state))
+        .expect("画一帧");
+    let buffer = terminal.backend().buffer().clone();
+    (0..24)
+        .map(|y| {
+            let mut line = String::new();
+            let mut x = 0u16;
+            while x < 120 {
+                line.push_str(buffer[(x, y)].symbol());
+                x += heng::render::width::text_columns(buffer[(x, y)].symbol()).max(1) as u16;
+            }
+            line
+        })
+        .find(|line| line.contains("ctrl-"))
+        .unwrap_or_default()
+        .trim_matches(['┆', ' '])
+        .to_owned()
+}
+
+#[test]
+fn ctrl_d_asks_twice_before_it_leaves() {
+    // 多会话之后误触的代价是一次按掉**几场**，所以 `Ctrl-D` 走双击（票 28）：
+    // 第一下只举手、提示行换成「再按一次」，第二下才真的发出去。
+    let mut state = new_state();
+
+    state.key(Key::CtrlD);
+    assert!(
+        state.take_events().is_empty(),
+        "第一下不是退出请求：{:?}",
+        state.take_events()
+    );
+    assert!(
+        exit_hint_on_screen(&mut state).contains("再按一次"),
+        "提示行说了那一下还没算：{}",
+        exit_hint_on_screen(&mut state)
+    );
+
+    state.key(Key::CtrlD);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Quit], "第二下才退");
+}
+
+#[test]
+fn ctrl_c_cancels_and_throws_away_the_pending_exit() {
+    // 一次手势一层：`Ctrl-C` 只取消，它顺手把那把还没兑现的退出手势作废 —— 否则「我按
+    // Ctrl-C 想停下来，结果它顺手退出了」（`.scratch/session-tab/spec.md` §1）。
+    let mut state = state_running();
+
+    state.key(Key::CtrlD);
+    assert!(
+        exit_hint_on_screen(&mut state).contains("再按一次"),
+        "退出的那一下举着了"
+    );
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel], "只取消");
+
+    state.key(Key::CtrlD);
+    assert!(
+        state.take_events().is_empty(),
+        "退出的那一下重新从第一下算起：{:?}",
+        state.take_events()
+    );
+}
+
+#[test]
+fn ctrl_d_closes_a_pending_box_instead_of_being_swallowed() {
+    // 静默的那一版让人以为键盘坏了（2026-10-12 维护者报告：按 Ctrl-D 什么也没出现）。
+    // 权限问句立着时它**关掉那个问句**（与详情覆盖层同一条纪律），而问卷仍是被忽略的键 ——
+    // 那把手的语义归问卷，它自己的页脚正说着（`.scratch/questionnaire-keys/spec.md` §5）。
+    let mut state = new_state();
+    let (reply, _answer) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(heng::render::AskRequest {
+        request: heng::permissions::PermissionRequest {
+            escalation: None,
+            speaker: None,
+            request_id: "r-9".to_owned(),
+            tool_call_id: "c-9".to_owned(),
+            tool_name: "bash".to_owned(),
+            args: serde_json::json!({"command": "ls"}),
+            reason: "mode ask".to_owned(),
+        },
+        reply,
+    }));
+    let rows = exit_hint_on_screen(&mut state);
+    assert!(rows.contains("ctrl-"), "问句立着时也在提示行上：{rows}");
+
+    state.key(Key::CtrlD);
+    let text = exit_hint_on_screen(&mut state);
+    assert!(
+        !text.contains("授权") && !state.take_events().contains(&FrontEndEvent::Quit),
+        "问句被关掉了，而不是发一次退出：{text}"
+    );
+}
+
+#[test]
+fn a_refused_exit_drops_the_raised_hand_so_the_next_press_starts_over() {
+    // 闸门拒了之后那把举手必须作废，否则「第二下」会一直连着（票 28）：人看见的是
+    // 「第一下举手 → 第二下被拒 → 再按还是第一下」。
+    let mut state = new_state();
+    state.key(Key::CtrlD);
+    assert!(
+        exit_hint_on_screen(&mut state).contains("再按一次"),
+        "举着了"
+    );
+
+    state.request(ConsoleRequest::ExitBlocked {
+        count: 1,
+        first: heng::events::SessionId::new("s-b".to_owned()),
+    });
+    let after = exit_hint_on_screen(&mut state);
+    assert!(!after.contains("再按一次"), "被拒之后那一下作废：{after}");
+}

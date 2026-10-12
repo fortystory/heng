@@ -41,6 +41,18 @@ pub const BAD: Color = Color::Red;
 /// （注入 / 用户 / 助手）要分得开（§2、用户故事 8）。
 pub const INJECTED: Color = Color::LightBlue;
 
+/// 会话页上「**当前前台**」那一行的标题色（票 29）。
+///
+/// 它回答的是「这一场是现在屏幕上的那一场」—— 与 [`USER`](Self::USER) 撞值是刻意的
+/// （§3：域间允许撞值）。
+pub const LIVE: Color = Color::LightGreen;
+
+/// 会话页上「**已装载、但不是前台**」那一行的标题色（票 29）。
+///
+/// 它回答的是「切过去零延迟、`关闭`对它可用」。与 [`INJECTED`](Self::INJECTED) 撞值同样
+/// 是刻意的：这一档与上下文注入不同域、不会同时出现在同一处。
+pub const HOSTED: Color = Color::LightBlue;
+
 /// 用户消息那块**气泡**的底色（`.scratch/trace-tab/spec.md` §2 的补记）。
 ///
 /// 它不是一个前景色：气泡靠一块等宽的底色与它右缘的留白说「这是我说的」，而不用边框字符 ——
@@ -208,5 +220,14 @@ mod tests {
     #[test]
     fn the_two_band_backgrounds_never_look_the_same() {
         assert_ne!(VIEWPORT, HIT, "命中底色不能与视口底色撞值");
+    }
+
+    /// 会话页那三档标题色两两不同 —— 撞了就是「看不出来哪些已装载」，也就是这一版的全部
+    /// 要害（`.scratch/session-tab/spec.md` §3、票 29）。
+    #[test]
+    fn the_session_titles_are_three_distinct_colours() {
+        assert_ne!(LIVE, HOSTED, "前台与已装载撞了");
+        assert_ne!(HOSTED, MUTED, "已装载与只在盘上撞了");
+        assert_ne!(LIVE, MUTED, "前台与只在盘上撞了");
     }
 }

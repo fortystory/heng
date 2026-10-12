@@ -616,6 +616,8 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 「刚跑完、还没被读」那本账（票 25）。它的**边沿从电平快照推** —— 每帧拿全部会话的状态
     // 与上一帧比对，不新增通道。
     let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
+    // 宿主表里**装着哪几场**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
+    let mut before_hosted: Option<Vec<SessionId>> = None;
     let code = loop {
         console.set_running(false);
         tokio::select! {
@@ -702,6 +704,13 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 let finished = unread.iter().filter(|id| **id != foreground).count();
                 console.title_attention(waiting, finished);
                 console.host_count(host.len(), host.running());
+                // **表里装着哪几场**（票 29）：会话页那三档标题色靠它。变化了才推 —— 那是
+                // 装载与关闭的边沿，不是每 80ms 一次的事实。
+                let hosted: Vec<SessionId> = host.entries().iter().map(|e| e.id.clone()).collect();
+                if before_hosted.as_ref() != Some(&hosted) {
+                    before_hosted = Some(hosted.clone());
+                    console.hosted(hosted);
+                }
             }
             // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
             request = open_requests.recv() => match request {
@@ -754,7 +763,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                             render.notice(&render::wording::heng(
                                 &render::wording::exit_blocked(count),
                             ));
-                            console.attention(first);
+                            // 提示行那句话的可点入口指它，而**那把退出的举手随之作废**
+                            // （票 28）：被拒之后下一次按下仍然只是第一下。
+                            console.exit_blocked(count, first);
                         }
                     }
                 }

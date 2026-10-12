@@ -176,6 +176,20 @@ pub enum ConsoleRequest {
     },
     /// 宿主表现在有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
     HostCount { sessions: usize, running: usize },
+    /// 宿主表里此刻装着**哪几场**（票 29）。
+    ///
+    /// 会话页上那三档标题色靠它：当前前台、已在表里（切过去零延迟、`关闭`对它可用）、只在盘上
+    /// （切过去要先装载）。`HostCount` 只给两个数，说不出「是哪几场」。
+    Hosted { ids: Vec<crate::events::SessionId> },
+    /// **退出被闸门拒了**（票 23 的闸门、票 28 的双击）：还有 `count` 场没收尾，而 `first` 是
+    /// 第一场 —— 提示行那句话的可点入口就指它。
+    ///
+    /// 它顺带作废那把退出的举手：被拒之后下一次按下仍然只是第一下，于是人看见的是「第一下
+    /// 举手 → 第二下被拒 → 再按还是第一下」，而不是「第二下之后直接退」。
+    ExitBlocked {
+        count: usize,
+        first: crate::events::SessionId,
+    },
     /// 场外通知那两个数（票 25）：**后台**待答几场、**后台**刚跑完几场。
     TitleAttention { waiting: usize, finished: usize },
     /// 提示行那句话有**可点入口**（票 23 的退出闸门）：把会话页交到前台、焦点落在这一行上 ——
@@ -314,6 +328,18 @@ impl ConsoleHandle {
         let _ = self
             .requests
             .send(ConsoleRequest::HostCount { sessions, running });
+    }
+
+    /// 说宿主表里此刻装着**哪几场**（票 29）：会话页那三档标题色靠它。
+    pub fn hosted(&self, ids: Vec<crate::events::SessionId>) {
+        let _ = self.requests.send(ConsoleRequest::Hosted { ids });
+    }
+
+    /// 说退出被闸门拒了，以及第一场没收尾的是谁（票 28）。
+    pub fn exit_blocked(&self, count: usize, first: crate::events::SessionId) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::ExitBlocked { count, first });
     }
 
     /// 说场外通知那两个数。
@@ -588,9 +614,11 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::SwitchSession { .. } => {}
                 // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
                 ConsoleRequest::ReadOnly { .. } => {}
-                // 多会话那两件同理：plain 一个进程只跑一场。
+                // 多会话那几件同理：plain 一个进程只跑一场。
                 ConsoleRequest::SessionClosed { .. }
                 | ConsoleRequest::HostCount { .. }
+                | ConsoleRequest::Hosted { .. }
+                | ConsoleRequest::ExitBlocked { .. }
                 | ConsoleRequest::SessionState { .. }
                 | ConsoleRequest::Attention { .. }
                 | ConsoleRequest::TitleAttention { .. } => {}
