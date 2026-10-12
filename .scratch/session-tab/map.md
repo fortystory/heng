@@ -3,7 +3,7 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-10-12，四轮 grilling / 16 问）。本图只做**规划**，不产实现代码。
-Status: **图已收口**（10 张设计票 resolved；实现票 21 张 done + 票 32 于 2026-10-12 转 `Type: implement`、`ready-for-agent`）。
+Status: **图已收口**（10 张设计票 resolved；实现票 `12`–`33` 全部 done；`34` 于 2026-10-12 由架构访谈新开、`ready-for-agent`）。
 Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for-agent`，实现交给 `/to-tickets` 切票。
 
 ## 目的地
@@ -89,10 +89,12 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [29: 会话页的标题色分三档（前台 / 已装载 / 只在盘上）](issues/29-session-titles-say-where-a-session-is.md)
 - [x] [30: 退出流程不再死锁，提示请求跨轮保活](issues/30-exit-deadlock-and-prompt-liveness.md)
 - [x] [31: 切换前台后，会话页的前台标记跟着走](issues/31-foreground-mark-follows-the-switch.md)
-- [ ] [32: 关闭的交互：让「要关哪一个会话」在点之前就看得见](issues/32-close-interaction.md)
+- [x] [32: 关闭的交互：让「要关哪一个会话」在点之前就看得见](issues/32-close-interaction.md)
+- [x] [33: 装载的 cwd 只有一个来源](issues/33-attach-cwd-single-source.md)
+- [ ] [34: 装载收成一个动作](issues/34-attach-one-action.md)
 
-共 **32** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **22 张实现票**（`09` 与
-12–31 全部 `done`；32 由 2026-10-12 那一轮访谈从 `grilling` 转成 `implement`、`ready-for-agent`）。
+共 **34** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **24 张实现票**（`09` 与
+12–33 全部 `done`；34 于 2026-10-12 由架构访谈新开、`ready-for-agent`，它的阻塞项 33 已 done）。
 设计票的依赖边：`02 ← 03`、`05 ← 04`、`06 ← 02, 04`、`07 ← 04`、`08 ← 04`；其余票的边写在每张票
 自己的 `Blocked by:` 里。**决策 frontier = 空**（唯一那张 grilling 票已转成实现票）。
 
@@ -163,3 +165,5 @@ Charting 完成（2026-10-12）。**11 张子票**（10 张决策票 + 1 张实�
 **再记一张（同日追问）**：维护者接着问「关闭的会话该如何操作？」—— 现状**可用但绕路**：点 `关闭` 拒绝的是前台自己，而鼠标点一行又会连前台一起切过去，于是只能「点别的行切走 → `↑`/`↓` 把焦点移回目标行 → 点 `关闭`」，而这两步在屏幕上分不出来。登记为 [`32`](issues/32-close-interaction.md)（`Type: grilling`、`open`），把「关哪个会话在点之前就看得见、且一步完成」留到下一次设计对话定方向，四条既有规则不动。顺手把 26–31 补进 `## 任务清单`（此前只列到 25，`scripts/wayfinder-check.py` 因此一直红着，票 30 也漏了 `Blocked by:`）。
 
 **票 32 收尾（2026-10-12，一轮访谈 19 问）**：维护者问「关闭的会话该如何操作？」。查下来它一半不是优化，而是三处「票里定了、实现没落地」：[票 06](issues/06-session-page-shape.md) 的 `Enter` 切前台是空键、[票 07](issues/07-new-session-and-unload.md) 的「关闭可以关掉最后一个会话」被 `close_check` 的前台拒绝挡住、[票 20](issues/20-click-to-switch.md) 的「单击能切就立刻切」与「关闭 / 改名作用于焦点行」不自洽。这一轮一次定完：点行语义（单击只落焦点，`Enter` 与**鼠标双击**切前台）、只剩一个会话时可直接关到空宿主、被拒提示进提示行并可点、`关闭「<标题>」` 点名，以及量词从「场」换成「会话」（新票 [`.scratch/chinese-ui/issues/09`](../chinese-ui/issues/09-session-noun.md)，先做）。票 32 由 `grilling` 转 `implement`（`ready-for-agent`），票 06 / 20 / 07 各追加一条评论记下推翻与例外。
+
+**2026-10-12 一轮架构回顾**（`/improve-codebase-architecture` 加 Q1–Q26 的 grilling）：装载这一段被点名为 friction —— [票 18](issues/18-attach-path.md) 的「一条共用的装载函数」只走到 `crate::load()` 为止，装配的后半段（入表、接应答者、切前台、说话）仍在四处各拼一遍；点一行那条路还把 `StoredSession.dir` 当 cwd 交给宿主表（`src/cli.rs:2178`），而那一格正是新建与翻页继承 cwd 的来源。折成两张票：[33](issues/33-attach-cwd-single-source.md)（cwd 只有一个来源）与 [34](issues/34-attach-one-action.md)（装载收成一个动作，interface 冻结在票里）。`CONTEXT.md` 因此立了**装载（attach）**一条词条。
