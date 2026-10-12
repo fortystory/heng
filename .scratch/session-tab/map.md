@@ -83,8 +83,18 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [23: 退出闸门与 `Ctrl-C` / `Ctrl-D` 语义](issues/23-exit-gate-and-ctrl-c.md)
 - [x] [24: 列表过滤](issues/24-session-list-filter.md)
 - [x] [25: 场外通知：终端标题的状态段](issues/25-terminal-title-attention.md)
+- [x] [26: 点一行要真的切过去](issues/26-click-a-row-reaches-the-host-table.md)
+- [x] [27: 出口提示按新语义拆开，并跟着眼前那一场走](issues/27-the-exit-hint-follows-the-session-in-front.md)
+- [x] [28: `Ctrl-D` 不再被静默吞掉，且退出走双击](issues/28-ctrl-d-never-swallowed-and-asks-twice.md)
+- [x] [29: 会话页的标题色分三档（前台 / 已装载 / 只在盘上）](issues/29-session-titles-say-where-a-session-is.md)
+- [x] [30: 退出流程不再死锁，提示请求跨轮保活](issues/30-exit-deadlock-and-prompt-liveness.md)
+- [x] [31: 切换前台后，会话页的前台标记跟着走](issues/31-foreground-mark-follows-the-switch.md)
+- [ ] [32: 关闭的交互：让「要关哪一场」在点之前就看得见](issues/32-close-interaction.md)
 
-共 **24** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **15 张实现票**（`09` 与 12–25，全部 `Type: implement`、`ready-for-agent`）。设计票的依赖边：`02 ← 03`、`05 ← 04`、`06 ← 02, 04`、`07 ← 04`、`08 ← 04`；实现票的边写在每张票自己的 `Blocked by:` 里。**决策 frontier = 空**（设计票全部 resolved，图已收口）；**实现批次的起手票 = 12 / 13 / 14 / 16**（无阻塞）。
+共 **32** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **22 张实现/优化票**
+（`09` 与 12–31 全部 `done`；32 是 `open` 的一张 `grilling`）。设计票的依赖边：`02 ← 03`、
+`05 ← 04`、`06 ← 02, 04`、`07 ← 04`、`08 ← 04`；其余票的边写在每张票自己的 `Blocked by:` 里。
+**决策 frontier = 32**（唯一 open + 未阻塞 + 未认领的 `Type: grilling`）。
 
 ## 已定的决定
 
@@ -145,3 +155,9 @@ Charting 完成（2026-10-12）。**11 张子票**（10 张决策票 + 1 张实�
 **落地后的两处收尾（2026-10-12）**：维护者在这张图落地后报了三个症状 —— 点会话页一行切不过去、出口提示里 `ctrl-c` 与 `ctrl-d` 没有拆开、按 `ctrl-c` 得到一句「这一场现在没有在跑的东西」。前一个是**行为**（主循环里 `OpenSession` 落在一个空分支上，票 20 那条路只接了两头），后两个是**同一族**（提示行还停在票 23 之前的旧语义，那句回话只是那份误导文案的直接后果）。两张票：[`26`](issues/26-click-a-row-reaches-the-host-table.md)（会话级手势就地转请求，拆掉「转发给前台再转回来」那一圈）与 [`27`](issues/27-the-exit-hint-follows-the-session-in-front.md)（出口两档拆开，忙闲改读**眼前这一场**的三态）。两张各留了欠账：主循环逐行路径仍无端到端覆盖、`forward_gesture` 的 `try_send` 会静默丢手势、问卷里那句退出回执还没定。
 
 **又三张**（2026-10-12 第二轮报告）：`Ctrl-D` 按下去**什么也没出现**（`pending` 立着时被静默吞掉）、要**「再按一次」**的确认、以及会话页看不出**哪些场已装载**。[`28`](issues/28-ctrl-d-never-swallowed-and-asks-twice.md) 把 `Ctrl-D` 接回双击（`Gesture::Exit` 与 500ms 窗口一直完好）、并让它**关掉立着的那一层**而不是静默；闸门拒绝后那把举手作废，于是「第二下」不会连着退。`[`29`](issues/29-session-titles-say-where-a-session-is.md)` 给会话页的标题分三档色：前台 `LIVE`、已装载 `HOSTED`、只在盘上 `MUTED` —— 前两条修的是**看得见**，第三条修的是**看得懂**。两张票的欠账记在各自文件末尾。
+
+**一张（2026-10-12 第三轮报告）**：维护者复测报「`ctrl-d` 不能退出」与「不能正常切换会话，点击没反应」。[`30`](issues/30-exit-deadlock-and-prompt-liveness.md) 查出这两条是**同一个死锁**：`RenderChannel::shutdown` 要等每一个渲染写端消失，而主循环自己那份 `render` 在退出流程里还活着 —— 进程卡在 `await` 上，从此不再回到 `select`，之后一切手势（按键、点击会话页）静默失效。修复是退出流程第一句 `drop(render)`。同一轮还修掉提示请求每轮重发导致的输入丢失：`--plain` 的 `/quit` 因此**稳定**无效、TUI 偶发（保活那份 future，拿到一行才重新武装）。真机脚本 `scripts/tui-startup-check.py` 也一并校准（锚点 / 出口清单 / 退出码分档 / 就绪判据），它重新成为可红的守卫：修复后 **0/6 red**。
+
+**再一张（同日追问）**：维护者接着问「为什么我切换别的会话时，当前会话没有变？」。[`31`](issues/31-foreground-mark-follows-the-switch.md) 确认会话页那行画的是**启动时**那份 listing 的 `foreground`（listing 只推一次），而切换更新的是渲染侧的 `front` —— 于是 `▍` 与 `LIVE` 色一直停在启动那一场。修法是在 `SwitchSession` 里就地改行快照的前台归属（不重扫 store）；真机复验 `▍` 依次落在第 11 / 12 / 13 行。**欠账**：前台所在检出组「钉在最顶」的排序仍滞后。
+
+**再记一张（同日追问）**：维护者接着问「关闭的会话该如何操作？」—— 现状**可用但绕路**：点 `关闭` 拒绝的是前台自己，而鼠标点一行又会连前台一起切过去，于是只能「点别的行切走 → `↑`/`↓` 把焦点移回目标行 → 点 `关闭`」，而这两步在屏幕上分不出来。登记为 [`32`](issues/32-close-interaction.md)（`Type: grilling`、`open`），把「关哪一场在点之前就看得见、且一步完成」留到下一次设计对话定方向，四条既有规则不动。顺手把 26–31 补进 `## 任务清单`（此前只列到 25，`scripts/wayfinder-check.py` 因此一直红着，票 30 也漏了 `Blocked by:`）。
