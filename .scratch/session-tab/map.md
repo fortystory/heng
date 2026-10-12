@@ -82,7 +82,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [22: 后台三态与待答挂住](issues/22-background-states-and-awaiting.md)
 - [x] [23: 退出闸门与 `Ctrl-C` / `Ctrl-D` 语义](issues/23-exit-gate-and-ctrl-c.md)
 - [x] [24: 列表过滤](issues/24-session-list-filter.md)
-- [ ] [25: 场外通知：终端标题的状态段](issues/25-terminal-title-attention.md)
+- [x] [25: 场外通知：终端标题的状态段](issues/25-terminal-title-attention.md)
 
 共 **24** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **15 张实现票**（`09` 与 12–25，全部 `Type: implement`、`ready-for-agent`）。设计票的依赖边：`02 ← 03`、`05 ← 04`、`06 ← 02, 04`、`07 ← 04`、`08 ← 04`；实现票的边写在每张票自己的 `Blocked by:` 里。**决策 frontier = 空**（设计票全部 resolved，图已收口）；**实现批次的起手票 = 12 / 13 / 14 / 16**（无阻塞）。
 
