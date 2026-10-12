@@ -2044,15 +2044,21 @@ pub enum TitleState {
     Waiting,
     /// 正在重放历史。
     Replaying,
+    /// **后台**有几场在等人答（票 25）。`N` 只算后台，不含当前前台。
+    WaitingBackground(usize),
+    /// **后台**有几场刚跑完、还没被读（票 25）。
+    FinishedBackground(usize),
 }
 
 /// 状态段那一个词；空闲没有词 —— 省略整段，而不是写一个空串（spec §2）。
-pub fn title_word(state: TitleState) -> Option<&'static str> {
+pub fn title_word(state: TitleState) -> Option<String> {
     match state {
         TitleState::Idle => None,
-        TitleState::Running => Some("运行中"),
-        TitleState::Waiting => Some("等你"),
-        TitleState::Replaying => Some("重放中"),
+        TitleState::Running => Some("运行中".to_owned()),
+        TitleState::Waiting => Some("等你".to_owned()),
+        TitleState::Replaying => Some("重放中".to_owned()),
+        TitleState::WaitingBackground(count) => Some(format!("{count} 场待答")),
+        TitleState::FinishedBackground(count) => Some(format!("{count} 场跑完")),
     }
 }
 
@@ -2060,11 +2066,21 @@ pub fn title_word(state: TitleState) -> Option<&'static str> {
 ///
 /// 重放压过等你、等你压过运行中：对人来说「这个终端在等你」比「它在跑」更值得先看见，而
 /// 重放是一种连输入都不接的时刻。`muted`（禁言）不参与 —— 它是运行中的一种。
-pub fn title_state(replaying: bool, pending: bool, busy: bool) -> TitleState {
-    if replaying {
+pub fn title_state(
+    background_waiting: usize,
+    replaying: bool,
+    pending: bool,
+    background_finished: usize,
+    busy: bool,
+) -> TitleState {
+    if background_waiting > 0 {
+        TitleState::WaitingBackground(background_waiting)
+    } else if replaying {
         TitleState::Replaying
     } else if pending {
         TitleState::Waiting
+    } else if background_finished > 0 {
+        TitleState::FinishedBackground(background_finished)
     } else if busy {
         TitleState::Running
     } else {
@@ -2131,11 +2147,12 @@ pub fn terminal_title(
     goal: Option<&str>,
 ) -> String {
     let path = title_path(cwd, home);
-    let full = join_title(&path, title_word(state), goal);
+    let segment = title_word(state);
+    let full = join_title(&path, segment.as_deref(), goal);
     if text_columns(&full) <= TITLE_COLUMNS {
         return full;
     }
-    let without_goal = join_title(&path, title_word(state), None);
+    let without_goal = join_title(&path, segment.as_deref(), None);
     if text_columns(&without_goal) <= TITLE_COLUMNS {
         return without_goal;
     }

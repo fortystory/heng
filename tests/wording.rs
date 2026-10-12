@@ -1686,19 +1686,19 @@ fn a_path_that_cannot_fit_is_truncated_to_forty_columns() {
 #[test]
 fn replay_outranks_a_pending_question_which_outranks_a_running_turn() {
     use wording::TitleState::{Idle, Replaying, Running, Waiting};
-    assert_eq!(wording::title_state(true, true, true), Replaying);
-    assert_eq!(wording::title_state(false, true, true), Waiting);
-    assert_eq!(wording::title_state(false, false, true), Running);
-    assert_eq!(wording::title_state(false, false, false), Idle);
+    assert_eq!(wording::title_state(0, true, true, 0, true), Replaying);
+    assert_eq!(wording::title_state(0, false, true, 0, true), Waiting);
+    assert_eq!(wording::title_state(0, false, false, 0, true), Running);
+    assert_eq!(wording::title_state(0, false, false, 0, false), Idle);
 }
 
 #[test]
 fn an_idle_session_has_no_status_word() {
     use wording::TitleState::{Idle, Replaying, Running, Waiting};
     assert_eq!(wording::title_word(Idle), None);
-    assert_eq!(wording::title_word(Running), Some("运行中"));
-    assert_eq!(wording::title_word(Waiting), Some("等你"));
-    assert_eq!(wording::title_word(Replaying), Some("重放中"));
+    assert_eq!(wording::title_word(Running).as_deref(), Some("运行中"));
+    assert_eq!(wording::title_word(Waiting).as_deref(), Some("等你"));
+    assert_eq!(wording::title_word(Replaying).as_deref(), Some("重放中"));
 }
 
 #[test]
@@ -1732,5 +1732,54 @@ fn the_command_and_reference_colours_are_two_distinct_named_colours() {
         reference,
         ratatui::style::Color::Reset,
         "上色不该是一个空操作"
+    );
+}
+
+#[test]
+fn the_title_segment_takes_the_first_thing_that_holds() {
+    // 票 25 的取值表：逐条按优先级走一遍。
+    use heng::render::wording::{TitleState, title_state, title_word};
+    let word = |state| title_word(state);
+
+    // 后台有待答压过一切。
+    assert_eq!(
+        title_state(2, true, true, 3, true),
+        TitleState::WaitingBackground(2)
+    );
+    assert_eq!(
+        word(TitleState::WaitingBackground(2)).as_deref(),
+        Some("2 场待答")
+    );
+    // 前台重放压过前台待答与在跑。
+    assert_eq!(title_state(0, true, true, 3, true), TitleState::Replaying);
+    // 前台待答压过后台跑完。
+    assert_eq!(title_state(0, false, true, 3, true), TitleState::Waiting);
+    // 后台跑完压过前台在跑。
+    assert_eq!(
+        title_state(0, false, false, 3, true),
+        TitleState::FinishedBackground(3)
+    );
+    assert_eq!(
+        word(TitleState::FinishedBackground(3)).as_deref(),
+        Some("3 场跑完")
+    );
+    // 前台在跑。
+    assert_eq!(title_state(0, false, false, 0, true), TitleState::Running);
+    // 都没有：整段省略。
+    assert_eq!(title_state(0, false, false, 0, false), TitleState::Idle);
+    assert_eq!(word(TitleState::Idle), None);
+
+    // **单会话回归**：后台那两个数都是 0 时，词与今天一字不差。
+    assert_eq!(
+        word(title_state(0, true, false, 0, false)).as_deref(),
+        Some("重放中")
+    );
+    assert_eq!(
+        word(title_state(0, false, true, 0, false)).as_deref(),
+        Some("等你")
+    );
+    assert_eq!(
+        word(title_state(0, false, false, 0, true)).as_deref(),
+        Some("运行中")
     );
 }

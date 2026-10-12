@@ -176,6 +176,8 @@ pub enum ConsoleRequest {
     },
     /// 宿主表现在有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
     HostCount { sessions: usize, running: usize },
+    /// 场外通知那两个数（票 25）：**后台**待答几场、**后台**刚跑完几场。
+    TitleAttention { waiting: usize, finished: usize },
     /// 提示行那句话有**可点入口**（票 23 的退出闸门）：把会话页交到前台、焦点落在这一行上 ——
     /// 点它（或按 Enter）就切过去。
     Attention { id: crate::events::SessionId },
@@ -234,6 +236,11 @@ pub enum FrontEndEvent {
     CycleMode,
     /// 用户要求离开。
     Quit,
+    /// 用户有过一次输入 —— 未读的「跑完」到此为止（`.scratch/session-tab/spec.md` §7、票 25）。
+    ///
+    /// 渲染器只在**真有未读**（标题上写着 `N 场跑完`）时才发它：这样既守住了「未读寿命到下一次
+    /// 输入为止」，又不会让每一次按键都往上游加一件事。
+    AttentionSeen,
     /// 会话页页顶点了 `新建`：开一场空会话（`.scratch/session-tab/spec.md` §3、票 21）。
     NewSession,
     /// 会话页页顶点了 `关闭`：把焦点行那一场从内存里卸下来（票 21）。
@@ -307,6 +314,13 @@ impl ConsoleHandle {
         let _ = self
             .requests
             .send(ConsoleRequest::HostCount { sessions, running });
+    }
+
+    /// 说场外通知那两个数。
+    pub fn title_attention(&self, waiting: usize, finished: usize) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::TitleAttention { waiting, finished });
     }
 
     /// 说「去会话页看这一场」。
@@ -578,7 +592,8 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::SessionClosed { .. }
                 | ConsoleRequest::HostCount { .. }
                 | ConsoleRequest::SessionState { .. }
-                | ConsoleRequest::Attention { .. } => {}
+                | ConsoleRequest::Attention { .. }
+                | ConsoleRequest::TitleAttention { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

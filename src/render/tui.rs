@@ -2524,6 +2524,10 @@ pub struct TuiState {
     tab: Tab,
     /// 这一场是不是**只读预览**（票 18）：凡写流的一律禁，包括渲染器自己发起的那几处。
     read_only: bool,
+    /// **后台**有几场在等人答（票 25 的标题状态段）。N 不含当前前台。
+    background_waiting: usize,
+    /// **后台**有几场刚跑完、还没被读（票 25）。
+    background_finished: usize,
     /// 每场会话现在忙不忙（票 22）。它按**会话 id** 存，切走切回都还在。
     states: std::collections::HashMap<crate::events::SessionId, crate::session::host::SessionState>,
     /// 每场会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
@@ -3950,6 +3954,8 @@ impl TuiState {
             slash: MenuSelection::default(),
             tab: Tab::Usage,
             read_only: false,
+            background_waiting: 0,
+            background_finished: 0,
             states: std::collections::HashMap::new(),
             light: std::collections::HashMap::new(),
             sessions: SessionsPage::default(),
@@ -4010,7 +4016,13 @@ impl TuiState {
         wording::terminal_title(
             &self.cwd,
             self.home.as_deref(),
-            wording::title_state(self.replay.is_some(), self.pending.is_some(), self.busy()),
+            wording::title_state(
+                self.background_waiting,
+                self.replay.is_some(),
+                self.pending.is_some(),
+                self.background_finished,
+                self.busy(),
+            ),
             self.view.goal.as_deref(),
         )
     }
@@ -4061,6 +4073,15 @@ impl TuiState {
         self.exit_deadline = None;
         self.exit_gesture_busy = false;
         self.dirty = true;
+    }
+
+    /// 任何一次按键都算「看过了」——如果标题上正写着 `N 场跑完` 的话（票 25）。
+    ///
+    /// 只在**真有未读**时才往上游加一件事：没有未读的进程不该为每一次按键多付一条消息。
+    fn note_attention_seen(&mut self) {
+        if self.background_finished > 0 {
+            self.events.push(FrontEndEvent::AttentionSeen);
+        }
     }
 
     /// `Ctrl-C` 与 `Ctrl-D` 的两条路（`.scratch/session-tab/spec.md` §1、票 23）。
@@ -6838,6 +6859,14 @@ impl TuiState {
                 }
                 self.dirty = true;
             }
+            // 场外通知那两个数（票 25）：标题状态段照它们取值。
+            ConsoleRequest::TitleAttention { waiting, finished } => {
+                if self.background_waiting != waiting || self.background_finished != finished {
+                    self.background_waiting = waiting;
+                    self.background_finished = finished;
+                    self.dirty = true;
+                }
+            }
             // 提示行那句话的可点入口（票 23）：把会话页交到前台、焦点落在这一行上。
             ConsoleRequest::Attention { id } => {
                 self.tab = Tab::Sessions;
@@ -7037,6 +7066,8 @@ impl TuiState {
     /// 处理一个按键。答案与提交通过待答的一次性通道发出去；手势排队交给循环。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // 这一次按键也算「看过了」（票 25 的未读寿命）。
+        self.note_attention_seen();
         // 记号区间先于这一下按键同步：吸附与整块删读的就是它，而它得反映此刻的草稿
         // （`.scratch/input-tokens/spec.md` §4）。
         self.sync_tokens();

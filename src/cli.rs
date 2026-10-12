@@ -613,6 +613,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 推送 —— 变更点散在宿主表 task、应答者与循环三处，而这里能看到全部。
     let mut states: std::collections::HashMap<SessionId, crate::session::host::SessionState> =
         std::collections::HashMap::new();
+    // 「刚跑完、还没被读」那本账（票 25）。它的**边沿从电平快照推** —— 每帧拿全部会话的状态
+    // 与上一帧比对，不新增通道。
+    let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
     let code = loop {
         console.set_running(false);
         tokio::select! {
@@ -666,11 +669,38 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
                 for entry in host.entries() {
                     let state = *entry.state.borrow();
-                    if states.get(&entry.id) != Some(&state) {
-                        states.insert(entry.id.clone(), state);
+                    let before = states.insert(entry.id.clone(), state);
+                    match (before, state) {
+                        // 刚跑完：记一条未读。
+                        (
+                            Some(crate::session::host::SessionState::RunningTurn),
+                            crate::session::host::SessionState::Idle,
+                        ) => {
+                            unread.insert(entry.id.clone());
+                        }
+                        // 又开跑了：这一条未读作废。
+                        (_, crate::session::host::SessionState::RunningTurn) => {
+                            unread.remove(&entry.id);
+                        }
+                        _ => {}
+                    }
+                    if before != Some(state) {
                         console.session_state(entry.id.clone(), state);
                     }
                 }
+                let foreground = host.foreground();
+                // **N 只算后台**（票 25）：单会话时标题与今天一字不差。
+                let waiting = host
+                    .entries()
+                    .iter()
+                    .filter(|entry| {
+                        entry.id != foreground
+                            && *entry.state.borrow()
+                                == crate::session::host::SessionState::AwaitingHuman
+                    })
+                    .count();
+                let finished = unread.iter().filter(|id| **id != foreground).count();
+                console.title_attention(waiting, finished);
                 console.host_count(host.len(), host.running());
             }
             // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
@@ -727,6 +757,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                             console.attention(first);
                         }
                     }
+                }
+                Some(FrontEndEvent::AttentionSeen) => {
+                    // 用户有过一次输入：未读的「跑完」到此为止（票 25）。
+                    unread.clear();
                 }
                 Some(FrontEndEvent::Cancel) => {
                     // `Ctrl-C` **只取消前台当前的动作，永不退出**（票 23）。它不再记进退出账本。
@@ -2255,6 +2289,8 @@ impl CliActor {
             FrontEndEvent::CloseSession { id } => {
                 let _ = self.requests.send(CliRequest::Close(id));
             }
+            // 未读的清除也归主循环（它持那本账）。
+            FrontEndEvent::AttentionSeen => {}
         }
     }
 
@@ -3425,6 +3461,7 @@ impl ExitRequest {
             // 换会话更不是：它由调用点处理（那边才有宿主表）。
             FrontEndEvent::OpenSession { .. } => {}
             FrontEndEvent::NewSession | FrontEndEvent::CloseSession { .. } => {}
+            FrontEndEvent::AttentionSeen => {}
             // 切换由调用点自己处理（忙闲判据在那一侧）。
             FrontEndEvent::OpenPicker(_) => {}
         }
