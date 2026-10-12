@@ -121,6 +121,7 @@ flowchart TD
     boot[boot：进程被敲下]
     cmd{子命令分派}
     setup[组装：配置 · 凭据 · provider · 工具表 · 沙箱]
+    host[会话宿主：一场一个 task，表里一个前台]
     sess[会话：新开 或 --continue 恢复]
     render{渲染器：TUI 或 plain，二选一}
     loop[主循环：等一行或手势]
@@ -137,8 +138,10 @@ flowchart TD
     cmd -->|交互式| setup
     cmd -->|--discuss| disc
     cmd -->|probe / prune / sessions| maint
-    setup --> sess
+    setup --> host
     setup --> render
+    host --> sess
+    sess --> host
     sess --> loop
     render --> loop
     loop --> route
@@ -154,9 +157,15 @@ flowchart TD
     loop -->|取消后收尾| aborted
 ```
 
-**这张图在讲什么。** 一次进程只走一条主干：`boot → cmd` 之后按子命令分叉，交互式那条路
-组装好会话与渲染器就进主循环；循环把每一次输入分派给 `turn`、`disc` 或 `goal`，回来的边都
-指向循环顶。三条维护子命令（`probe` / `prune` / `sessions`）**各自退出**，既不组装会话、
+**这张图在讲什么。** `boot → cmd` 之后按子命令分叉，交互式那条路组装好**会话宿主**与渲染器
+就进主循环；循环把每一次输入分派给 `turn`、`disc` 或 `goal`，回来的边都指向循环顶。
+
+**进程生命周期 ≠ 会话生命周期**（`.scratch/session-tab/spec.md` §1）。`host` 那一层就是这条
+分界：一次进程可以装载、切换、关掉多场会话，而**主干**（主循环、渲染器、收尾）只有一条。
+一场会话在内存里的样子是一个 `Harness` 加一个拥有它的 task（`SessionHost` 每行六格：id、cwd、
+只读标志、三态、命令通道、取消信号 + join）；**前台**只是表里的一个指针，切换只改它，
+忙闲不阻挡。所以 `sess` 与 `render` 仍是 `setup` 的产物，而它们**归 `host` 管** —— 图 1 把
+`host` 画在 `setup` 与 `sess` 之间，正是为了说出这件事。三条维护子命令（`probe` / `prune` / `sessions`）**各自退出**，既不组装会话、
 也不走交互式的收尾路径 —— 所以 `maint` 没有出边，那是它的事实，不是漏画。退出有两条：
 `tail → ok`（正常收尾）与 `loop → aborted`（取消后兑现 130）。
 
@@ -453,7 +462,9 @@ flowchart TD
 
 ### 1. 事件流是唯一真相源
 
-- **说什么**：`messages` 每个回合从流上重算，从不存下来。
+- **说什么**：`messages` 每个回合从流上重算，从不存下来 —— 而且**每场会话各算各的**：一次
+  进程里活着几场，就有几条流、几份投影，谁都不读别人的那一份（`.scratch/session-tab/spec.md`
+  §1）。
 - **图上的边**：图 5 的 `log → proj → trim → req`；`cont → proj` 与 `replay → proj` 是同一件事的
   另外两条入口。
 - **证据**：`src/lib.rs:3-4`、`src/agent.rs:181-205`、`src/provider/projection.rs:46`
@@ -471,6 +482,8 @@ flowchart TD
 ### 3. 工具表组装后不变
 
 - **说什么**：动态工具与联网工具都在组装期入表，之后再不改动 —— 表是缓存前缀的一部分。
+  多会话之后这条要**按会话读**：表是**那一场装载时**建的一份（票 20 的 `AssemblyKit` 每次现建
+  一张），一场会话跑着的时候它的表不动。
 - **图上的边**：图 2 的 `mode → tools`（**没有回边**）。
 - **证据**：`src/cli.rs:386-389`、`src/tools/mod.rs:96-125`、`src/tools/registry.rs:88-93`
 - **破坏了会怎样**：运行期往表里加一个工具，每个会话的缓存前缀就作废一次（全量未命中），
@@ -561,6 +574,7 @@ flowchart TD
 | `boot` | 进程入口，`main` 只调 `cli::main()` | `src/main.rs:1-3`、`src/cli.rs:78-103` | `fn main` |
 | `cmd` | 子命令分派：`--version` / `--help` / `probe` / `discuss` / `prune` / `sessions`，其余交互式 | `src/cli.rs:105-129` | `fn run` |
 | `setup` | 组装：配置 · 凭据 · provider · 工具表 · 沙箱 | `src/cli.rs:234-411` | `fn interactive` |
+| `host` | 会话宿主：一场一个 task，表里一个前台指针 | `src/cli.rs:423`、`src/session/host.rs:198-330` | `struct SessionHost`、`fn adopt_with` |
 | `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:4177`、`src/cli.rs:2643-2687` | `fn choose_session` |
 | `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:304`、`src/render/mod.rs:308` | `fn tui`、`fn plain` |
 | `loop` | 主循环：等一行或手势 | `src/cli.rs:238`、`src/cli.rs:619` | `fn interactive` |
@@ -581,7 +595,9 @@ flowchart TD
 | `cmd -->\|交互式\| setup` | `src/cli.rs:127` | 没有子命令就是交互式 |
 | `cmd -->\|--discuss\| disc` | `src/cli.rs:116` | `discuss` 子命令独立组装 |
 | `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:4093` | 三条各自 `return` 自己的 `ExitCode` |
-| `setup --> sess` | `src/cli.rs:4177` | `choose_session` 决定开哪一场 |
+| `setup --> host` | `src/cli.rs:423` | 宿主表在组装之前立起来 |
+| `host --> sess` | `src/cli.rs:4177`、`src/cli.rs:531` | `choose_session` 决定开哪一场，装好之后入表 |
+| `sess --> host` | `src/cli.rs:531` | `adopt_with` 把这一场交给它的 task |
 | `setup --> render` | `src/cli.rs:327-372` | 渲染器在组装前选定并注入 |
 | `sess --> loop` | `src/cli.rs:446-459` | `interactive_loop(...)` 被调 |
 | `render --> loop` | `src/cli.rs:446-459` | 同上；两条入边是图 1 的有意合并 |
