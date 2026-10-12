@@ -457,10 +457,7 @@ fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("恢复"), "历史铺完之后进度行就没了：{text}");
-    assert!(
-        text.contains("ctrl-c/ctrl-d 退出"),
-        "而普通状态行回来了：{text}"
-    );
+    assert!(text.contains("ctrl-d 退出"), "而普通状态行回来了：{text}");
 }
 
 #[test]

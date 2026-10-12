@@ -74,7 +74,10 @@ fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<Strin
 /// 必须像循环那样说出来。
 fn state_running() -> TuiState {
     let mut state = new_state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     state
 }
 
@@ -89,7 +92,10 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
     state.tick();
     assert!(state.is_dirty(), "空闲的一次 tick 也要下一帧：光标还在闪");
 
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     state.mark_clean();
     state.tick();
     assert!(state.is_dirty(), "运行时的一次 tick 会要下一帧");
@@ -1026,7 +1032,10 @@ fn the_title_reads_the_working_directory_and_a_state_word() {
     let mut state = new_state();
     assert_eq!(state.title(), "~/code/heng", "空闲没有状态词");
 
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     assert_eq!(state.title(), "~/code/heng · 运行中");
 }
 
@@ -1044,7 +1053,10 @@ fn a_question_makes_the_title_say_it_is_waiting() {
 #[test]
 fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
     let mut state = new_state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let (tx, _rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: permission_request("bash"),
@@ -1075,7 +1087,10 @@ fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
 #[test]
 fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
     let mut state = new_state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     state.apply(RenderEvent::Logged {
         session: heng::events::SessionId::new("01J8ZQ4K7M"),
         event: Event::new(
@@ -1109,7 +1124,10 @@ fn a_title_is_only_written_when_it_changes() {
     assert!(state.sync_title().is_some(), "第一版总是给出去");
     assert!(state.sync_title().is_none(), "没变就不再写");
 
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     assert_eq!(
         state.sync_title().expect("状态变了就该给新标题"),
         "~/code/heng · 运行中"

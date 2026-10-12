@@ -4341,7 +4341,7 @@ impl TuiState {
     /// 等待阶段（正文尾巴还空着）：名字下面那行是它**在做什么** —— 有工具在跑就说那个工具，
     /// 否则说它在想。流式阶段：名字下面是正在流的那几行正文。
     fn conversation_live(&mut self) -> Vec<Line<'static>> {
-        if self.view.live.is_empty() && !self.running {
+        if self.view.live.is_empty() && !self.busy() {
             return Vec::new();
         }
         // 谁在答：正在流的那条正文的发言者；还没有增量时退回名册的第一个（讨论里几轮之间会
@@ -7303,15 +7303,22 @@ impl TuiState {
         self.sync_menu();
     }
 
-    /// 循环是否**在一次运行里面**：一个回合，或者它在驱动的一场讨论。
+    /// 键盘是不是在**忙** —— 而忙闲既看**一次运行**的边沿，也看**眼前这一场**的三态。
     ///
-    /// 这件事由循环通过 [`ConsoleRequest::RunState`] 说出来；这里什么都不推断它。两次推断
-    /// 都失败了。从渲染流推：只有 `TurnEnded` 会清掉旧标志，而合成器那一次调用不结束任何
-    /// 回合，于是一场讨论之后 TUI 以为自己永远在工作。从「没有未决的提示」推：那个谓词在
-    /// 循环要它的*第一*行之前就是真的，于是组装期间空闲的键盘被读成工作中。两个错都把
-    /// `Ctrl-C` 变成了一个空闲循环会丢掉的取消手势 —— 一块死键盘。
+    /// 两个来源是并起来的关系，不是二选一：
+    ///
+    /// * [`running`](Self::running) 是**一次运行**的边沿，由循环经 `ConsoleRequest::RunState`
+    ///   推过来。它盖得住那些**不经过宿主表**的运行 —— 一次性的 `discuss` 没有 task，也就发不出
+    ///   会话三态。
+    /// * [`states`](Self::states) 是宿主表那份三态（票 22），它说的是**眼前这一场**。多会话之后
+    ///   只有它分得清「切过去那一场正跑着、而这一场没有」—— 曾经 `busy()` 只读 `running`，
+    ///   而那个开关只由循环在提交与回到提示那两处写，切场之后没人重算它，于是状态行按空闲那一档
+    ///   说话，而那时 `Ctrl-C` 明明可用（2026-10-12 维护者报告）。
+    ///
+    /// `AwaitingHuman` 也算忙：那一场有动作挂在等人答，`Ctrl-C` 取消的正是它 —— 与退出闸门的
+    /// 口径一致（`session::exit_gate` 把「不在空闲」当成没收尾）。
     fn busy(&self) -> bool {
-        self.running
+        self.running || self.states.contains_key(&self.front)
     }
 
     /// 把打好的草稿交给循环并记住它。
@@ -7914,13 +7921,12 @@ impl TuiState {
     /// [`wording::status_line_with`]，轨迹页那套见 [`wording::trace_status_line_with`]
     /// （`.scratch/trace-shortcuts/spec.md` §2）。出口那一段两页共用。
     fn hint_line(&self, width: u16) -> String {
-        // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句
-        // 「再按一次 ctrl-c/ctrl-d 退出」是错的（问卷的举手由它自己的页脚说，见票 04）。
-        let raised = self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit);
         // 重放自己会说话：它临时用自己的进度替换掉提示集合。举手时那句催促压在进度行前面
-        // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。
+        // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。**只有重放里**
+        // 才有举手：主路径上的 `Ctrl-C` 与 `Ctrl-D` 都不举手（票 23），问卷的举手由它自己的
+        // 页脚说（票 04）。
         if let Some(replay) = &self.replay {
-            if raised {
+            if self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit) {
                 return wording::EXIT_HINT_REPLAY_RAISED.to_owned();
             }
             return wording::history_progress_line(replay.next, replay.events.len(), width);
@@ -7940,12 +7946,12 @@ impl TuiState {
         // 的 `enter` 是开详情、不是发送，而它在讨论会话里也照样成立（与 `viewer_status_line`
         // 那条区分同一个理由：提示说的是键盘*现在*干什么）。
         if self.main_tab == MainTab::Trace {
-            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width, raised);
+            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width);
         }
         if self.prompt_reply.is_some() {
-            wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
+            wording::status_line_with(receipt.as_deref(), self.busy(), width)
         } else {
-            wording::viewer_status_line_with(receipt.as_deref(), self.busy(), width, raised)
+            wording::viewer_status_line_with(receipt.as_deref(), self.busy(), width)
         }
     }
 
@@ -15113,10 +15119,23 @@ mod tests {
         assert!(state.events.is_empty(), "也没有手势被误发出去");
     }
 
+    /// 让**眼前这一场**处在「正在跑」那一档。
+    ///
+    /// 它走产品路径（`ConsoleRequest::SessionState`）而不是直接写字段：忙闲是**会话级**事实
+    /// （票 22），而 `busy()` 读的就是那张表。
+    fn front_is_running(state: &mut TuiState) {
+        let id = state.front.clone();
+        state.request(ConsoleRequest::SessionState {
+            id,
+            state: crate::session::host::SessionState::RunningTurn,
+        });
+        assert!(state.busy(), "这一场确实在跑");
+    }
+
     #[test]
     fn esc_while_a_goal_runs_asks_before_it_stops() {
         let mut state = state();
-        state.running = true;
+        front_is_running(&mut state);
         state.muted = true;
 
         // 误按 Esc：不是取消，而是问一句。
@@ -15151,7 +15170,7 @@ mod tests {
     #[test]
     fn only_an_explicit_stop_choice_stops_the_goal_loop() {
         let mut state = state();
-        state.running = true;
+        front_is_running(&mut state);
         state.muted = true;
         state.key(Key::Esc);
         // 明确选「停下」：推一条取消手势，循环据此收尾并落一条「人主动停」的事件。
@@ -15163,7 +15182,7 @@ mod tests {
     #[test]
     fn without_a_goal_loop_esc_is_still_the_plain_cancel_gesture() {
         let mut state = state();
-        state.running = true;
+        front_is_running(&mut state);
         // 一次普通回合：Esc 照旧就是取消，不多问一句。
         state.key(Key::Esc);
         assert_eq!(state.events, vec![FrontEndEvent::Cancel]);

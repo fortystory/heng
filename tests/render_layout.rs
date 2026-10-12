@@ -292,7 +292,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[21]
     );
     assert!(
-        rows[23].contains("ctrl-c"),
+        rows[23].contains("ctrl-d"),
         "提示行列出了出口：{:?}",
         rows[23]
     );
@@ -490,7 +490,10 @@ fn ctrl_o_works_while_a_run_is_in_flight() {
     // 纯视图手势：跑着的时候恰恰最想多看几行转录（`.scratch/sidebar-toggle/spec.md` §3）。
     // 与 `Ctrl-D` 相反 —— 那一个是空闲键盘的手势。
     let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let open = screen(120, 24, &mut state);
     assert!(open.join("\n").contains('┆'), "跑着的时候左栏还在");
 
@@ -704,7 +707,7 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
         "这是它丢掉的第一个东西：{:?}",
         rows[3]
     );
-    assert!(rows[9].contains("ctrl-c"), "提示行：{:?}", rows[9]);
+    assert!(rows[9].contains("ctrl-d"), "提示行：{:?}", rows[9]);
     assert!(
         !rows.join("\n").contains("heng"),
         "左栏整条藏起来：{rows:#?}"
@@ -716,7 +719,7 @@ fn hint_items_of(width: u16, state: &mut TuiState) -> Vec<String> {
     let rows = screen(width, 24, state);
     let row = rows
         .iter()
-        .find(|row| row.contains("ctrl-c"))
+        .find(|row| row.contains("ctrl-d"))
         .expect("提示行在屏幕上");
     row.trim_matches(['┆', ' '])
         .split(" · ")
@@ -733,13 +736,16 @@ fn hint_items(width: u16) -> Vec<String> {
     hint_items_of(width, &mut state)
 }
 
-/// 同上，但有一次运行进行中：出口变成 `ctrl-c 退出`，短七列，
-/// 120 列下把那个状态词换了回来。
+/// 同上，但有一次运行进行中：出口变成 `ctrl-c 取消 · ctrl-d 退出`，长十四列，
+/// 于是同一个宽度上它比空闲那一档少一条提示。
 fn hint_items_busy(width: u16) -> Vec<String> {
     let mut state = state();
     let (reply, _line) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply });
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     hint_items_of(width, &mut state)
 }
 
@@ -748,11 +754,14 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
     // 回合进行中，或者在一次性的 `discuss` 里：没人在读行，所以 `enter
     // 发送` 就是假话，模式手势也没有东西可切。
     let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let rows = screen(120, 24, &mut state);
     let row = rows
         .iter()
-        .find(|row| row.contains("ctrl-c"))
+        .find(|row| row.contains("ctrl-d"))
         .expect("提示行在屏幕上");
     assert!(row.contains("esc 取消"), "{row}");
     assert!(row.contains("PgUp/PgDn 滚动"), "{row}");
@@ -764,30 +773,30 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
 fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     // 提示行落在**主列**里（`.scratch/tui-feedback/spec.md` §2），所以它的宽度是主列内容宽、
     // 不再是终端宽度：120 列终端给出 79 列提示，80 列给出 51 列。量出来的阶梯因此是
-    // 40 列 -> 一条提示 + 出口，80 -> 三条，100 -> 四条，120 -> 五条。
+    // 40 列 -> 两条提示 + 出口，80 -> 三条，100 -> 四条，120 -> 五条。
     //
     // `ctrl-o 左栏` 排在最末、`ctrl-t 换模型` 排在它前面一格，所以这两条只有最宽那一档看得见
     // （`.scratch/sidebar-toggle/spec.md` §4 的「位置就是优先级」）。
-    assert_eq!(hint_items(40).len(), 2, "40 列：{:?}", hint_items(40));
-    assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
-    assert_eq!(hint_items(100).len(), 4, "100 列：{:?}", hint_items(100));
+    assert_eq!(hint_items(40).len(), 3, "40 列：{:?}", hint_items(40));
+    assert_eq!(hint_items(80).len(), 4, "80 列：{:?}", hint_items(80));
+    assert_eq!(hint_items(100).len(), 5, "100 列：{:?}", hint_items(100));
     assert_eq!(hint_items(120).len(), 5, "120 列：{:?}", hint_items(120));
-    assert_eq!(hint_items(174).len(), 8, "174 列：{:?}", hint_items(174));
+    assert_eq!(hint_items(174).len(), 9, "174 列：{:?}", hint_items(174));
 
-    // 在地板上，出口之前只挤得下一条提示 —— 而 `就绪` 不在这里，它住在状态行里。左栏在地板
+    // 在地板上，出口之前挤得下两条提示 —— 而 `就绪` 不在这里，它住在状态行里。左栏在地板
     // 上本来就不画，所以提示行拿到的就是整屏 40 列。
     let floor = hint_items(40);
     assert_eq!(
         floor,
-        vec!["enter 发送", "ctrl-c/ctrl-d 退出"],
+        vec!["enter 发送", "ctrl-j 换行", "ctrl-d 退出"],
         "40 列：{floor:?}"
     );
 
-    // 80 列终端的主列是 51 列（窄左栏 28 + 分隔列），出口之前放得下两条提示。
+    // 80 列终端的主列是 51 列（窄左栏 28 + 分隔列），出口之前放得下三条提示。
     let narrow = hint_items(80);
     assert_eq!(
         narrow,
-        vec!["enter 发送", "ctrl-j 换行", "ctrl-c/ctrl-d 退出"],
+        vec!["enter 发送", "ctrl-j 换行", "esc 取消", "ctrl-d 退出"],
         "80 列：{narrow:?}"
     );
 
@@ -800,11 +809,13 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "ctrl-j 换行",
             "esc 取消",
             "shift+tab 模式",
-            "ctrl-c/ctrl-d 退出",
+            "ctrl-d 退出",
         ],
         "四条提示加出口"
     );
-    // 忙碌那一档的出口短六列，但状态词不在这一行上，不论忙闲 —— 它住在状态行里。
+    // 忙碌那一档的出口长十四列（两个键各说各的），但状态词不在这一行上，不论忙闲 —— 它住在
+    // 状态行里。它比空闲那档少一条提示：出口吃掉了 `shift+tab 模式` 的位置。出口那一段里的
+    // 两件事用的是同一个分隔符，所以按 ` · ` 切出来是两格 —— 屏幕上它们仍然是一段。
     let busy = hint_items_busy(120);
     assert_eq!(
         busy,
@@ -812,8 +823,8 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "enter 发送",
             "ctrl-j 换行",
             "esc 取消",
-            "shift+tab 模式",
-            "ctrl-c 退出",
+            "ctrl-c 取消",
+            "ctrl-d 退出",
         ],
         "忙碌只换出口那一段：{busy:?}"
     );
@@ -830,20 +841,25 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         "换模型的快捷键在表里：{roomy:?}"
     );
     // `ctrl-v 轨迹` 插在 `ctrl-o 左栏` 前面一格（两个都是纯视图手势，而翻页签更贴着手上的
-    // 事），于是整份表从 120 列涨到 134 列提示行 —— 174 列终端给 133 列，差一列，让掉的是
-    // 左栏开关（位置就是优先级，它本来就在最末）。
+    // 事），于是整份表要 127 列提示行。出口那一段在票 23 之后短了九列（空闲只宣传 `ctrl-d`），
+    // 所以 174 列终端这一档放得下整份表 —— 差一列的那一档退到 167 列（126 列提示行）。
     assert!(
         roomy.contains(&"ctrl-v 轨迹".to_owned()),
         "174 列那一档里新键已经看得见：{roomy:?}"
     );
     assert!(
-        !roomy.contains(&"ctrl-o 左栏".to_owned()),
-        "整份表还差一列：{roomy:?}"
+        roomy.contains(&"ctrl-o 左栏".to_owned()),
+        "整份表都在：{roomy:?}"
     );
     assert!(
-        hint_items(175).contains(&"ctrl-o 左栏".to_owned()),
-        "175 列（134 列提示行）放下整份表：{:?}",
-        hint_items(175)
+        !hint_items(167).contains(&"ctrl-o 左栏".to_owned()),
+        "167 列（126 列提示行）还差一列：{:?}",
+        hint_items(167)
+    );
+    assert!(
+        hint_items(168).contains(&"ctrl-o 左栏".to_owned()),
+        "168 列（127 列提示行）放下整份表：{:?}",
+        hint_items(168)
     );
     // 120 列下它已经被让掉 —— 窄终端先丢最后两条，而这一行还有更常用的键要放。
     assert!(
@@ -871,7 +887,7 @@ fn the_trace_page_hints_at_its_own_keys() {
     assert!(row.contains("enter 详情"), "{row}");
     assert!(!row.contains("enter 发送"), "轨迹页不承诺发送：{row}");
     assert!(!row.contains("shift+tab"), "那一页没有模式可切：{row}");
-    assert!(row.ends_with("ctrl-c/ctrl-d 退出"), "出口照旧在末尾：{row}");
+    assert!(row.ends_with("ctrl-d 退出"), "出口照旧在末尾：{row}");
 
     // 切回对话页，两套就换回来了 —— 这个状态里没有人在读行，于是换回来的是查看器那一套
     // （那时 `enter 发送` 会是一个兑现不了的承诺，`.scratch/tui-feedback/spec.md` §6）。
@@ -902,10 +918,10 @@ fn the_trace_page_gives_up_hints_before_it_gives_up_the_way_out() {
     a_session_with_process_rows(&mut state);
     open_trace_tab(&mut state, 40, 24);
     let row = hint_items_of(40, &mut state).join(" · ");
-    assert_eq!(row, "↑↓/j/k 移动 · ctrl-c/ctrl-d 退出", "{row}");
+    assert_eq!(row, "↑↓/j/k 移动 · enter 详情 · ctrl-d 退出", "{row}");
     assert!(
-        !row.contains("enter 详情"),
-        "40 列（最小帧）那一档放不下第二条：{row}"
+        !row.contains("/ 搜索"),
+        "40 列（最小帧）那一档放不下第三条：{row}"
     );
 }
 
@@ -1138,7 +1154,10 @@ fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
     }
 
     let mut running = state();
-    running.request(ConsoleRequest::RunState { running: true });
+    running.request(ConsoleRequest::SessionState {
+        id: running.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let mut seen = Vec::new();
     for frame in 0..heng::render::tui::SWEEP_PERIOD {
         running.tick();
@@ -1206,7 +1225,10 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
     // 文字身份与标记都不动：两者的下落短横在票 08 关停，
     // 代码随本 effort 的死代码收口删掉（`.scratch/tui-visual-language/spec.md` §34）。
     let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     for frame in 0..5 {
         state.tick();
         let text = screen(100, 24, &mut state).join("\n");
@@ -1230,7 +1252,10 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
     use heng::render::wording;
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
-        state.request(ConsoleRequest::RunState { running: true });
+        state.request(ConsoleRequest::SessionState {
+            id: state.front().clone(),
+            state: heng::session::host::SessionState::RunningTurn,
+        });
         // 让正文尾巴非空：否则对话视图末尾那条「正在思考…」也在走它的点号（2026-10-05 的
         // 另一条时钟动画），会把这条断言的靶子弄糊。
         state.apply(RenderEvent::Delta {
@@ -1551,7 +1576,7 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             rows[0]
         );
         assert!(
-            text.contains("ctrl-c"),
+            text.contains("ctrl-d"),
             "{width}x{height} 保住了出口：{text}"
         );
         // 状态行从不让出：要拿走它的那个档位需要一条比终端地板
@@ -2164,7 +2189,10 @@ fn escape_hands_the_keyboard_back_without_cancelling_the_turn() {
     open_files_page(&mut state, 120, 24);
     let page = sidebar_page(&screen(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let _ = state.take_events();
 
     state.key(Key::Esc);
@@ -3424,7 +3452,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
         three[input + 2]
     );
     assert!(
-        three[input + 4].contains("ctrl-c"),
+        three[input + 4].contains("ctrl-d"),
         "提示行留在输入区下面：{:?}",
         three[input + 4]
     );
@@ -4099,7 +4127,10 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
     // 循环就不再等答案，所以屏幕上不能留东西去收答案 ——
     // 否则下一次按键会发给一个没人等的问句（spec §6、§9）。
     let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     let (ask, _answer) = ask_permission();
     state.request(ask);
     let rows = screen(120, 24, &mut state);
@@ -10182,7 +10213,10 @@ fn the_name_sits_on_its_own_row_in_the_conversation() {
 fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
 
     let first = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(first.contains("正在思考."), "还没出字时有等待提示：{first}");
@@ -10207,7 +10241,10 @@ fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
 fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
 
     // 没有工具在跑：它在想。
     let thinking = conversation_rows(&mut state, 120, 24);
@@ -10266,7 +10303,10 @@ fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
 fn the_name_row_survives_the_streaming_body() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
     state.apply(text_delta("答案的第一段。"));
 
     let rows = conversation_rows(&mut state, 120, 24);
@@ -14182,7 +14222,7 @@ fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
     stamped_turns(&mut state, fixed_at(9, 0, 0), 2, 10);
     let rows = screen(120, 24, &mut state);
     assert!(
-        rows[23].contains("esc 取消") || rows[23].contains("ctrl-c"),
+        rows[23].contains("esc 取消") || rows[23].contains("ctrl-d"),
         "提示行还在屏幕最后一行：{:?}",
         rows[23]
     );

@@ -467,7 +467,7 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
 fn the_status_line_keeps_the_way_out_and_fills_hints_from_the_front() {
     // 够宽：八条键位提示都在，出口放最后 —— 而状态词**不在**这里，它住在状态行的最后一段
     // （`.scratch/tui-visual-language/spec.md` §18）。
-    let wide = wording::status_line(false, 200, false);
+    let wide = wording::status_line(false, 200);
     for hint in [
         "enter 发送",
         "ctrl-j 换行",
@@ -484,45 +484,32 @@ fn the_status_line_keeps_the_way_out_and_fills_hints_from_the_front() {
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
     assert!(!wide.contains("就绪"), "状态词不在这里：{wide}");
 
-    // 阶梯按画出来的宽度实测：空闲的出口是 18 列，一条提示连起来要 31 列。
+    // 阶梯按画出来的宽度实测：空闲的出口是 11 列，`enter 发送` 连起来要 24 列。
+    assert_eq!(wording::status_line(false, 23), wording::EXIT_HINT_IDLE);
+    assert_eq!(wording::status_line(false, 24), "enter 发送 · ctrl-d 退出");
     assert_eq!(
-        wording::status_line(false, 30, false),
-        wording::EXIT_HINT_IDLE
+        wording::status_line(false, 39),
+        "enter 发送 · ctrl-j 换行 · ctrl-d 退出"
     );
-    assert_eq!(
-        wording::status_line(false, 31, false),
-        "enter 发送 · ctrl-c/ctrl-d 退出"
-    );
-    assert_eq!(
-        wording::status_line(false, 45, false),
-        "enter 发送 · ctrl-j 换行 · ctrl-c/ctrl-d 退出"
-    );
-    // 只有空闲行会宣传 `ctrl-d`：一次运行进行中的时候它什么都不做，
-    // 所以点它的名正是提示行绝不能做的那件事。
+    // 两个键在两档里意思不同，所以**两档都宣传 `ctrl-d`** —— 忙碌的时候它同样是出路，只是要过
+    // 闸门。空闲那档**不宣传 `ctrl-c`**：此刻没有可取消的东西，提示一个按下去不会动的键是
+    // 提示行绝不能做的那件事（票 23）。
+    assert!(wording::status_line(true, 200).contains("ctrl-d 退出"));
     assert!(
-        !wording::status_line(true, 200, false).contains("ctrl-d"),
-        "忙碌行不宣传一个什么都不做的键"
-    );
-    assert!(
-        wording::status_line(false, 200, false).contains("ctrl-d"),
-        "空闲行会宣传"
+        !wording::status_line(false, 200).contains("ctrl-c"),
+        "空闲行不宣传取消：{}",
+        wording::status_line(false, 200)
     );
     // 比任何提示都窄：剩下的只有出路。
-    assert_eq!(
-        wording::status_line(true, 8, false),
-        wording::EXIT_HINT_BUSY
-    );
-    assert_eq!(
-        wording::status_line(false, 3, false),
-        wording::EXIT_HINT_IDLE
-    );
+    assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
+    assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
 }
 
 #[test]
 fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
     // 它排在最末、`ctrl-t 换模型` 排在它前面一格 —— 位置就是优先级，所以只有最宽的档位看得见
     // 它们（`.scratch/sidebar-toggle/spec.md` §4）。
-    let wide = wording::status_line(false, 200, false);
+    let wide = wording::status_line(false, 200);
     assert!(wide.contains("ctrl-o 左栏"), "{wide}");
     assert!(
         wide.ends_with(wording::EXIT_HINT_IDLE),
@@ -538,46 +525,57 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
     );
     // `ctrl-t` 排在它前面一格，所以它先被看见的那一档里 `ctrl-o` 已经让掉了。
     assert!(
-        wording::status_line(false, 106, false).contains("ctrl-t 换模型")
-            && !wording::status_line(false, 106, false).contains("ctrl-o 左栏"),
+        wording::status_line(false, 106).contains("ctrl-t 换模型")
+            && !wording::status_line(false, 106).contains("ctrl-o 左栏"),
         "106 列：{}",
-        wording::status_line(false, 106, false)
+        wording::status_line(false, 106)
     );
     // 它是窄档最先丢掉的那一条。
-    let narrow = wording::status_line(false, 100, false);
+    let narrow = wording::status_line(false, 100);
     assert!(
         !narrow.contains("ctrl-o 左栏"),
         "100 列还看不到它：{narrow}"
     );
 
-    // 忙碌行的出口短八列（`ctrl-c 退出` 对 `ctrl-c/ctrl-d 退出`），所以在同一个列宽上
-    // 它比空闲行更早看到最后那几条 —— 同一条阶梯，两条出口。
-    let busy = wording::status_line(true, 99, false);
-    assert!(busy.contains("ctrl-t 换模型"), "忙碌行在 99 列上：{busy}");
-    let idle_here = wording::status_line(false, 99, false);
+    // 忙碌行的出口**长**十四列（`ctrl-c 取消 · ctrl-d 退出` 对 `ctrl-d 退出`），所以同一条
+    // 阶梯上它比空闲行更晚看到后面那几条 —— 同一条阶梯，两条出口。
+    let busy = wording::status_line(true, 113);
+    assert!(busy.contains("ctrl-t 换模型"), "忙碌行在 113 列上：{busy}");
+    assert!(
+        !wording::status_line(true, 112).contains("ctrl-t 换模型"),
+        "忙碌行要到 113 列才放下它：{}",
+        wording::status_line(true, 112)
+    );
+    let idle_here = wording::status_line(false, 98);
     assert!(
         !idle_here.contains("ctrl-t 换模型"),
-        "空闲行同宽还看不到：{idle_here}"
+        "空闲行在 98 列上还看不到：{idle_here}"
     );
-    // 要连左栏开关（整份表的最后一条）一起放下，得再宽二十一列 —— `ctrl-v 轨迹` 插在它前面
-    // 一格，于是整份表从 120 列涨到 134 列（`.scratch/trace-shortcuts/spec.md` §1）。
+    // 要连左栏开关（整份表的最后一条）一起放下，得 127 列 —— `ctrl-v 轨迹` 插在它前面
+    // 一格，于是整份表从 120 列涨到 127 列（`.scratch/trace-shortcuts/spec.md` §1）；忙碌那
+    // 档同一份表要到 141 列。
     assert!(
-        !wording::status_line(false, 133, false).contains("ctrl-o 左栏"),
-        "133 列还差一列：{}",
-        wording::status_line(false, 133, false)
+        !wording::status_line(false, 126).contains("ctrl-o 左栏"),
+        "126 列还差一列：{}",
+        wording::status_line(false, 126)
     );
     assert!(
-        wording::status_line(false, 134, false).contains("ctrl-o 左栏"),
-        "134 列放下整份表：{}",
-        wording::status_line(false, 134, false)
+        wording::status_line(false, 127).contains("ctrl-o 左栏"),
+        "127 列放下整份表：{}",
+        wording::status_line(false, 127)
+    );
+    assert!(
+        wording::status_line(true, 141).contains("ctrl-o 左栏"),
+        "忙碌那档要 141 列：{}",
+        wording::status_line(true, 141)
     );
     // 而新键比左栏开关早一档出现：它排在它**前面**一格，两者都是纯视图手势，而翻页签比收左栏
     // 更贴着手上的事（提示行 120 列 ≈ 161 列的终端 —— 参考尺寸的 120 列终端只有 79 列提示行，
     // 那一档连 `ctrl-t 换模型` 都还看不到）。
     assert!(
-        wording::status_line(false, 120, false).contains("ctrl-v 轨迹"),
+        wording::status_line(false, 120).contains("ctrl-v 轨迹"),
         "120 列：{}",
-        wording::status_line(false, 120, false)
+        wording::status_line(false, 120)
     );
     assert!(
         wide.find("ctrl-v 轨迹").unwrap() > wide.find("ctrl-t 换模型").unwrap()
@@ -590,28 +588,32 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
 fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
     // 没有一行在被读（一次性的 `discuss`，或者一个进行中的回合），
     // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
-    let wide = wording::viewer_status_line(false, 200, false);
+    let wide = wording::viewer_status_line(false, 200);
     assert_eq!(
-        wide, "esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
+        wide, "esc 取消 · PgUp/PgDn 滚动 · ctrl-d 退出",
         "整条查看器行"
     );
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
     // 同一条阶梯：提示从前往后填，出口永远预留，装不下下一条就停。
     assert_eq!(
-        wording::viewer_status_line(false, 28, false),
+        wording::viewer_status_line(false, 21),
         wording::EXIT_HINT_IDLE
     );
     assert_eq!(
-        wording::viewer_status_line(false, 29, false),
-        "esc 取消 · ctrl-c/ctrl-d 退出"
+        wording::viewer_status_line(false, 22),
+        "esc 取消 · ctrl-d 退出"
     );
 
-    // 忙就读作忙 —— 而一次运行进行中的时候 `ctrl-d` 被忽略，所以
-    // 查看器行回到朴素的 `ctrl-c 退出`。
-    assert!(!wording::viewer_status_line(true, 200, false).contains("ctrl-d"));
+    // 忙就读作忙 —— 两个键各说各的（`.scratch/session-tab/spec.md` §1）。
+    let busy = wording::viewer_status_line(true, 200);
+    assert!(busy.ends_with(wording::EXIT_HINT_BUSY), "{busy}");
+    assert!(
+        busy.contains("ctrl-c 取消") && busy.contains("ctrl-d 退出"),
+        "{busy}"
+    );
     assert_eq!(
-        wording::viewer_status_line(true, 3, false),
+        wording::viewer_status_line(true, 3),
         wording::EXIT_HINT_BUSY
     );
 }
@@ -625,97 +627,80 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
     // `ctrl-o 左栏` 排在最末：位置就是优先级，所以窄档最先丢的就是它
     // （`.scratch/sidebar-toggle/spec.md` §4）。
     assert_eq!(
-        wording::status_line(false, 40, false),
-        "enter 发送 · ctrl-c/ctrl-d 退出"
+        wording::status_line(false, 40),
+        "enter 发送 · ctrl-j 换行 · ctrl-d 退出"
     );
     assert_eq!(
-        wording::status_line(false, 60, false),
-        "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c/ctrl-d 退出"
+        wording::status_line(false, 60),
+        "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-d 退出"
     );
     assert_eq!(
-        wording::status_line(false, 80, false),
-        "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
+        wording::status_line(false, 80),
+        "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-d 退出"
     );
-    // 忙那一档的出口短八列，所以同一个列宽上它多装得下一条。
+    // 忙那一档的出口长十四列（两个键各说各的），所以同一个列宽上它少装得下一条。
     assert_eq!(
-        wording::status_line(true, 60, false),
-        "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
+        wording::status_line(true, 60),
+        "enter 发送 · ctrl-j 换行 · ctrl-c 取消 · ctrl-d 退出"
     );
-    let full = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 轨迹 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
-    // 整份表（八条提示加出口）要 134 列 —— `.scratch/trace-shortcuts/spec.md` §1 插进来的
-    // `ctrl-v 轨迹` 落在 `ctrl-o 左栏` 前面一格，于是 120 列那一档正好放到它为止；让掉的是
+    let full = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 轨迹 · ctrl-o 左栏 · ctrl-d 退出";
+    // 整份表（八条提示加出口）要 127 列 —— `.scratch/trace-shortcuts/spec.md` §1 插进来的
+    // `ctrl-v 轨迹` 落在 `ctrl-o 左栏` 前面一格，于是 113 列那一档正好放到它为止；让掉的是
     // 左栏开关（位置就是优先级，它本来就是这张表最末的一条）。
     assert_eq!(
-        wording::status_line(false, 120, false),
-        "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 轨迹 · ctrl-c/ctrl-d 退出"
+        wording::status_line(false, 113),
+        "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 轨迹 · ctrl-d 退出"
     );
-    assert_eq!(wording::status_line(false, 134, false), full);
+    assert_eq!(wording::status_line(false, 127), full);
     // 在最大宽度上行是稳定的：再没什么可买的了。
-    assert_eq!(wording::status_line(false, 200, false), full);
-    // 阶梯是「放不下就停」，所以最后两条是一起让掉的 —— 106 列那一档里 `ctrl-t` 还在、
+    assert_eq!(wording::status_line(false, 200), full);
+    // 阶梯是「放不下就停」，所以最后两条是一起让掉的 —— 99 列那一档里 `ctrl-t` 还在、
     // `ctrl-v` 与 `ctrl-o` 已经没了（位置就是优先级）。
     assert!(
-        wording::status_line(false, 106, false).contains("ctrl-t 换模型")
-            && !wording::status_line(false, 106, false).contains("ctrl-o 左栏"),
-        "106 列：{}",
-        wording::status_line(false, 106, false)
+        wording::status_line(false, 99).contains("ctrl-t 换模型")
+            && !wording::status_line(false, 99).contains("ctrl-o 左栏"),
+        "99 列：{}",
+        wording::status_line(false, 99)
     );
     assert!(
-        !wording::status_line(false, 105, false).contains("ctrl-t 换模型"),
-        "105 列差一列就放不下它：{}",
-        wording::status_line(false, 105, false)
+        !wording::status_line(false, 98).contains("ctrl-t 换模型"),
+        "98 列差一列就放不下它：{}",
+        wording::status_line(false, 98)
     );
-    // 忙只换出口那一段，不换阶梯。
+    // 忙只换出口那一段，不换阶梯 —— 只是那一段宽了十四列，于是同样的条目各自要多等几列才
+    // 装得下（`ctrl-v 轨迹` 在 127 列、`ctrl-o 左栏` 在 141 列）。
     assert_eq!(
-        wording::status_line(true, 174, false).replace("ctrl-c 退出", "ctrl-c/ctrl-d 退出"),
+        wording::status_line(true, 200).replace(wording::EXIT_HINT_BUSY, wording::EXIT_HINT_IDLE),
         full
     );
 }
 
 #[test]
-fn the_raised_exit_hints_say_the_second_press() {
-    // 没举手那两句仍然在：它们出现在没举手的状态行里
-    // （`.scratch/exit-gesture/spec.md` §2）。
-    assert_eq!(wording::EXIT_HINT_IDLE, "ctrl-c/ctrl-d 退出");
-    assert_eq!(wording::EXIT_HINT_BUSY, "ctrl-c 退出");
+fn the_exit_hint_separates_cancelling_from_exiting() {
+    // 多会话之后 `Ctrl-C` 只取消眼前那一场当前的动作、**永不退出**，`Ctrl-D` 才是退出请求
+    // （`.scratch/session-tab/spec.md` §1、票 23）。出口那一段必须把这两件事分开说 —— 它曾经
+    // 把两个键并排写成「ctrl-c/ctrl-d 退出」，于是读的人按着一个写着「退出」的键，得到的是一句
+    // 「这一场现在没有在跑的东西」（2026-10-12 维护者报告）。
+    assert_eq!(wording::EXIT_HINT_IDLE, "ctrl-d 退出");
+    assert_eq!(wording::EXIT_HINT_BUSY, "ctrl-c 取消 · ctrl-d 退出");
+    assert_eq!(wording::exit_hint(false), wording::EXIT_HINT_IDLE);
+    assert_eq!(wording::exit_hint(true), wording::EXIT_HINT_BUSY);
 
-    // 举手那三句：空闲两键对等、忙碌把「回合停了」与「再按会退出」一起说出来、重放里只有
-    // `Ctrl-C` 管用。
-    assert_eq!(
-        wording::EXIT_HINT_IDLE_RAISED,
-        "再按一次 ctrl-c/ctrl-d 退出"
+    // 出口那一段**预留**：窄到只剩它时，两档都还在，而且顺序不变。
+    assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
+    assert_eq!(wording::status_line(true, 3), wording::EXIT_HINT_BUSY);
+    assert!(
+        wording::status_line(false, 200).contains("enter 发送"),
+        "别的提示照旧"
     );
-    assert_eq!(
-        wording::EXIT_HINT_BUSY_RAISED,
-        "已取消 · 再按一次 ctrl-c 退出"
+    assert!(
+        !wording::status_line(false, 200).contains("ctrl-c"),
+        "空闲那一档不宣传取消"
     );
+
+    // 举手只活在历史重放里：那里没有可取消的东西，双击是唯一的出路（`.scratch/exit-gesture/
+    // spec.md` §2）。主路径上两个键都不再举手，所以「已经举手」那两档不在出口表里。
     assert_eq!(wording::EXIT_HINT_REPLAY_RAISED, "再按一次 ctrl-c 退出");
-
-    // 举手换掉的是**出口那一段**，四档各有一句。
-    assert_eq!(wording::exit_hint(false, false), wording::EXIT_HINT_IDLE);
-    assert_eq!(
-        wording::exit_hint(false, true),
-        wording::EXIT_HINT_IDLE_RAISED
-    );
-    assert_eq!(wording::exit_hint(true, false), wording::EXIT_HINT_BUSY);
-    assert_eq!(
-        wording::exit_hint(true, true),
-        wording::EXIT_HINT_BUSY_RAISED
-    );
-
-    // 换掉之后，别的键位提示照旧在，而旧的出口段不再作为一个条目出现。
-    let wide = wording::status_line(false, 200, true);
-    assert!(wide.ends_with(wording::EXIT_HINT_IDLE_RAISED), "{wide}");
-    assert!(wide.contains("enter 发送"), "{wide}");
-    assert!(!wide.contains("· ctrl-c/ctrl-d 退出"), "{wide}");
-    assert!(
-        wording::status_line(true, 200, true).ends_with(wording::EXIT_HINT_BUSY_RAISED),
-        "忙碌那一档"
-    );
-    assert!(
-        wording::viewer_status_line(false, 200, true).ends_with(wording::EXIT_HINT_IDLE_RAISED),
-        "查看器那条也一样"
-    );
 }
 
 #[test]
@@ -725,7 +710,7 @@ fn no_hint_ever_names_shift_enter() {
     // 在任何单一宽度下都看不出来（spec §10，用户故事 54）。把它们全扫一遍。
     for busy in [false, true] {
         for width in 1..=200 {
-            let line = wording::status_line(busy, width, false);
+            let line = wording::status_line(busy, width);
             assert!(
                 !line.to_lowercase().contains("shift+enter"),
                 "{width}: {line}"
@@ -1444,37 +1429,34 @@ fn the_copy_receipt_leads_the_hint_row_and_never_evicts_the_way_out() {
         wording::open_failed("No such file or directory"),
         "打开失败：No such file or directory"
     );
-    let opened = wording::status_line_with(Some("已打开 .scratch/x.html"), false, 120, false);
+    let opened = wording::status_line_with(Some("已打开 .scratch/x.html"), false, 120);
     assert!(
         opened.starts_with("已打开 .scratch/x.html · "),
         "打开的回执也打头：{opened}"
     );
-    let wide = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 120, false);
+    let wide = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 120);
     assert!(
         wide.starts_with("已复制 12 字 · 2 行 · enter 发送"),
         "回执打头、提示跟在后面：{wide}"
     );
-    assert!(wide.ends_with("ctrl-c/ctrl-d 退出"), "出口在末尾：{wide}");
+    assert!(wide.ends_with("ctrl-d 退出"), "出口在末尾：{wide}");
 
     // 45 列：放得下回执与出口，放不下任何一条提示 —— 提示让位，出口不让。
-    let middle = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 45, false);
-    assert_eq!(
-        middle, "已复制 12 字 · 2 行 · ctrl-c/ctrl-d 退出",
-        "{middle}"
-    );
+    let middle = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 45);
+    assert_eq!(middle, "已复制 12 字 · 2 行 · ctrl-d 退出", "{middle}");
 
     // 20 列：连回执都放不下，于是退回那条不带回执的提示行 —— 出口照旧在场。
-    let narrow = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 20, false);
-    assert_eq!(narrow, wording::status_line(false, 20, false), "{narrow}");
-    assert!(narrow.contains("ctrl-c/ctrl-d 退出"), "{narrow}");
+    let narrow = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 20);
+    assert_eq!(narrow, wording::status_line(false, 20), "{narrow}");
+    assert!(narrow.contains("ctrl-d 退出"), "{narrow}");
 }
 
 #[test]
 fn the_trace_page_hints_at_its_own_keys_and_keeps_the_way_out() {
     // 轨迹页有**自己的**一张表（`.scratch/trace-shortcuts/spec.md` §2）：那里的 `enter` 是开
     // 详情、不是发送，`shift+tab 模式` 也没有东西可切 —— 于是这一套里一条都不该出现。
-    let full = "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · [ ] 层级 · { } 全折展 · esc 退出层 · ctrl-v 对话 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
-    assert_eq!(wording::trace_status_line(false, 143, false), full);
+    let full = "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · [ ] 层级 · { } 全折展 · esc 退出层 · ctrl-v 对话 · ctrl-o 左栏 · ctrl-d 退出";
+    assert_eq!(wording::trace_status_line(false, 136), full);
     for ghost in ["enter 发送", "shift+tab", "ctrl-t 换模型", "ctrl-j"] {
         assert!(!full.contains(ghost), "轨迹页不宣传 {ghost}：{full}");
     }
@@ -1482,25 +1464,25 @@ fn the_trace_page_hints_at_its_own_keys_and_keeps_the_way_out() {
 
     // 位置就是优先级：从前往后填、装不下就停，出口是**预留**的、任何宽度都在。
     assert_eq!(
-        wording::trace_status_line(false, 38, false),
-        "↑↓/j/k 移动 · ctrl-c/ctrl-d 退出",
-        "最小帧（40×10）留下的那 38 列只挤得下第一条"
+        wording::trace_status_line(false, 37),
+        "↑↓/j/k 移动 · ctrl-d 退出",
+        "最小帧（40×10）留下的那 37 列只挤得下第一条"
     );
     assert_eq!(
-        wording::trace_status_line(false, 78, false),
-        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · ctrl-c/ctrl-d 退出"
+        wording::trace_status_line(false, 71),
+        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · ctrl-d 退出"
     );
-    // 参考宽度（120 列终端给出 79 列提示行）那一档：前五条加出口；89 列买进第六条。
+    // 参考宽度（120 列终端给出 79 列提示行）那一档与它同形；88 列买进第六条。
     assert_eq!(
-        wording::trace_status_line(false, 79, false),
-        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · ctrl-c/ctrl-d 退出"
+        wording::trace_status_line(false, 79),
+        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · ctrl-d 退出"
     );
     assert_eq!(
-        wording::trace_status_line(false, 89, false),
-        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · [ ] 层级 · ctrl-c/ctrl-d 退出"
+        wording::trace_status_line(false, 88),
+        "↑↓/j/k 移动 · enter 详情 · / 搜索 · space 折叠 · n/N 命中 · [ ] 层级 · ctrl-d 退出"
     );
-    // 整份表要 143 列 —— 差一列就先丢排在最末的 `ctrl-o 左栏`，而新键 `ctrl-v 对话` 留着。
-    let just_narrow = wording::trace_status_line(false, 142, false);
+    // 整份表要 136 列 —— 差一列就先丢排在最末的 `ctrl-o 左栏`，而新键 `ctrl-v 对话` 留着。
+    let just_narrow = wording::trace_status_line(false, 135);
     assert!(just_narrow.contains("ctrl-v 对话"), "{just_narrow}");
     assert!(!just_narrow.contains("ctrl-o 左栏"), "{just_narrow}");
     assert!(
@@ -1510,30 +1492,24 @@ fn the_trace_page_hints_at_its_own_keys_and_keeps_the_way_out() {
 
     // 比任何一条提示都窄：剩下的只有出口。
     assert_eq!(
-        wording::trace_status_line(false, 3, false),
+        wording::trace_status_line(false, 3),
         wording::EXIT_HINT_IDLE
     );
-    assert_eq!(
-        wording::trace_status_line(true, 3, false),
-        wording::EXIT_HINT_BUSY
-    );
+    assert_eq!(wording::trace_status_line(true, 3), wording::EXIT_HINT_BUSY);
     // 忙只换出口那一段，不换阶梯。
     assert_eq!(
-        wording::trace_status_line(true, 200, false).replace("ctrl-c 退出", "ctrl-c/ctrl-d 退出"),
+        wording::trace_status_line(true, 200)
+            .replace(wording::EXIT_HINT_BUSY, wording::EXIT_HINT_IDLE),
         full
     );
 
     // 回执照旧排在最前，而它不许把出口挤掉（`.scratch/tui-feedback/spec.md` §6 那条契约
     // 对两页是同一句）。
-    let receipt = wording::trace_status_line_with(Some("已复制 12 字 · 2 行"), false, 200, false);
+    let receipt = wording::trace_status_line_with(Some("已复制 12 字 · 2 行"), false, 200);
     assert!(receipt.starts_with("已复制 12 字 · 2 行 · "), "{receipt}");
     assert!(receipt.ends_with(wording::EXIT_HINT_IDLE), "{receipt}");
-    let narrow = wording::trace_status_line_with(Some("已复制 12 字 · 2 行"), false, 20, false);
-    assert_eq!(
-        narrow,
-        wording::trace_status_line(false, 20, false),
-        "{narrow}"
-    );
+    let narrow = wording::trace_status_line_with(Some("已复制 12 字 · 2 行"), false, 20);
+    assert_eq!(narrow, wording::trace_status_line(false, 20), "{narrow}");
 }
 
 #[test]

@@ -1668,24 +1668,23 @@ const TRACE_HINTS: [&str; 10] = [
     "ctrl-o 左栏",
 ];
 
-/// 键盘空闲时的出口：两个手势都退出，这一行也这么说。它是一个条目而不是两个，因为这两个
-/// 键在这里意思相同，而窄终端就只有那么多列（票 06 §4）。
-pub const EXIT_HINT_IDLE: &str = "ctrl-c/ctrl-d 退出";
+/// 键盘空闲时的出口：**只有 `Ctrl-D`**。
+///
+/// 它曾经写着 `ctrl-c/ctrl-d 退出` —— 那是一条已经不成立的旧语义。多会话之后 `Ctrl-C` 只取消
+/// 眼前那一场当前的动作、**永不退出**（`.scratch/session-tab/spec.md` §1、票 23），所以空闲时
+/// 宣传它就是在骗人：按下去什么也不会发生，循环只会回一句「这一场现在没有在跑的东西」
+/// （2026-10-12 维护者报告）。提示一个此刻没有用的键，是提示行绝不能做的那件事。
+pub const EXIT_HINT_IDLE: &str = "ctrl-d 退出";
 
-/// 一次运行进行中时的出口：`Ctrl-C` 取消，而 `Ctrl-D` 刻意被忽略 —— 提示一个什么都不做
-/// 的键，是提示行绝不能做的那件事（票 06 §4）。
-pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
-
-/// 空闲、**已经举手**时的出口：再按一下就走，两键都算
-/// （`.scratch/exit-gesture/spec.md` §2）。
-pub const EXIT_HINT_IDLE_RAISED: &str = "再按一次 ctrl-c/ctrl-d 退出";
-
-/// 忙碌、已经举手时的出口。它把两件事都说出来：回合确实停了、再按会退出 —— 这正是它比只
-/// 说「退出」值钱的地方（spec §2）。
-pub const EXIT_HINT_BUSY_RAISED: &str = "已取消 · 再按一次 ctrl-c 退出";
+/// 一次运行进行中时的出口。两个键意思不同，所以这一行是两档里的那一档：**`Ctrl-C` 取消眼前
+/// 那个动作，`Ctrl-D` 退出**（退出要过闸门 —— 别的场还在跑时它会被拒下，并指出在跑的那一场）。
+pub const EXIT_HINT_BUSY: &str = "ctrl-c 取消 · ctrl-d 退出";
 
 /// 重放、已经举手时的出口：重放里只有 `Ctrl-C` 管用，而进度行临时让位给这一句
-/// （spec §2）。
+/// （`.scratch/exit-gesture/spec.md` §2）。
+///
+/// 它是唯一还活着的举手档：主路径上 `Ctrl-C` 与 `Ctrl-D` 都不再举手（票 23 拆掉了「第二下变
+/// 退出」），而重放不是一次运行、里面没有可取消的东西，所以双击那条老路在那里原样留着。
 pub const EXIT_HINT_REPLAY_RAISED: &str = "再按一次 ctrl-c 退出";
 
 /// 前端**没有**在读行时显示的提示：一次性 `discuss`，或者交互式会话里一个回合进行中的那
@@ -1705,13 +1704,13 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 /// 提示，让掉的是排在最末的那两条。位置就是优先级：`ctrl-o 左栏` 挂最后，因为滚动比它常用得多
 /// （`.scratch/sidebar-toggle/spec.md` §4）；`ctrl-t 换模型` 排在它前面一格 —— 它一次会话里
 /// 用不到几次，而它开出来的那块浮层自带完整的键位说明，所以不必在提示行上抢位置。
-pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
-    status_line_with(None, busy, width, raised)
+pub fn status_line(busy: bool, width: u16) -> String {
+    status_line_with(None, busy, width)
 }
 
 /// 同上，但把一个**回执**排在最前（`.scratch/tui-feedback/spec.md` §6）。
-pub fn status_line_with(receipt: Option<&str>, busy: bool, width: u16, raised: bool) -> String {
-    hint_row(receipt, &KEY_HINTS, exit_hint(busy, raised), width)
+pub fn status_line_with(receipt: Option<&str>, busy: bool, width: u16) -> String {
+    hint_row(receipt, &KEY_HINTS, exit_hint(busy), width)
 }
 
 /// 前端没有在读行时的提示行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
@@ -1719,18 +1718,13 @@ pub fn status_line_with(receipt: Option<&str>, busy: bool, width: u16, raised: b
 /// 这条区分不是装饰。提示描述的是键盘会做什么，而一个回合跑到一半的会话 —— 或一次
 /// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
 /// `enter 发送`（spec §6）。
-pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
-    viewer_status_line_with(None, busy, width, raised)
+pub fn viewer_status_line(busy: bool, width: u16) -> String {
+    viewer_status_line_with(None, busy, width)
 }
 
 /// 同上，但把一个**回执**排在最前。
-pub fn viewer_status_line_with(
-    receipt: Option<&str>,
-    busy: bool,
-    width: u16,
-    raised: bool,
-) -> String {
-    hint_row(receipt, &VIEWER_HINTS, exit_hint(busy, raised), width)
+pub fn viewer_status_line_with(receipt: Option<&str>, busy: bool, width: u16) -> String {
+    hint_row(receipt, &VIEWER_HINTS, exit_hint(busy), width)
 }
 
 /// 主列当前显示**轨迹页**时的提示行：同样的阶梯，铺在 [`TRACE_HINTS`] 上。
@@ -1739,18 +1733,13 @@ pub fn viewer_status_line_with(
 /// 不着这一页：轨迹页上的 `enter` 是开详情的键，而它收编的是 `↑` / `↓` 那一族
 /// （`.scratch/trace-ledger/spec.md` §4）—— 于是它在讨论会话里也照样成立，不像对话页那样
 /// 分「有没有人在读行」两支（`.scratch/trace-shortcuts/spec.md` §2）。
-pub fn trace_status_line(busy: bool, width: u16, raised: bool) -> String {
-    trace_status_line_with(None, busy, width, raised)
+pub fn trace_status_line(busy: bool, width: u16) -> String {
+    trace_status_line_with(None, busy, width)
 }
 
 /// 同上，但把一个**回执**排在最前 —— 复制、打开与 `Notice` 都照旧落在这一页上。
-pub fn trace_status_line_with(
-    receipt: Option<&str>,
-    busy: bool,
-    width: u16,
-    raised: bool,
-) -> String {
-    hint_row(receipt, &TRACE_HINTS, exit_hint(busy, raised), width)
+pub fn trace_status_line_with(receipt: Option<&str>, busy: bool, width: u16) -> String {
+    hint_row(receipt, &TRACE_HINTS, exit_hint(busy), width)
 }
 
 /// 一次复制之后提示行打头的那句回执（`.scratch/tui-feedback/spec.md` §6）。
@@ -1771,17 +1760,12 @@ pub fn open_failed(reason: &str) -> String {
     format!("打开失败：{reason}")
 }
 
-/// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
+/// 状态行里那个出口条目：按忙闲挑一句。
 ///
-/// 举手换掉的是**出口那一段**，不是往后追加 —— 屏幕上不许出现「旧出口文案 + 举手文案」
-/// 那种形态（`.scratch/exit-gesture/spec.md` §2）。
-pub fn exit_hint(busy: bool, raised: bool) -> &'static str {
-    match (busy, raised) {
-        (true, true) => EXIT_HINT_BUSY_RAISED,
-        (true, false) => EXIT_HINT_BUSY,
-        (false, true) => EXIT_HINT_IDLE_RAISED,
-        (false, false) => EXIT_HINT_IDLE,
-    }
+/// 只剩两档。多会话之后主路径上的两个键都不再举手（票 23），所以「已经举手」那一层在这里
+/// 没有了 —— 还活着的举手档只有历史重放那一处，它自己走 [`EXIT_HINT_REPLAY_RAISED`]。
+pub fn exit_hint(busy: bool) -> &'static str {
+    if busy { EXIT_HINT_BUSY } else { EXIT_HINT_IDLE }
 }
 
 /// 提示行的唯一排版器：一个可选的**回执**排在最前，然后是提示，**出口永远保住**。

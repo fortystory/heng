@@ -156,6 +156,53 @@ fn a_live_event_of_the_new_session_lands_after_the_snapshot() {
 }
 
 #[test]
+fn the_way_out_follows_the_session_that_is_in_front() {
+    // 状态行末尾那一段说的是**眼前这场**的键盘（`.scratch/session-tab/spec.md` §1、票 23）：
+    // 跑着的时候 `Ctrl-C` 取消、`Ctrl-D` 退出，空闲的时候只剩 `Ctrl-D`。
+    //
+    // 它曾经只读一个进程级的忙闲开关，而那个开关在切场之后没人重算 —— 于是切到后台正跑着的
+    // 那一场，状态行按空闲说话，而那时 `Ctrl-C` 明明可用（2026-10-12 维护者报告）。
+    let mut state = fresh();
+    let idle = screen(120, 24, &mut state);
+    assert!(
+        idle.contains(wording::EXIT_HINT_IDLE) && !idle.contains("ctrl-c"),
+        "空闲那一档只宣传退出：{idle}"
+    );
+
+    // 后台那一场正在跑回合。
+    state.request(ConsoleRequest::SessionState {
+        id: SessionId::new("s-b"),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
+    let still_idle = screen(120, 24, &mut state);
+    assert!(
+        still_idle.contains(wording::EXIT_HINT_IDLE),
+        "后台那一场在跑，不改眼前这一场的提示：{still_idle}"
+    );
+
+    // 切到它：出口换成忙碌那一档，两个键各说各的（空闲那一档是它的后缀，所以按整段比而不是
+    // 「不含」—— `ctrl-d 退出` 在忙碌那一档里也出现）。
+    switch(&mut state, "s-b", vec![said(1, "乙")]);
+    let busy = screen(120, 24, &mut state);
+    let busy_row = busy
+        .lines()
+        .find(|row| row.contains("ctrl-d 退出"))
+        .expect("提示行在屏幕上");
+    assert!(
+        busy_row.contains(wording::EXIT_HINT_BUSY),
+        "切过去就是忙碌那一档：{busy_row}"
+    );
+
+    // 再切回空闲那一场：提示跟着切回去。
+    switch(&mut state, "s-a", vec![said(1, "甲")]);
+    let back = screen(120, 24, &mut state);
+    assert!(
+        back.contains(wording::EXIT_HINT_IDLE) && !back.contains("ctrl-c"),
+        "切回来又是空闲那一档：{back}"
+    );
+}
+
+#[test]
 fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
     // 上一场攒下的实时事件不带过去（`live_buffer` 在切换时清掉）。
     let mut state = fresh();

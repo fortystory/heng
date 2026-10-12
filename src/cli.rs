@@ -776,12 +776,19 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                         ));
                     }
                 }
-                Some(FrontEndEvent::OpenSession { .. }) => {
-                    // 票 20：切前台。装载与切换的落地见那一票的「进度」。
-                }
                 Some(event) => {
-                    quit.apply(&event, &signal);
-                    forward_gesture(&host, event);
+                    // 会话级的那三条由这个循环自己转成宿主表请求（票 20、票 21）—— 宿主表就在
+                    // 它手里，转发给别人办只会多一圈（见 [`front_to_request`]）。其余手势归前台
+                    // 那一场：取消、模式循环、选择器、改名都是会话内部的动作。
+                    match front_to_request(&event) {
+                        Some(request) => {
+                            let _ = requests.send(request);
+                        }
+                        None => {
+                            quit.apply(&event, &signal);
+                            forward_gesture(&host, event);
+                        }
+                    }
                 }
                 None => break ExitCode::SUCCESS,
             },
@@ -1783,10 +1790,12 @@ fn switch_to_effort(
     Ok(())
 }
 
-/// 一场会话的循环要**宿主表**替它办的事（票 20）。
+/// 一场会话要**宿主表**替它办的事（票 20、票 21）。
 ///
-/// 宿主表在主循环手里，而点击发生在会话的 task 里 —— 于是走这条请求通道，别让两边都想拿
-/// 那张表。
+/// 宿主表在主循环手里，而输入也在主循环手里（决策票 04 §3）—— 所以点会话页、新建与关闭都由
+/// 那个循环自己转成一条 [`CliRequest`]，由它自己的请求分支接住（见 [`front_to_request`]）。
+/// 两边都想拿那张表的那条老路已经拆掉了。
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliRequest {
     /// 切到这一场（不在表里就先装载）。
     Open(SessionId),
@@ -2206,6 +2215,25 @@ fn forward_gesture(host: &SessionHost<CliCommand>, event: FrontEndEvent) {
     }
 }
 
+/// 一条前端手势在主循环里变成哪一条宿主表请求（`.scratch/session-tab/spec.md` §1、§3）。
+///
+/// 会话级的那三条 —— 切一场、新建、关一场 —— 要动的是**宿主表**，而宿主表就在这个循环里，
+/// 所以它们**就地**转成一条 [`CliRequest`]，由上面那个请求分支接住。
+///
+/// 它们曾经绕一圈：主循环把它们转发给前台那一场，那一场的 `CliActor::gesture` 再转回来
+/// （票 20 的实现记录）。输入归主循环之后那一圈不再必要，而它有两个代价：前台那一场正在跑
+/// 回合时手势落进回合的 `select` 里被丢掉，于是「切换不因为目标在跑回合而阻挡」那条验收
+/// 并不成立；更要紧的是 `OpenSession` 一旦在主循环这边被一个空分支吃掉，那条圈就再也没有别的
+/// 路 —— 点会话页上的一行于是什么都不发生。
+fn front_to_request(event: &FrontEndEvent) -> Option<CliRequest> {
+    match event {
+        FrontEndEvent::OpenSession { id } => Some(CliRequest::Open(id.clone())),
+        FrontEndEvent::NewSession => Some(CliRequest::New),
+        FrontEndEvent::CloseSession { id } => Some(CliRequest::Close(id.clone())),
+        _ => None,
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::session::SessionActor<CliCommand> for CliActor {
     async fn act(
@@ -2278,17 +2306,11 @@ impl CliActor {
                     harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
             }
-            // 换会话：转成一条请求，交给主循环（宿主表在它手里）。
-            FrontEndEvent::OpenSession { id } => {
-                let _ = self.requests.send(CliRequest::Open(id));
-            }
-            // 新建与关闭同理（票 21）。
-            FrontEndEvent::NewSession => {
-                let _ = self.requests.send(CliRequest::New);
-            }
-            FrontEndEvent::CloseSession { id } => {
-                let _ = self.requests.send(CliRequest::Close(id));
-            }
+            // 换会话、新建与关闭**不归这里**：那三条要动宿主表，而宿主表在主循环手里，
+            // 所以主循环收到它们时就地转成了请求（`front_to_request`）—— 曾经由这里转回去，
+            // 而那圈路让「前台正在跑回合时切不过去」。
+            FrontEndEvent::NewSession | FrontEndEvent::OpenSession { .. } => {}
+            FrontEndEvent::CloseSession { .. } => {}
             // 未读的清除也归主循环（它持那本账）。
             FrontEndEvent::AttentionSeen => {}
         }
@@ -4896,7 +4918,8 @@ fn print_sessions_help(out: &mut dyn Write) {
 mod tests {
     use super::{
         CliCommand, CliRequest, ConsoleHandle, ExitRequest, McpPromptEntry, Mode, Submission,
-        exit_code_after, finish_session, records_itself, retarget_to, submission, undo_receipt,
+        exit_code_after, finish_session, front_to_request, records_itself, retarget_to, submission,
+        undo_receipt,
     };
     use crate::agent::{CancelSignal, UndoOutcome};
     use crate::config::{Config, ReasoningEffort};
@@ -5470,6 +5493,35 @@ mod tests {
         assert!(signal.is_cancelled());
         assert!(!quit.requested(), "Esc / 第一下 Ctrl-C 不是退出");
         assert_eq!(quit.code(), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn the_session_gestures_become_host_table_requests_where_the_host_table_is() {
+        // 点会话页上别的那一行、新建、关一场 —— 三条都落到宿主表，而宿主表在主循环手里，所以主
+        // 循环就地转成一条请求。曾经在主循环这边有一个空分支把 `OpenSession` 吃掉，于是点击
+        // 既不装载也不切换：屏幕上什么都没有发生（2026-10-12 维护者报告）。
+        let id = SessionId::new("01J8ZQ4K7M".to_owned());
+        assert_eq!(
+            front_to_request(&FrontEndEvent::OpenSession { id: id.clone() }),
+            Some(CliRequest::Open(id.clone())),
+            "点会话页上的一行 = 切到那一场"
+        );
+        assert_eq!(
+            front_to_request(&FrontEndEvent::NewSession),
+            Some(CliRequest::New)
+        );
+        assert_eq!(
+            front_to_request(&FrontEndEvent::CloseSession { id: id.clone() }),
+            Some(CliRequest::Close(id.clone()))
+        );
+        // 其余手势不是会话级的：它们归前台那一场办（取消、模式、选择器、改名）。
+        for event in [
+            FrontEndEvent::Cancel,
+            FrontEndEvent::Quit,
+            FrontEndEvent::AttentionSeen,
+        ] {
+            assert_eq!(front_to_request(&event), None, "{event:?} 不是会话级手势");
+        }
     }
 
     #[test]

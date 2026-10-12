@@ -534,7 +534,10 @@ fn escape_gives_the_keyboard_back_without_cancelling_the_running_turn() {
     let mut state = state();
     loaded(&mut state, &[("a.rs", changes::Kind::Modified)]);
     open_changes(&mut state, 120, 24);
-    state.request(ConsoleRequest::RunState { running: true });
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
 
     // 一次手势一层：这一下只把键盘还回去。
     state.key(Key::Esc);
