@@ -178,7 +178,7 @@ pub fn fallback_title(id: &SessionId) -> String {
 
 /// 进程内的标题缓存，键是会话 id。
 ///
-/// 懒算：问哪一场算哪一场。**不做失效判定** —— 一次运行里流文件没变，派生结果就没变；而改名
+/// 懒算：问哪个会话算哪个会话。**不做失效判定** —— 一次运行里流文件没变，派生结果就没变；而改名
 /// 那条路径自己会把新值写回来。它不落盘。
 #[derive(Debug, Default)]
 pub struct TitleCache {
@@ -194,18 +194,18 @@ impl TitleCache {
         self.entries.get(id).map(String::as_str)
     }
 
-    /// 记下一场会话的标题。改名之后调用方用它覆盖旧值。
+    /// 记下一个会话的标题。改名之后调用方用它覆盖旧值。
     pub fn remember(&mut self, id: SessionId, title: String) {
         self.entries.insert(id, title);
     }
 
-    /// 忘掉一场会话的标题（改完名之后让它重算）。
+    /// 忘掉一个会话的标题（改完名之后让它重算）。
     pub fn forget(&mut self, id: &SessionId) {
         self.entries.remove(id);
     }
 }
 
-/// 这一场会话现在叫什么（权威链 + 进程内缓存）。
+/// 这个会话现在叫什么（权威链 + 进程内缓存）。
 ///
 /// 缓存命中就直接答；没命中就走三级权威链，再把它记下来。
 pub fn title_of(id: &SessionId, log_path: &Path, cache: &mut TitleCache) -> String {

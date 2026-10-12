@@ -735,7 +735,7 @@ fn a_pool_that_cannot_serve_a_discussion_is_a_startup_error() {
         Some("[discussion]\ndebaters = [\"kimi-k3\", \"deepseek-v4-pro\"]\nmax_rounds = 0\n"),
         &env(&[]),
     )
-    .expect_err("一场讨论得有轮次")
+    .expect_err("一次讨论得有轮次")
     .to_string();
     assert!(zero_rounds.contains("max_rounds"), "{zero_rounds}");
 }

@@ -22,7 +22,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use std::collections::BTreeMap;
 
-/// 这一场会话的工具表里那些**声明 schema**：`bash` 在里面（重放的那些工具调用用的就是它）。
+/// 这个会话的工具表里那些**声明 schema**：`bash` 在里面（重放的那些工具调用用的就是它）。
 ///
 /// 面这一层读它，而重放这条路与实时那条路共用同一份注入 —— 于是「重放出来的详情与实时那次
 /// 逐字相同」这条契约也包括 Schema 面（票 24 收口补的那一面）。
@@ -401,7 +401,7 @@ fn panel_field(rows: &[String], offset: usize) -> String {
 
 #[test]
 fn a_replayed_history_is_laid_into_the_transcript() {
-    // 全部要点：`--continue` 之后转录里装着上一场
+    // 全部要点：`--continue` 之后转录里装着上一个会话
     // 对话，而不是从空开始（spec §1，用户故事 1）。
     let mut state = state();
     replay(
@@ -855,7 +855,7 @@ fn the_rail_grows_with_the_replayed_history() {
     );
     assert_eq!(shape.matches('┃').count(), 1, "恰好一个焦点格：{shape}");
 
-    // 接缝之后一次实时回合加上它自己的格，于是历史与这场会话共用一根
+    // 接缝之后一次实时回合加上它自己的格，于是历史与这个会话共用一根
     // 回合条，而不是另起一根。
     let before = shape.len();
     state.live_event(RenderEvent::Logged {
@@ -1263,7 +1263,7 @@ fn a_replayed_history_grows_in_the_trace_page_too() {
 // 票 14 — 会话身份与「不重不漏」
 // ---------------------------------------------------------------------------
 
-/// 这一场自己的身份：与 `facts()` 的 `session_id` 同一个串。
+/// 这个会话自己的身份：与 `facts()` 的 `session_id` 同一个串。
 fn this_session() -> SessionId {
     SessionId::new("01J8ZQ4K7M")
 }
@@ -1317,15 +1317,15 @@ fn a_live_event_the_snapshot_already_holds_is_not_drawn_twice() {
 #[test]
 fn an_event_from_another_session_never_enters_the_projection() {
     // 渲染器只有一份投影，它画的是当前前台；别的会话事件进不来
-    // （`.scratch/session-tab/spec.md` §6）。对照是同一条从自己这场发出来。
+    // （`.scratch/session-tab/spec.md` §6）。对照是同一条从自己这个会话发出来。
     let mut state = state();
     state.live_event(RenderEvent::notice(
-        SessionId::new("另一场"),
-        "另一场的一句话".to_owned(),
+        SessionId::new("另一个会话"),
+        "另一个会话的一句话".to_owned(),
     ));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        !text.contains("另一场的一句话"),
+        !text.contains("另一个会话的一句话"),
         "别的会话不在这份投影里：{text}"
     );
 

@@ -1,7 +1,7 @@
-//! 会话存储（spec §11）：一场会话一个目录，一个 cwd 一个桶。
+//! 会话存储（spec §11）：一个会话一个目录，一个 cwd 一个桶。
 //!
-//! 一场会话是一个**可搬运的目录**：一份 JSONL 事件流，加上流所指向的 `outputs/` 产物，别无其
-//! 他。把这个目录拷到另一台机器上，拷过去的就是整场会话。
+//! 一个会话是一个**可搬运的目录**：一份 JSONL 事件流，加上流所指向的 `outputs/` 产物，别无其
+//! 他。把这个目录拷到另一台机器上，拷过去的就是整个会话。
 //!
 //! ```text
 //! <root>/<cwd-slug>/<session-id>/
@@ -11,13 +11,13 @@
 //!
 //! cwd 的 slug 只用来**分桶**：权威绑定是 `SessionStarted` 里记下的 `cwd`。所以不带 id 的
 //! `--continue` 永远不需要一个全局索引 —— 它扫这个目录所在的桶，取最近写下的那份日志。按 id 续
-//! （`-c <id>` / `--session <id>`）先扫本桶、再全 store，而续上别处那一场时工作目录取的就是那条
+//! （`-c <id>` / `--session <id>`）先扫本桶、再全 store，而续上别处那个会话时工作目录取的就是那条
 //! `SessionStarted` 里的 cwd。
 //!
 //! root 是注入的，从不从环境里读：库不读任何环境，所以 store 住在哪里由调用方（CLI）决定
 //! （spec §1）。
 //!
-//! store 建出来的一切都是**仅属主**的（会话目录与产物目录 `0700`，事件流 `0600`），因为一场会
+//! store 建出来的一切都是**仅属主**的（会话目录与产物目录 `0700`，事件流 `0600`），因为一个会话会
 //! 话装着用户的源码，以及经打码之后、它小心保住的那些秘密（spec §11、§20）。
 
 use std::io;
@@ -35,7 +35,7 @@ pub const OUTPUTS_DIR: &str = "outputs";
 
 /// 一条流里记下的那个工作区：第一条 `SessionStarted.cwd`。
 ///
-/// 桶名是编码过的、读不回来，所以这是「这场会话开在哪」唯一权威的来源。
+/// 桶名是编码过的、读不回来，所以这是「这个会话开在哪」唯一权威的来源。
 pub fn started_cwd(events: &[Event]) -> Option<String> {
     events.iter().find_map(|event| match &event.payload {
         EventPayload::SessionStarted { cwd, .. } => Some(cwd.clone()),
@@ -43,7 +43,7 @@ pub fn started_cwd(events: &[Event]) -> Option<String> {
     })
 }
 
-/// 一场会话开在哪里 —— 读它自己的那条流。
+/// 一个会话开在哪里 —— 读它自己的那条流。
 ///
 /// 读不出来（流坏了、或者它还在 `create` 与第一条事件之间）就答 `None`，调用方退回请求的目录。
 pub fn session_cwd(session: &StoredSession) -> Option<String> {
@@ -114,21 +114,21 @@ impl SessionStore {
         ))
     }
 
-    /// 这个 cwd 会接着跑的那场会话：桶里最近写下的那份流；桶里什么都没有时是 `None`。
+    /// 这个 cwd 会接着跑的那个会话：桶里最近写下的那份流；桶里什么都没有时是 `None`。
     pub fn latest(&self, cwd: &Path) -> io::Result<Option<StoredSession>> {
         Ok(self.list(cwd)?.into_iter().next())
     }
 
-    /// 这场会话在不在这个 cwd 的桶里。
+    /// 这个会话在不在这个 cwd 的桶里。
     ///
-    /// 「按 id 接着跑一场会话」要它判「是不是在**请求的那个工作区**里」：是就沿用请求的目录，不是
-    /// 才去问那场会话自己的 cwd。判桶而不是比路径 —— `heng --cwd .` 这样的相对写法与流里记的
+    /// 「按 id 接着跑一个会话」要它判「是不是在**请求的那个工作区**里」：是就沿用请求的目录，不是
+    /// 才去问那个会话自己的 cwd。判桶而不是比路径 —— `heng --cwd .` 这样的相对写法与流里记的
     /// 绝对路径不相等，但它们说的是同一个工作区。
     pub fn is_in_bucket(&self, cwd: &Path, id: &SessionId) -> io::Result<bool> {
         Ok(self.list(cwd)?.iter().any(|session| session.id == *id))
     }
 
-    /// 这个 cwd 的桶里每一场会话，最近写下的在前。
+    /// 这个 cwd 的桶里每一个会话，最近写下的在前。
     ///
     /// 一个条目只有带着 `log.jsonl` 才算会话：在 `create` 与第一条 `SessionStarted` 之间进程就
     /// 死了的目录，没有可接着跑的流。
@@ -139,11 +139,11 @@ impl SessionStore {
         Ok(sessions)
     }
 
-    /// store 里每一场会话，跨所有桶，最近写下的在前。
+    /// store 里每一个会话，跨所有桶，最近写下的在前。
     ///
     /// 以工作区为单位的问题（不带 id 的 `--continue`、`prune`）走 [`SessionStore::list`]；这个
     /// 是全 store 的版本：全日账本要它（厂商的配额窗口是跨工作区一起花的，spec §17），按 id 找
-    /// 一场会话也要它（`sessions show <id>`、`-c <id>`）。
+    /// 一个会话也要它（`sessions show <id>`、`-c <id>`）。
     pub fn list_all(&self) -> io::Result<Vec<StoredSession>> {
         let buckets = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
@@ -168,7 +168,7 @@ impl SessionStore {
         std::fs::remove_dir_all(&session.dir)
     }
 
-    /// 在这个 cwd 的桶里只留下最近 `keep` 场会话，返回被删掉的那些。
+    /// 在这个 cwd 的桶里只留下最近 `keep` 个会话，返回被删掉的那些。
     ///
     /// 什么都不自动 prune（spec §11）：这是手动的那根杠杆。
     pub fn prune(&self, cwd: &Path, keep: usize) -> io::Result<Vec<StoredSession>> {
@@ -224,7 +224,7 @@ fn sort_newest_first(sessions: &mut [StoredSession]) {
 
 /// 一个新的会话 id：`<UTC 时间戳>-<短的随机后缀>`（spec §11）。
 ///
-/// 时间戳让 id 能按时间排序、按时间读；后缀让同一秒里铸出的两场会话彼此区分。`--continue` 之
+/// 时间戳让 id 能按时间排序、按时间读；后缀让同一秒里铸出的两个会话彼此区分。`--continue` 之
 /// 后这个 id **永不变**，这正是两家 provider 的前缀缓存都还能命中的原因。
 pub fn new_session_id() -> SessionId {
     SessionId::new(format!(

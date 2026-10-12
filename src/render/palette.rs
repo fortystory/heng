@@ -43,7 +43,7 @@ pub const INJECTED: Color = Color::LightBlue;
 
 /// 会话页上「**当前前台**」那一行的标题色（票 29）。
 ///
-/// 它回答的是「这一场是现在屏幕上的那一场」—— 与 [`USER`](Self::USER) 撞值是刻意的
+/// 它回答的是「这个会话是现在屏幕上的那个会话」—— 与 [`USER`](Self::USER) 撞值是刻意的
 /// （§3：域间允许撞值）。
 pub const LIVE: Color = Color::LightGreen;
 

@@ -202,7 +202,7 @@ fn the_cache_answers_second_time_without_touching_the_disk() {
 
 /// 实测：本机真实 store 上，前缀派生一整轮多少毫秒。
 ///
-/// 决策票 01 §4 记的是 281 场 3.7–4.8 ms（对照全量 `summarize` 155.6–172.2 ms）。它读的是
+/// 决策票 01 §4 记的是 281 个会话 3.7–4.8 ms（对照全量 `summarize` 155.6–172.2 ms）。它读的是
 /// 本机真实的 store，所以默认 `#[ignore]`；复现命令：
 /// `cargo test --test session_title -- --ignored --nocapture`。
 #[test]
@@ -245,7 +245,7 @@ fn measure_prefix_derivation_over_the_real_store() {
         .collect();
     let elapsed = started.elapsed();
     println!(
-        "{} 场，前缀派生一轮 {:?}（平均 {:?}，其中 {} 条落了兜底）",
+        "{} 个会话，前缀派生一轮 {:?}（平均 {:?}，其中 {} 条落了兜底）",
         sessions.len(),
         elapsed,
         elapsed / sessions.len() as u32,

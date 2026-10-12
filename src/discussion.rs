@@ -39,7 +39,7 @@ pub enum RoundPlan {
 pub fn plan_after_round(outcome: protocol::RoundOutcome, round: u32, max_rounds: u32) -> RoundPlan {
     use protocol::RoundOutcome;
     match outcome {
-        // 定向轮之后的一致是收敛；第一轮里的一致意味着分歧从未出现过 —— 那是关于这场讨论的另一个
+        // 定向轮之后的一致是收敛；第一轮里的一致意味着分歧从未出现过 —— 那是关于这次讨论的另一个
         // 事实，拿另一个原因。
         RoundOutcome::Agreed if round > 1 => RoundPlan::Stop(StopReason::Consensus),
         RoundOutcome::Agreed => RoundPlan::Stop(StopReason::NoDivergence),
@@ -56,7 +56,7 @@ pub fn plan_after_round(outcome: protocol::RoundOutcome, round: u32, max_rounds:
 /// 它住在这里 —— 不在流上 —— 因为否则「后一轮的 `messages` 能从流上重算」这条在这条指令一旦改变
 /// 什么东西的那一刻就不成立了（spec §15）。
 ///
-/// 它**整场讨论都不变**是有意的。定向轮那条规则在这里说一次，而不是逐轮注入：system prompt 是前缀的
+/// 它**整次讨论都不变**是有意的。定向轮那条规则在这里说一次，而不是逐轮注入：system prompt 是前缀的
 /// 头部，在讨论中途重写它会让整个前缀缓存作废（spec §4）。讨论者处在哪一轮，从投影的
 /// `[轮 N · 名字]` 前缀与对方揭示出来的作答里就能看到。
 ///
@@ -91,7 +91,7 @@ pub fn debater_identity(name: &str) -> String {
 /// 也因为灵魂是用户写的文本，与项目规则一模一样，而项目规则本来就是这么走的。
 pub fn persona_brief(soul: &str) -> String {
     format!(
-        "你的性格设定（用户给的，整场讨论都照它来）：\n{}\n\
+        "你的性格设定（用户给的，整次讨论都照它来）：\n{}\n\
          保持这个性格，不要为了和对方一致而丢掉它，也不要替用户做最终决定。",
         soul.trim()
     )
@@ -122,9 +122,9 @@ pub fn synthesizer_identity() -> String {
 /// 从流上派生、而不是从循环状态派生，所以「谁缺席了」与日志记下的是同一个事实。它揭示每个讨论者的
 /// **发言**，绝不揭示它的私有推理（spec §15）：一份对推理的摘要等于 harness 替某一方改写论证。
 ///
-/// `since_round` 把材料限制在**这一场**讨论内。一个会话可以承载不止一场讨论（`/discuss` 跑在活的
-/// 流上），而轮次号接在流上已有的内容之后 —— 所以没有这条界，第二场讨论的合成器会拿到第一场的作答，
-/// 并被要求把两场一起合成。
+/// `since_round` 把材料限制在**这个会话**讨论内。一个会话可以承载不止一次讨论（`/discuss` 跑在活的
+/// 流上），而轮次号接在流上已有的内容之后 —— 所以没有这条界，第二次讨论的合成器会拿到第一次的作答，
+/// 并被要求把两个一起合成。
 pub fn synthesis_prompt(question: &str, events: &[Event], since_round: u32) -> String {
     let mut prompt = String::from("问题：\n");
     prompt.push_str(question.trim());
@@ -153,8 +153,8 @@ pub fn synthesis_prompt(question: &str, events: &[Event], since_round: u32) -> S
 
 /// 流上持有的最大轮次号；一个都没有时是零。
 ///
-/// 一场讨论把它的轮次号编在**它所写入的那条流**之后，正是这一点让 `round` 在一个会话里唯一：
-/// `/discuss` 可以在一个会话里跑两次，而 `RoundStarted { round }` 必须说得出它属于哪一场讨论，否则
+/// 一次讨论把它的轮次号编在**它所写入的那条流**之后，正是这一点让 `round` 在一个会话里唯一：
+/// `/discuss` 可以在一个会话里跑两次，而 `RoundStarted { round }` 必须说得出它属于哪一次讨论，否则
 /// 每一个关于轮次的查询（`round_attendance`、`sessions show --round N`）都会把它们混起来。
 pub fn last_round(events: &[Event]) -> u32 {
     events
@@ -170,9 +170,9 @@ pub fn last_round(events: &[Event]) -> u32 {
 /// 池子里两个不同的成员，由一个种子抽出，按池子顺序。
 ///
 /// 池子存在是为了让不同的讨论能问不同的组合；抽取是*由种子确定的*，好让一个会话能靠钉住种子复现，
-/// 也让测试能断言那个选择、而不是分布。池子完全撑不起一场讨论时（成员少于两个）是 `None`。
+/// 也让测试能断言那个选择、而不是分布。池子完全撑不起一次讨论时（成员少于两个）是 `None`。
 ///
-/// 按池子顺序，因为顺序决定了哪个讨论者替这场讨论记录。一个便宜的混合就够了：这挑的是哪两个模型来
+/// 按池子顺序，因为顺序决定了哪个讨论者替这次讨论记录。一个便宜的混合就够了：这挑的是哪两个模型来
 /// 争论，不是一次密码学抽取，而两个下标不可能撞上，因为第二个是从剩下那 `len - 1` 个槽位里抽的。
 pub fn pick_pair(len: usize, seed: u64) -> Option<(usize, usize)> {
     if len < 2 {
@@ -194,8 +194,8 @@ pub fn pick_pair(len: usize, seed: u64) -> Option<(usize, usize)> {
 
 /// 一次位于 `synthesis_round` 的合成所收尾的那个辩论阶段的第一轮。
 ///
-/// 这就是合成器的材料被限制在**一场**讨论里的方式。轮次号编在它们所写入的那条流之后（所以一个会话
-/// 里第二次 `/discuss` 从第一场停下的地方接着数），这意味着「日志里的每一轮」不再等于「这场讨论的
+/// 这就是合成器的材料被限制在**一次**讨论里的方式。轮次号编在它们所写入的那条流之后（所以一个会话
+/// 里第二次 `/discuss` 从第一次停下的地方接着数），这意味着「日志里的每一轮」不再等于「这次讨论的
 /// 轮次」。
 ///
 /// 这条规则是结构性的：一个辩论阶段是一串连续的轮，其中唯一可能的 `RoundEnded` 落在它的最后一轮上

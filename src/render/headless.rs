@@ -42,7 +42,7 @@ impl Render for Headless {
         let Headless { mut sinks } = *self;
         let mut final_text = String::new();
         let mut in_reasoning = false;
-        // 一场讨论的轮次有没有敞着。在一轮里面，一个完成的回合是某位讨论者的作答，而不
+        // 一次讨论的轮次有没有敞着。在一轮里面，一个完成的回合是某位讨论者的作答，而不
         // 是会话的最终产物：每个讨论者的回合也都以 `Completed` 收尾，所以「最后一个完成
         // 的回合」会把两个讨论者的作答都放上 stdout（spec §15）。
         let mut in_round = false;

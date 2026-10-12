@@ -13,7 +13,7 @@ heng sessions replay <id> --speaker X [--round N] [--model ID] [--json]
 heng sessions stats <id> [--model ID] [--json]
 ```
 
-`<id>` 是一个会话 id，或者一个会话目录的路径（会话是可搬运的目录，所以那常常是最顺手的
+`<id>` 是一个会话 id，或者一个目录的路径（会话是可搬运的目录，所以那常常是最顺手的
 抓手）。无论哪个动词，stdout 放结果、stderr 放诊断；每个视图都有 `--json` 形式，好接进
 管道。
 

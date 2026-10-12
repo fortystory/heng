@@ -11,7 +11,7 @@
 | [`tui-ux/`](tui-ux/map.md) | map | TUI 使用体验与视觉效果优化（wayfinder 决策图）—— **已折成 [`tui-layout/spec.md`](tui-layout/spec.md) §14** | 8/8 resolved |
 | [`tui-input-pulse/`](tui-input-pulse/spec.md) | spec | 输入区三行 + 提示符色相（忙碌信号试了六版，最后落在提示符的色相上） | 9/9 done |
 | [`tui-chrome/`](tui-chrome/spec.md) | spec | TUI 外壳收干净：拆掉四周外框、状态行上方那条线离场、剩余框架虚线化并压深、详情覆盖层屏幕居中、覆盖层立着时滚轮按指针位置分派（各推翻 `tui-sidebar` spec §1 与 §7 的一半）；§6 是随后一轮真机反馈的两条微调（左栏身份下移一行、横线不再截断竖线） | 8/8 done |
-| [`chinese-ui/`](chinese-ui/spec.md) | spec | 界面中文化：给人看的文本收进一个措辞层 | 8/8 done |
+| [`chinese-ui/`](chinese-ui/spec.md) | spec | 界面中文化：给人看的文本收进一个措辞层 | 9/9 done |
 | [`ask-user-question/`](ask-user-question/seed.md) | seed | 种子材料：模型发起的「选择工具」与底部问卷接管 —— **已落成 [`fs-agent-v1` 票 32](fs-agent-v1/issues/32-ask-user-question-tool.md)（done）**，本目录不会再有 spec | — |
 | [`todo-and-modes/`](todo-and-modes/spec.md) | spec | 计划从「权限模式」改成模型自己的 `todo` 工具；模式回到 `readonly`/`ask`/`auto` 三档并补齐入口；侧栏加 `todo` 标签（推翻 `fs-agent-v1` §13，留了 [ADR 0003](../docs/adr/0003-plan-leaves-the-permission-modes.md)） | 4/4 done |
 | [`sandbox/`](sandbox/spec.md) | spec | 基于 bubblewrap 的进程级沙箱：`bash` 与动态工具的写边界由内核担保（默认开 + fail closed；网络不在这一层，留了 [ADR 0006](../docs/adr/0006-sandbox-by-bubblewrap.md)）—— 2026-10-01 由 seed 折成 spec、同日落地（五张票全 done，真机清单在 [`docs/tui-manual-checklist.md`](../docs/tui-manual-checklist.md) ⑱）；五份一手调研与两份图解都在目录里 | 5/5 done |
@@ -25,7 +25,7 @@
 | [`questionnaire-keys/`](questionnaire-keys/spec.md) | spec | 问卷手感：选项区 / 输入区、`j`/`k` 移动、答案并存、`Esc` 退出询问、折行 + 页脚三档阶梯；10-02 两批折成（[ADR 0010](../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)），10-04 第三批 13 问折成 §11（回车改「下一题 / 提交」；10-06 又推翻 §2 的方向键行） | 7 done + 1 walkthrough；seed 另有未访谈意向（输入区 Emacs 键） |
 | [`input-tokens/`](input-tokens/spec.md) | spec | 输入框里的**记号**：`@` 提工作区文件（会话级索引，规则跟 `grep` 工具一致）、`/` 与 `@` 共用一套浮层与键位、能兑现的记号上色并成为**不可分割**的一块（[ADR 0012](../docs/adr/0012-input-tokens-are-atomic.md)）、`/` 的提交语义放宽到任意行任意位置；codex 那侧的一手调研在目录里 | 5/5 done |
 | [`terminal-title/`](terminal-title/spec.md) | spec | 终端标题带上工作内容：`<父>/<基名> · <状态> · <目标名>`、40 列封顶、进 TUI 时保存原标题并在退出（含 panic）时还原 | 2 done + 1 ready-for-walkthrough |
-| [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那场会话走；退出回执因此改成 `heng -c <id>` | 1/1 done |
+| [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那个会话走；退出回执因此改成 `heng -c <id>` | 1/1 done |
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |
 | [`sidebar-toggle/`](sidebar-toggle/spec.md) | spec | 左栏开关：`Ctrl-O` 收起与叫回 —— 意愿与宽度档**相乘**（< 80 列叫不回来）、意愿只活在进程内、提示行最末加一条 `ctrl-o 左栏`；推翻 `tui-sidebar` spec §2 与 `CONTEXT.md` 左栏词条里「去留只由宽度决定」那半句（2026-10-02，一次十问的 grilling，不建图） | 2 done + 1 ready-for-walkthrough（票 03 剩 ㉖ 的真机走查） |
 | [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 —— **已落成 [`mcp-support` 票 19](mcp-support/issues/19-mcp-catalog-in-context.md)（done）**：注入那条记录点得开、`DetailKind::Context` 通吃所有来源，本目录不会再有 spec | — |

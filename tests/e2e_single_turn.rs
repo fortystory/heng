@@ -176,7 +176,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
             assert_eq!(session_id.as_str(), "s-1");
             assert_eq!(*schema_version, heng::events::SCHEMA_VERSION);
             // 五样会话级事实在**开场那一刻**就记下来了（`.scratch/session-tab/spec.md` §2）：
-            // 这一场是 `fake-model`、默认档位、`ask` 模式、沙箱关着；provider 这一格测试的
+            // 这个会话是 `fake-model`、默认档位、`ask` 模式、沙箱关着；provider 这一格测试的
             // `SessionConfig::new` 不给（真实组装由 `Config::session_config` 从 profile 填）。
             assert_eq!(model.as_deref(), Some("fake-model"));
             assert_eq!(provider.as_deref(), None);

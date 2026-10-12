@@ -69,7 +69,7 @@ fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
         .join("\n")
 }
 
-/// 换到 `session_id` 那一场，并把它的快照铺完。
+/// 换到 `session_id` 那个会话，并把它的快照铺完。
 fn switch(state: &mut TuiState, session_id: &str, events: Vec<Event>) {
     state.request(ConsoleRequest::SwitchSession {
         facts: facts(session_id),
@@ -92,13 +92,13 @@ fn switching_replaces_the_whole_projection() {
     assert!(text.contains("二号会话说的话"), "切过去看到的是它：{text}");
     assert!(
         !text.contains("一号会话说的话"),
-        "上一场的内容一点都不留：{text}"
+        "上一个会话的内容一点都不留：{text}"
     );
 }
 
 #[test]
 fn switching_does_not_insert_the_history_divider() {
-    // 切过去看到的是一整场会话，不是「历史 + 本段」。
+    // 切过去看到的是一整个会话，不是「历史 + 本段」。
     let mut state = fresh();
     switch(&mut state, "s-b", vec![said(1, "只有一段")]);
     let text = screen(120, 24, &mut state);
@@ -128,7 +128,7 @@ fn the_draft_comes_back_with_its_session() {
 
 #[test]
 fn a_live_event_of_the_new_session_lands_after_the_snapshot() {
-    // 切换期间到达的实时事件（属于**新**那一场）在收尾时补上，而快照里已有的不画第二遍。
+    // 切换期间到达的实时事件（属于**新**那个会话）在收尾时补上，而快照里已有的不画第二遍。
     let mut state = fresh();
     state.request(ConsoleRequest::SwitchSession {
         facts: facts("s-b"),
@@ -157,11 +157,11 @@ fn a_live_event_of_the_new_session_lands_after_the_snapshot() {
 
 #[test]
 fn the_way_out_follows_the_session_that_is_in_front() {
-    // 状态行末尾那一段说的是**眼前这场**的键盘（`.scratch/session-tab/spec.md` §1、票 23）：
+    // 状态行末尾那一段说的是**眼前这个会话**的键盘（`.scratch/session-tab/spec.md` §1、票 23）：
     // 跑着的时候 `Ctrl-C` 取消、`Ctrl-D` 退出，空闲的时候只剩 `Ctrl-D`。
     //
-    // 它曾经只读一个进程级的忙闲开关，而那个开关在切场之后没人重算 —— 于是切到后台正跑着的
-    // 那一场，状态行按空闲说话，而那时 `Ctrl-C` 明明可用（2026-10-12 维护者报告）。
+    // 它曾经只读一个进程级的忙闲开关，而那个开关在切换会话之后没人重算 —— 于是切到后台正跑着的
+    // 那个会话，状态行按空闲说话，而那时 `Ctrl-C` 明明可用（2026-10-12 维护者报告）。
     let mut state = fresh();
     let idle = screen(120, 24, &mut state);
     assert!(
@@ -169,7 +169,7 @@ fn the_way_out_follows_the_session_that_is_in_front() {
         "空闲那一档只宣传退出：{idle}"
     );
 
-    // 后台那一场正在跑回合。
+    // 后台那个会话正在跑回合。
     state.request(ConsoleRequest::SessionState {
         id: SessionId::new("s-b"),
         state: heng::session::host::SessionState::RunningTurn,
@@ -177,7 +177,7 @@ fn the_way_out_follows_the_session_that_is_in_front() {
     let still_idle = screen(120, 24, &mut state);
     assert!(
         still_idle.contains(wording::EXIT_HINT_IDLE),
-        "后台那一场在跑，不改眼前这一场的提示：{still_idle}"
+        "后台那个会话在跑，不改眼前这个会话的提示：{still_idle}"
     );
 
     // 切到它：出口换成忙碌那一档，两个键各说各的（空闲那一档是它的后缀，所以按整段比而不是
@@ -193,7 +193,7 @@ fn the_way_out_follows_the_session_that_is_in_front() {
         "切过去就是忙碌那一档：{busy_row}"
     );
 
-    // 再切回空闲那一场：提示跟着切回去。
+    // 再切回空闲那个会话：提示跟着切回去。
     switch(&mut state, "s-a", vec![said(1, "甲")]);
     let back = screen(120, 24, &mut state);
     assert!(
@@ -204,7 +204,7 @@ fn the_way_out_follows_the_session_that_is_in_front() {
 
 #[test]
 fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
-    // 上一场攒下的实时事件不带过去（`live_buffer` 在切换时清掉）。
+    // 上一个会话攒下的实时事件不带过去（`live_buffer` 在切换时清掉）。
     let mut state = fresh();
     state.request(ConsoleRequest::SwitchSession {
         facts: facts("s-b"),
@@ -213,11 +213,14 @@ fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
     state.live_event(RenderEvent::Notice {
         session: SessionId::new("s-a"),
         at: chrono::Utc::now(),
-        message: "上一场的一句话".to_owned(),
+        message: "上一个会话的一句话".to_owned(),
     });
     while state.replay_pending() {
         state.replay_batch();
     }
     let text = screen(120, 24, &mut state);
-    assert!(!text.contains("上一场的一句话"), "上一场的不泄过来：{text}");
+    assert!(
+        !text.contains("上一个会话的一句话"),
+        "上一个会话的不泄过来：{text}"
+    );
 }

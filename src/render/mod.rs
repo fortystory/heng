@@ -85,7 +85,7 @@ pub enum DeltaKind {
 #[derive(Debug, Clone)]
 pub enum RenderEvent {
     Delta {
-        /// 这一条增量属于哪一场会话。它们不走事件流，所以身份只能由发送端带上。
+        /// 这一条增量属于哪一个会话。它们不走事件流，所以身份只能由发送端带上。
         session: SessionId,
         speaker: SpeakerId,
         kind: DeltaKind,
@@ -125,7 +125,7 @@ pub enum RenderEvent {
     /// 它不是事件、也永远不进事件流（身份在每次请求里现拼、从不落盘 —— `build_messages`，
     /// spec §15）。所以这一条是**按当前代码拼的一份**：`--continue` 重开看到的是今天的拼法，
     /// 不是当时那份。它点得开、看得全，但不进模型上下文、也不写 `log.jsonl`。
-    /// 这一场现在忙不忙（`.scratch/session-tab/spec.md` §1、票 22）。
+    /// 这个会话现在忙不忙（`.scratch/session-tab/spec.md` §1、票 22）。
     ///
     /// 三态：空闲、在跑回合、**等在一个人答**。列表标记与页顶读数读的就是它。
     SessionState {
@@ -139,9 +139,9 @@ pub enum RenderEvent {
 }
 
 impl RenderEvent {
-    /// 这条事件属于哪一场会话。
+    /// 这条事件属于哪一个会话。
     ///
-    /// 渲染器在一个进程里只有一个，而它面前可以同时活着不止一场会话，所以每一条事件都得
+    /// 渲染器在一个进程里只有一个，而它面前可以同时活着不止一个会话，所以每一条事件都得
     /// 说得出自己是谁的（`.scratch/session-tab/spec.md` §6）。
     pub fn session(&self) -> &SessionId {
         match self {
@@ -199,14 +199,14 @@ impl std::fmt::Debug for RenderSinks {
 /// 渲染通道的发送端。克隆很便宜。
 #[derive(Clone)]
 pub struct RenderHandle {
-    /// 这个句柄代表哪一场会话：它发出去的每一条事件都带上这个身份
+    /// 这个句柄代表哪一个会话：它发出去的每一条事件都带上这个身份
     /// （`.scratch/session-tab/spec.md` §6）。
     session: SessionId,
     sender: broadcast::Sender<RenderEvent>,
 }
 
 impl RenderHandle {
-    /// 这个句柄代表的那一场会话。
+    /// 这个句柄代表的那一个会话。
     pub fn session(&self) -> &SessionId {
         &self.session
     }
@@ -342,10 +342,10 @@ pub fn channel(session: SessionId) -> (RenderHandle, broadcast::Receiver<RenderE
 
 /// **进程级**的渲染端：那条唯一的通道，以及拥有它的那个任务。
 ///
-/// 渲染器只能起一次 —— 它占着终端与键盘 —— 所以它不是一场会话的东西，而是整个进程的
-/// 东西（`.scratch/session-tab/spec.md` §1）。一场会话从它这里取一个带自己身份的
-/// [`RenderHandle`]（[`RenderChannel::handle`]），多场会话因此共用同一个渲染器与同一块
-/// 屏幕，而每一场说得出自己是谁。
+/// 渲染器只能起一次 —— 它占着终端与键盘 —— 所以它不是一个会话的东西，而是整个进程的
+/// 东西（`.scratch/session-tab/spec.md` §1）。一个会话从它这里取一个带自己身份的
+/// [`RenderHandle`]（[`RenderChannel::handle`]），多个会话因此共用同一个渲染器与同一块
+/// 屏幕，而每一个会话说得出自己是谁。
 ///
 /// 克隆很便宜：内部是一份 `Arc`，克隆之间共享同一个渲染任务。
 #[derive(Clone)]
@@ -354,12 +354,12 @@ pub struct RenderChannel {
 }
 
 struct RenderChannelInner {
-    /// 进程启动那一场的身份。plain 在 `Lagged` 时自己造一条诊断，而那时手边只有这个值
+    /// 进程启动那个会话的身份。plain 在 `Lagged` 时自己造一条诊断，而那时手边只有这个值
     /// —— 多会话本来也不走 plain（会话页只在 TUI 左栏）。
     session: SessionId,
     /// 通道那一份发送端。它在 `Option` 里，因为收尾时**必须**把它放掉：渲染任务靠
     /// 「没有写端了」结束，而握着写端去 await 任务就是死锁（票 13 实现期踩到的那一个）。
-    /// 每一场会话从它克隆出自己那份 [`RenderHandle`]，所以放掉它不影响会话的写端。
+    /// 每一个会话从它克隆出自己那份 [`RenderHandle`]，所以放掉它不影响会话的写端。
     sender: std::sync::Mutex<Option<broadcast::Sender<RenderEvent>>>,
     /// 那个唯一的渲染任务。收尾时取走它并 await：任务要等**每一个**写端都丢掉才返回，
     /// 所以「等渲染器把缓冲写完」在多会话下依然是同一句话（票 13）。
@@ -380,12 +380,12 @@ impl RenderChannel {
         }
     }
 
-    /// 进程启动那一场的身份。
+    /// 进程启动那个会话的身份。
     pub fn session(&self) -> &SessionId {
         &self.inner.session
     }
 
-    /// 给一场会话一个带身份的写端。
+    /// 给一个会话一个带身份的写端。
     ///
     /// 通道收尾之后给不出了（那时渲染任务正在等所有写端消失），所以这里 `expect` 一下：
     /// 唯一会调它的地方是组装，而组装在收尾之前。

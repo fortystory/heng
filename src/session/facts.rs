@@ -13,7 +13,7 @@
 
 use crate::events::{Event, EventPayload};
 
-/// 一场会话的五样会话级事实。
+/// 一个会话的五样会话级事实。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionFacts {
     /// provider 调用所用的模型标识。

@@ -3,11 +3,11 @@
 //! 二进制只是这个模块外面一层薄壳。库需要的一切都在这里从 `config.toml`、导出的环境与内建默认值组
 //! 装出来，然后注入 [`crate::assemble`]。
 //!
-//! `probe` 是票 02 的手工验收工具：它对每个已配置的模型驱动一个真实回合，然后在同一场会话里再驱动
+//! `probe` 是票 02 的手工验收工具：它对每个已配置的模型驱动一个真实回合，然后在同一个会话里再驱动
 //! 第二个回合，这样第二个请求的用量行就能看出前缀缓存有没有命中。它无头运行，用一次性的会话日志。
 //!
 //! `prune` 与 `sessions` 读的都是票 12 建出来的那个 store：`prune` 手动删掉某个工作区的会话目录，
-//! 而 `sessions` 从一场**已结束**会话自己的流里回答关于它的问题 —— `ls`、按轮分组的 `show`
+//! 而 `sessions` 从一个**已结束**会话自己的流里回答关于它的问题 —— `ls`、按轮分组的 `show`
 //! （`--files` 是按工作区对象看的那个视图）、`replay`（投影的重算，spec §18）与 `stats`。它们住在
 //! 这里，因为 store 的 root 来自环境，而库从不读环境；查询本身在
 //! [`crate::session::observe`] 与 [`crate::agent::replay`]。交互式渲染器仍是唯一没有接线的那一块
@@ -136,10 +136,10 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
 // 交互式前端（spec §19）
 // ---------------------------------------------------------------------------
 
-/// 接着跑哪一场会话（`-c` / `--continue` / `--session`）。
+/// 接着跑哪一个会话（`-c` / `--continue` / `--session`）。
 #[derive(Debug, PartialEq, Eq)]
 enum Resume {
-    /// 本工作区里最近写下的那场。
+    /// 本工作区里最近写下的那个会话。
     Latest,
     /// 指名的那个 id，或者它会话目录的路径。
     Session(String),
@@ -152,7 +152,7 @@ struct InteractiveArgs {
     plain: bool,
     /// 强制用 TUI 渲染器。
     tui: bool,
-    /// 接着跑哪一场会话（spec §11）：不写就是新开一场。
+    /// 接着跑哪一个会话（spec §11）：不写就是新开一个会话。
     resume: Option<Resume>,
     config: Option<PathBuf>,
     model: Option<String>,
@@ -169,10 +169,10 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
         match args[index].as_str() {
             "--plain" => parsed.plain = true,
             "--tui" => parsed.tui = true,
-            // `-c` / `--continue` 后面跟一个不以 `-` 开头的词，就是**指名**续哪一场
-            // （`heng -c 20261001T155845Z-7a69cbff`）；没有就是本工作区最新那场。
+            // `-c` / `--continue` 后面跟一个不以 `-` 开头的词，就是**指名**续哪个会话
+            // （`heng -c 20261001T155845Z-7a69cbff`）；没有就是本工作区最新那个会话。
             // 判的是「下一个词是不是旗标」而不是「是不是 id」：这样 `heng -c --plain`
-            // 仍然是「续最新 + plain」，不会去找一场叫 `--plain` 的会话。
+            // 仍然是「续最新 + plain」，不会去找一个会话叫 `--plain` 的会话。
             "--continue" | "-c" => {
                 parsed.resume = Some(match args.get(index + 1) {
                     Some(id) if !id.starts_with('-') => {
@@ -286,7 +286,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             }
         },
     };
-    // 打开哪一场，以及这一趟的工作目录 —— 按 id 续上别的工作区的会话时，cwd 跟着那场会话走。
+    // 打开哪个会话，以及这一趟的工作目录 —— 按 id 续上别的工作区的会话时，cwd 跟着那个会话走。
     let chosen = match choose_session(&store, &cwd, parsed.resume.as_ref()) {
         Ok(chosen) => chosen,
         Err(message) => {
@@ -413,7 +413,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     };
     // 渲染器整个进程只起一次：它是**进程级**的值，会话从它取一个带自己身份的写端
     // （`.scratch/session-tab/spec.md` §1、票 13）。
-    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 进程级的一张锁表：同一入口里开出的每一个会话都从它取自己 cwd 的那一张 —— 同 cwd
     // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
@@ -422,7 +422,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 渲染侧的开关都要先拿到前台指针那一份订阅（票 22）。
     let mut host = SessionHost::<CliCommand>::new(stored.id.clone());
     let foreground = host.subscribe_foreground();
-    // 第一场的应答者：真正的作答仍然是 `ConsoleAsker`，外面包一层「不是前台就挂住」。
+    // 第一个会话的应答者：真正的作答仍然是 `ConsoleAsker`，外面包一层「不是前台就挂住」。
     let session_asker = Arc::new(crate::session::SessionAsker::new(
         Arc::clone(&asker) as Arc<dyn Asker>,
         stored.id.clone(),
@@ -430,7 +430,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     ));
     let config = std::sync::Arc::new(config);
     let outside_read = config.outside_read;
-    // 装载另一场要的那批材料（票 20）：同一批配置、同一个渲染端、同一张锁表。
+    // 装载另一个会话要的那批材料（票 20）：同一批配置、同一个渲染端、同一张锁表。
     let kit = AssemblyKit {
         config: std::sync::Arc::clone(&config),
         model: model.clone(),
@@ -517,7 +517,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         }
     }
 
-    // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪场会话。它走渲染器而不是 stderr：
+    // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪个会话。它走渲染器而不是 stderr：
     // TUI 在 harness 组装时就已经启动，第二个往终端写的人会落在它的活动区域里、盖在状态行上。
     // 拼给模型的那段私有身份，给读的人留一条记录。它**不进事件流**（身份每次请求现拼、
     // 从不落盘，spec §15），所以轨迹页看到的是「按当前代码拼的一份」—— 那句话由来源名自己
@@ -536,7 +536,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         &stored.dir.display().to_string(),
         parsed.resume.is_some(),
     ));
-    // 按 id 续上了一场面别的工作区的会话：工作目录跟着它走了，所以先说一句 —— 否则下一步
+    // 按 id 续上了一个别的工作区的会话：工作目录跟着它走了，所以先说一句 —— 否则下一步
     // `ls` 出来的东西与横幅上的目录对不上，人会以为是自己敲错了。
     if elsewhere {
         harness.notice(&render::wording::session_followed(
@@ -545,7 +545,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     }
 
     // `/` 菜单里的名字。真正对提交作出反应的是循环，所以「有哪些名字」也由循环说了算：它解析的那
-    // 些内建命令，然后是这场会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
+    // 些内建命令，然后是这个会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
     // 而不是随表头那些事实一起注入的原因。
     console.catalog(slash_catalog(
         &render::wording::BUILT_IN_COMMANDS,
@@ -553,7 +553,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         &prompts,
     ));
 
-    // 这一场交给宿主表：拥有它的那个 task 跑完整段交互循环，主循环从表里驱动它
+    // 这个会话交给宿主表：拥有它的那个 task 跑完整段交互循环，主循环从表里驱动它
     // （`.scratch/session-tab/spec.md` §1）。渲染端先克隆一份 —— 会话收工之后由主循环等它
     // 把缓冲写完（会话那一份写端随 task 一起没了）。
     let render_channel = harness.render_channel();
@@ -568,7 +568,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `Harness` 一交给 task 就问不到它了，所以在这里取一份。
     let front = harness.front_facts();
     let signal = harness.cancel_signal();
-    // 提示行走渲染通道（它才是「往屏幕上说一句话」的那一端）；主循环自己那一份取启动这一场
+    // 提示行走渲染通道（它才是「往屏幕上说一句话」的那一端）；主循环自己那一份取启动这个会话
     // 的身份。
     let render = render_channel.handle(session_id.clone());
     let prompts_shared = std::sync::Arc::new(prompts);
@@ -594,7 +594,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         eprintln!("heng: {error}");
         return ExitCode::FAILURE;
     }
-    // 入表之后把这一场的三态发送端交给应答者（票 22）—— 它得能置 `AwaitingHuman`。
+    // 入表之后把这个会话的三态发送端交给应答者（票 22）—— 它得能置 `AwaitingHuman`。
     if let Some(entry) = host.get(&stored.id) {
         session_asker.attach(entry.state_tx.clone());
     }
@@ -607,16 +607,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 
     // **输入归主循环**（`.scratch/session-tab/spec.md` §1、决策票 04 §3）：前端事件接收端是
     // 单一消费者，只有这一处读得动它。主循环读一次提交、解析成 `Submission`，再交给宿主表里
-    // **前台**那一场执行 —— 切换前台于是只是「换一个命令的收件人」。
+    // **前台**那个会话执行 —— 切换前台于是只是「换一个命令的收件人」。
     let mut quit = ExitRequest::default();
-    // 忙闲（票 22）：宿主表里每一场读一遍，变了就往渲染通道发一条。**轮询**而不是在变更点
+    // 忙闲（票 22）：宿主表里每一个会话读一遍，变了就往渲染通道发一条。**轮询**而不是在变更点
     // 推送 —— 变更点散在宿主表 task、应答者与循环三处，而这里能看到全部。
     let mut states: std::collections::HashMap<SessionId, crate::session::host::SessionState> =
         std::collections::HashMap::new();
     // 「刚跑完、还没被读」那本账（票 25）。它的**边沿从电平快照推** —— 每帧拿全部会话的状态
     // 与上一帧比对，不新增通道。
     let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
-    // 宿主表里**装着哪几场**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
+    // 宿主表里**装着哪几个**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
     let mut before_hosted: Option<Vec<SessionId>> = None;
     // 那一行提示**只发一次、跨多轮 `select` 挂着**。
     //
@@ -644,7 +644,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     |name| front.skills.iter().any(|skill| skill == name),
                     &prompts_shared,
                 );
-                // **空宿主**：一场都没有的时候没有可提交的对象 —— 回一句，别让它静默消失
+                // **空宿主**：一个会话都没有的时候没有可提交的对象 —— 回一句，别让它静默消失
                 // （票 21）。退出与空行照旧放行。
                 if host.is_empty()
                     && !matches!(submission, Submission::Quit | Submission::Ignore)
@@ -664,7 +664,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 }
                 match submission {
                     Submission::Ignore => {}
-                    // 退出：先把前台那一场收工，再兑现退出码。
+                    // 退出：先把前台那个会话收工，再兑现退出码。
                     Submission::Quit => break ExitCode::SUCCESS,
                     other => {
                         console.set_running(true);
@@ -718,7 +718,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 let finished = unread.iter().filter(|id| **id != foreground).count();
                 console.title_attention(waiting, finished);
                 console.host_count(host.len(), host.running());
-                // **表里装着哪几场**（票 29）：会话页那三档标题色靠它。变化了才推 —— 那是
+                // **表里装着哪几个**（票 29）：会话页那三档标题色靠它。变化了才推 —— 那是
                 // 装载与关闭的边沿，不是每 80ms 一次的事实。
                 let hosted: Vec<SessionId> = host.entries().iter().map(|e| e.id.clone()).collect();
                 if before_hosted.as_ref() != Some(&hosted) {
@@ -726,7 +726,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     console.hosted(hosted);
                 }
             }
-            // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
+            // 会话页上点了别的哪个会话：切过去（票 20）。宿主表在主循环手里。
             request = open_requests.recv() => match request {
                 Some(CliRequest::Open(id)) => {
                     open_session(&mut host, &kit, &console, &requests, &id).await;
@@ -743,7 +743,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     goal,
                     summary,
                 }) => {
-                    // 翻页（票 21）：同 cwd 新建一场，并把额度、目标与摘要交接过去。
+                    // 翻页（票 21）：同 cwd 新建一个会话，并把额度、目标与摘要交接过去。
                     let cwd = host
                         .get(&host.foreground())
                         .map(|entry| entry.cwd.clone())
@@ -766,7 +766,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             },
             event = events.recv() => match event {
                 Some(FrontEndEvent::Quit) => {
-                    // **退出闸门**（票 23）：还有没收尾的场就拒绝，并把可点入口指向第一场 ——
+                    // **退出闸门**（票 23）：还有没收尾的会话就拒绝，并把可点入口指向第一个会话 ——
                     // 不自动取消、不代用户做决定。
                     match crate::session::exit_gate(&host) {
                         crate::session::ExitGate::Clear => {
@@ -790,7 +790,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 Some(FrontEndEvent::Cancel) => {
                     // `Ctrl-C` **只取消前台当前的动作，永不退出**（票 23）。它不再记进退出账本。
                     forward_gesture(&host, FrontEndEvent::Cancel);
-                    // 前台没有可取消的东西时说一句；后台还有场时顺带说那句。
+                    // 前台没有可取消的东西时说一句；后台还有会话时顺带说那句。
                     let idle_foreground = host
                         .get(&host.foreground())
                         .is_none_or(|entry| *entry.state.borrow() == crate::session::host::SessionState::Idle);
@@ -804,7 +804,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 Some(event) => {
                     // 会话级的那三条由这个循环自己转成宿主表请求（票 20、票 21）—— 宿主表就在
                     // 它手里，转发给别人办只会多一圈（见 [`front_to_request`]）。其余手势归前台
-                    // 那一场：取消、模式循环、选择器、改名都是会话内部的动作。
+                    // 那个会话：取消、模式循环、选择器、改名都是会话内部的动作。
                     match front_to_request(&event) {
                         Some(request) => {
                             let _ = requests.send(request);
@@ -825,7 +825,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 退出卡住之后主循环不再回到 `select`，屏幕上的一切手势（按键、点击会话页）都静默失效 ——
     // 2026-10-12 维护者报告的那两条症状（`Ctrl-D` 不能退出、点击切会话没反应）是同一个死锁。
     drop(render);
-    // 退出流程（票 23）：**广播 `Close` 给每一场**，等它们全部收工，再等渲染器把缓冲写完。
+    // 退出流程（票 23）：**广播 `Close` 给每一个会话**，等它们全部收工，再等渲染器把缓冲写完。
     // 退出码照旧只有 0 与 130 两种（`quit.code()`）。
     let ids: Vec<SessionId> = host
         .entries()
@@ -863,7 +863,7 @@ pub fn finish_session<W: Write>(code: ExitCode, session_id: &str, out: &mut W) -
 /// 一次已解析的 `heng discuss` 调用。
 ///
 /// 刻意没有 `--model`：谁参与讨论是一件配置事实（`[discussion] debaters`），而一个能替换掉两者之
-/// 一的旗标会是说同一件事的第二种方式。剩下可选的只是这场讨论怎么看。
+/// 一的旗标会是说同一件事的第二种方式。剩下可选的只是这次讨论怎么看。
 #[derive(Debug, Default)]
 struct DiscussArgs {
     /// 那个问题，用它被给进来时的那些词。空表示「问 stdin」。
@@ -914,9 +914,9 @@ fn parse_discuss(args: &[String]) -> Result<DiscussArgs, String> {
     Ok(parsed)
 }
 
-/// 一个问题、两位讨论者、一个合成器、一场会话。
+/// 一个问题、两位讨论者、一个合成器、一个会话。
 ///
-/// 渲染器的选法与交互式那条路完全一样，所以在终端里看一场讨论得到的就是 TUI —— 包括权限模态框，供
+/// 渲染器的选法与交互式那条路完全一样，所以在终端里看一次讨论得到的就是 TUI —— 包括权限模态框，供
 /// 讨论者想跑的任何东西 —— 而管道接进来的拿到 plain 转录，stdout 上只有合成器的产出。
 async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -1023,7 +1023,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     );
 
     let (console, port, mut events) = render::console();
-    // 同一个键盘也回答讨论者的权限询问：一场讨论仍然是一场带着工具的会话。
+    // 同一个键盘也回答讨论者的权限询问：一次讨论仍然是一个带着工具的会话。
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
     // 讨论者是主会话而不是执行者，所以它也可以问用户（spec §7）；这个端口与权限门用的是同一个键
     // 盘。
@@ -1055,19 +1055,19 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         };
         let facts = SessionFacts {
             // 讨论 CLI 这条路径上没有可换的模型：`model` 那一格是两个模型的**拼法**，那是名册里
-            // 的配置事实，不是一场活会话能中途改的值（`.scratch/model-switching/spec.md` §12）。
+            // 的配置事实，不是一个活会话能中途改的值（`.scratch/model-switching/spec.md` §12）。
             // 点它只给一句说明，`ctrl-t` 与 `/model` 同样回这一句。
             switchable: false,
             session_id: stored.id.as_str().to_owned(),
             session_dir: stored.dir.display().to_string(),
-            // 面板只有一行模型和一行上下文，而一场讨论有一对讨论者、没有单一窗口：这一行列出**两个
+            // 面板只有一行模型和一行上下文，而一次讨论有一对讨论者、没有单一窗口：这一行列出**两个
             // 模型**，窗口是第一位讨论者的 —— 面板也只能是这么个近似（spec §8）。名字是转录的事
             // （`debater_label`）；这一行讲的是模型，所以它显示模型。
             model: render::wording::discussion_pair(&pair[0].model, &pair[1].model),
             context_window: crate::context::usable_input(&caps),
             // `--mode` 属于交互式那条路；讨论读文件。
             mode: config.mode,
-            // `session_config` 原样拷贝 `[budget]`，所以文件里的值就是这场会话的值。
+            // `session_config` 原样拷贝 `[budget]`，所以文件里的值就是这个会话的值。
             budget_limit: config.budget.limit,
             number_style: config.number_style,
             file_viewer: config.file_viewer,
@@ -1078,7 +1078,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
         };
-        // 一场讨论是一个问题、一个 harness：它从不是一次重新打开，所以没有历史要重放，TUI 从第一
+        // 一次讨论是一个问题、一个 harness：它从不是一次重新打开，所以没有历史要重放，TUI 从第一
         // 帧起就在画。
         Renderer::tui(TuiOptions {
             port,
@@ -1096,13 +1096,13 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
         })
     };
-    // 这个前端从不读一行 —— 一个问题进去、一场讨论出来 —— 所以它一辈子都跑在一次 run 里面，并在
+    // 这个前端从不读一行 —— 一个问题进去、一次讨论出来 —— 所以它一辈子都跑在一次 run 里面，并在
     // 循环还不会开口问之前就说了这一点。在这里告诉它而不是让它推断，理由与
     // `ConsoleRequest::RunState` 记下的那条相同。
     console.set_running(true);
 
     // 与单 agent 那条同一条纪律：渲染器是进程级的（票 13）。
-    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 进程级的一张锁表：同一入口里开出的每一个会话都从它取自己 cwd 的那一张 —— 同 cwd
     // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
@@ -1153,7 +1153,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
                 "heng: {}",
                 render::wording::session_receipt(stored.id.as_str())
             );
-            // 整场失败掉的讨论是一次失败；被取消的那场正是用户要的，如同交互式会话里被取消的一个回
+            // 整个失败掉的讨论是一次失败；被取消的那个会话正是用户要的，如同交互式会话里被取消的一个回
             // 合（spec §6）。举手退出（`Quit`）走 130，与交互式那条路同一个判定。
             if outcome.reason == StopReason::Error {
                 ExitCode::FAILURE
@@ -1233,7 +1233,7 @@ fn split_names(value: &str) -> Result<[String; 2], String> {
     <[String; 2]>::try_from(names).map_err(|_| render::wording::needs_two_debaters(value))
 }
 
-/// 一场讨论用的那两位讨论者：点名要的，或者从池子里抽的。
+/// 一次讨论用的那两位讨论者：点名要的，或者从池子里抽的。
 ///
 /// 抽是默认做法，因为池子存在的意义就是换一对；`seed` 是注入的（运行时是时钟，测试里是常量），所
 /// 以这个选择可复现。
@@ -1283,7 +1283,7 @@ fn advisory_lines(config: &Config, pair: &[Debater; 2]) -> Vec<String> {
 
 /// 抽一对用的种子：时钟，按会话 id 后缀的方式混合。
 ///
-/// 不是 PRNG —— 它只决定几个讨论者里哪两位参与 —— 但它必须在同一秒开始的两场讨论之间不同，而纳秒
+/// 不是 PRNG —— 它只决定几个讨论者里哪两位参与 —— 但它必须在同一秒开始的两次讨论之间不同，而纳秒
 /// 做到了这一点。
 fn discussion_seed() -> u64 {
     use std::hash::{BuildHasher, Hasher};
@@ -1303,7 +1303,7 @@ fn discussion_seed() -> u64 {
 /// 型，也就是 `SessionConfig::model_for(Synthesizer)` 在组装内部解析出的那个。把它的 provider 恰
 /// 好建在那个模型上，是让 provider 与发给它的配置保持一致的东西。
 ///
-/// 两个入口都用它：`discuss` 子命令（自带的一场讨论）与 `/discuss`（跑在用户所在会话上的一场讨
+/// 两个入口都用它：`discuss` 子命令（自带的一次讨论）与 `/discuss`（跑在用户所在会话上的一次讨
 /// 论）。
 fn discussion_participants(
     config: &Config,
@@ -1350,10 +1350,10 @@ fn discussion_participants(
     ))
 }
 
-/// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。
+/// `/discuss [问题]`：在**当前会话的流上**跑一次讨论（spec §15）。
 ///
 /// 键盘归循环、日志归会话，所以这里从配置里读出名册，为每位参与者建一个 provider，然后把用户已经
-/// 在的那场会话交给协议：讨论者是它的兄弟，于是继承它的上下文、轮次落进它的流。用户需要知道的一切
+/// 在的那个会话交给协议：讨论者是它的兄弟，于是继承它的上下文、轮次落进它的流。用户需要知道的一切
 /// —— 哪些模型、什么问题、怎么收尾的 —— 都走渲染器而不是 stderr，因为屏幕归 TUI。
 async fn discuss_in_session(
     harness: &mut Harness,
@@ -1377,7 +1377,7 @@ async fn discuss_in_session(
             return Ok(());
         }
     };
-    // 一句光秃秃的 `/discuss` 就把这场会话刚被问到的那个东西交给两个模型：「我们刚才在谈什么」正是
+    // 一句光秃秃的 `/discuss` 就把这个会话刚被问到的那个东西交给两个模型：「我们刚才在谈什么」正是
     // 值得第二份判断的那个问题。
     let question = if line.question.trim().is_empty() {
         match harness.last_question() {
@@ -1423,7 +1423,7 @@ async fn discuss_in_session(
     // 模式句柄随行，理由与取消信号相同：那个 run future 借走了 harness，而这个手势无论如何必须够
     // 得到策略。
     let modes = harness.mode_cycle();
-    // 同上：`Quit` 只记请求、让这场讨论拿到收尾，130 由 `interactive_loop` 兑现。
+    // 同上：`Quit` 只记请求、让这次讨论拿到收尾，130 由 `interactive_loop` 兑现。
     // 这个 future 在它运行的整段时间里借走 harness，所以它自成一个作用域：下面的通告要把 harness
     // 拿回来。
     // 回合 future 借着 harness，所以回执走一个在借用**之前**就克隆下来的渲染句柄
@@ -1449,7 +1449,7 @@ async fn discuss_in_session(
                     Some(CliCommand::Gesture { event, .. }) => quit.apply(&event, &signal),
                     // 输入结束让讨论像被取消一样落下来，所以流仍然得到它的收尾。
                 Some(CliCommand::Close) | None => signal.cancel(),
-                // 跑着的时候到达的提交：这一场的循环一次只办一件，多的忽略。
+                // 跑着的时候到达的提交：这个会话的循环一次只办一件，多的忽略。
                 Some(_) => {}
                 },
             }
@@ -1462,7 +1462,7 @@ async fn discuss_in_session(
     Ok(())
 }
 
-/// 驱动一场讨论，同时仍然盯着取消手势。
+/// 驱动一次讨论，同时仍然盯着取消手势。
 ///
 /// 形状与 [`run_one_turn`] 相同，理由也相同：讨论占着会话，所以循环没法自己读键盘，改为监听手势。
 /// `Quit` 同样只是「取消 + 记账」，进程的收尾与退出码归调用方
@@ -1485,7 +1485,7 @@ async fn run_discussion(
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
                 }
-                // 讨论 CLI 这条路径上换不了模型：模型是**名册**里的配置事实，而这一场
+                // 讨论 CLI 这条路径上换不了模型：模型是**名册**里的配置事实，而这个会话
                 // 讨论是独立会话（spec §12）。所以这一格给的与忙闲无关，是另一句话。
                 Some(FrontEndEvent::OpenPicker(_)) => {
                     render.notice(&render::wording::heng(
@@ -1542,13 +1542,13 @@ fn undo_receipt(outcome: Result<Option<UndoOutcome>, crate::Error>) -> String {
 /// 会话中途换模型与换档的**四个入口**（`/model`、`/effort`、点状态行那两格、`ctrl-t`）都从这里
 /// 出（spec §7），所以「换完之后下一次请求长什么样」只有一个答案。
 ///
-/// `carried_tokens` 由调用方给（从当前会话读出来）：累计额度是**会话**事实 —— 这一场之前已经
+/// `carried_tokens` 由调用方给（从当前会话读出来）：累计额度是**会话**事实 —— 这个会话之前已经
 /// 花掉的 token，换模型不该抹掉它（`.scratch/goal-loop/spec.md` §8 的「翻页不重置额度」是同一条
 /// 纪律）。其余从配置来的一切（预算、打码器、逐 agent 的旋钮、沙箱）照
 /// [`Config::session_config`] 给的走 —— 换模型后预算按新模型的配置走，这是对的。
 ///
-/// `[routing]` 的两个覆盖由 `session_config` 重新填，而不是从上一场会话的副本抄过来：它们是**配置
-/// 事实**，换模型不该跟着上一场的模型走（spec「明确不做」第三条）。
+/// `[routing]` 的两个覆盖由 `session_config` 重新填，而不是从上一个会话的副本抄过来：它们是**配置
+/// 事实**，换模型不该跟着上一个会话的模型走（spec「明确不做」第三条）。
 fn retarget_to(
     config: &Config,
     model: &str,
@@ -1727,7 +1727,7 @@ async fn open_picker(
     };
     // 清单**现算一遍**（不是复用发出去的那份）：等待期间人可能已经用 `/model` 换过模型，
     // 于是档位那张表已经不同了 —— 拿旧表去切会切到一个新模型不认的档位。判据同样现读
-    // `harness`：那才是此刻这一场会话真正的模型与档位。
+    // `harness`：那才是此刻这个会话真正的模型与档位。
     let fresh = match kind {
         PickerKind::Model => model_picker_options(config, harness.model()),
         PickerKind::Effort => effort_picker_options(harness.model(), harness.effort()),
@@ -1821,18 +1821,18 @@ fn switch_to_effort(
     Ok(())
 }
 
-/// 一场会话要**宿主表**替它办的事（票 20、票 21）。
+/// 一个会话要**宿主表**替它办的事（票 20、票 21）。
 ///
 /// 宿主表在主循环手里，而输入也在主循环手里（决策票 04 §3）—— 所以点会话页、新建与关闭都由
 /// 那个循环自己转成一条 [`CliRequest`]，由它自己的请求分支接住（见 [`front_to_request`]）。
 /// 两边都想拿那张表的那条老路已经拆掉了。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliRequest {
-    /// 切到这一场（不在表里就先装载）。
+    /// 切到这个会话（不在表里就先装载）。
     Open(SessionId),
-    /// 同 cwd 再加载一场空会话，并切过去（票 21）。`/clear` 走的是这一条。
+    /// 同 cwd 再加载一个空会话，并切过去（票 21）。`/clear` 走的是这一条。
     New,
-    /// **阈值翻页**（票 21 的最后一条）：新建一场，并把这一趟的额度、目标与压缩摘要交接过去。
+    /// **阈值翻页**（票 21 的最后一条）：新建一个会话，并把这一趟的额度、目标与压缩摘要交接过去。
     ///
     /// 它与 `New` 的差别只有「交接什么」：翻页是同一个目标在新会话里接着跑，`/clear` 是清场。
     Rollover {
@@ -1840,15 +1840,15 @@ enum CliRequest {
         goal: String,
         summary: Option<String>,
     },
-    /// 把这一场从宿主表里卸下来（盘上留着）。
+    /// 把这个会话从宿主表里卸下来（盘上留着）。
     Close(SessionId),
 }
 
-/// 组装一场会话所需的那些**可重复取用**的材料（票 20 的装载路径要它）。
+/// 组装一个会话所需的那些**可重复取用**的材料（票 20 的装载路径要它）。
 ///
-/// 点一行切到一场还没装载的会话时，要装的是「同一批配置、同一个渲染端、同一张锁表」下的另
-/// 一场。它与第一场那段组装必须保持同一批材料 —— 两处漂开的话，装载出来的会话会与启动那一
-/// 场不一样。
+/// 点一行切到一个还没装载的会话时，要装的是「同一批配置、同一个渲染端、同一张锁表」下的另
+/// 一个。它与第一个会话那段组装必须保持同一批材料 —— 两处漂开的话，装载出来的会话会与启动
+/// 那个不一样。
 #[derive(Clone)]
 struct AssemblyKit {
     config: std::sync::Arc<Config>,
@@ -1873,7 +1873,7 @@ struct AssemblyKit {
 impl AssemblyKit {
     /// 按会话包一个应答者（票 22）。
     ///
-    /// 装完之后调用方要用 [`SessionAsker::attach`] 把那一场的三态发送端填进去。
+    /// 装完之后调用方要用 [`SessionAsker::attach`] 把那个会话的三态发送端填进去。
     fn session_asker(&self, id: &SessionId) -> Arc<crate::session::SessionAsker> {
         Arc::new(crate::session::SessionAsker::new(
             Arc::clone(&self.console_asker),
@@ -1882,7 +1882,7 @@ impl AssemblyKit {
         ))
     }
 
-    /// 按这份材料装一场 —— 走的是 `-c <id>` 那条共用路径（`crate::load`）。
+    /// 按这份材料装一个会话 —— 走的是 `-c <id>` 那条共用路径（`crate::load`）。
     async fn load(
         &self,
         stored: StoredSession,
@@ -1890,7 +1890,7 @@ impl AssemblyKit {
         inherit: Option<&crate::session::FrontFacts>,
         asker: Arc<crate::session::SessionAsker>,
     ) -> Result<crate::Loaded, String> {
-        // 新建的那一场**继承前台**的模型 / 档位 / 权限模式（票 21）；装载历史会话时不继承。
+        // 新建的那个会话**继承前台**的模型 / 档位 / 权限模式（票 21）；装载历史会话时不继承。
         let model = inherit
             .map(|facts| facts.model.clone())
             .unwrap_or_else(|| self.model.clone());
@@ -1936,7 +1936,7 @@ impl AssemblyKit {
         .map_err(|error| error.to_string())
     }
 
-    /// 渲染侧那一份「这一场是什么」的事实 —— 票 19 的 `SwitchSession` 带它过去。
+    /// 渲染侧那一份「这个会话是什么」的事实 —— 票 19 的 `SwitchSession` 带它过去。
     ///
     /// 模型与权限模式从**流上**读（票 18 的会话事实），读不出才落回启动时那套；别的几样是
     /// 进程配置里定下来的值。
@@ -1996,7 +1996,7 @@ fn effort_from_token(token: &str) -> Option<crate::config::ReasoningEffort> {
     .find(|effort| effort.as_str() == token)
 }
 
-/// 新建一场：同 cwd 再加载一场**空**会话，并切过去（票 21）。
+/// 新建一个会话：同 cwd 再加载一个**空**会话，并切过去（票 21）。
 ///
 /// 继承前台的模型 / 档位 / 权限模式；沙箱与技能按同 cwd 重探（那两样是组装期的事）；
 /// `carried_tokens` 清 0 —— 新会话本来就不带。
@@ -2066,7 +2066,7 @@ async fn open_new(
             let events = read_events(&stored.log_path).unwrap_or_default();
             console.switch_session(kit.ui_facts(&stored, &events), events);
             console.host_count(host.len(), host.running());
-            // 回执口径：新开一场，旧会话留在列表里（票 21）。翻页有它自己那一句（在旧会话里
+            // 回执口径：新开一个，旧会话留在列表里（票 21）。翻页有它自己那一句（在旧会话里
             // 就说了），所以这里不重复。
             if !is_rollover {
                 kit.notice(&stored.id, &render::wording::new_session_opened());
@@ -2076,7 +2076,7 @@ async fn open_new(
     }
 }
 
-/// 关掉一场（票 21 的四条规则）。
+/// 关掉一个会话（票 21 的四条规则）。
 ///
 /// 四条：前台自己禁止、正在跑回合拒绝、空闲会话单击即关不二次确认、只读预览也能关。
 async fn close_session(
@@ -2094,11 +2094,11 @@ async fn close_session(
         return;
     }
     let empty = host.is_empty();
-    // 先让渲染器把这一场忘掉、并把读数与空宿主态更新。
+    // 先让渲染器把这个会话忘掉、并把读数与空宿主态更新。
     console.session_closed(id.clone(), empty);
     console.host_count(host.len(), host.running());
     if empty {
-        kit.notice(id, "没有会话了：按 `新建` 开一场");
+        kit.notice(id, &render::wording::no_sessions_left());
     }
 }
 
@@ -2135,11 +2135,14 @@ async fn open_session(
             // 表里已经有了（竞态的另一半）：照旧切过去。
             crate::session::AttachCheck::AlreadyHosted(_) => {}
             crate::session::AttachCheck::MissingCwd(gone) => {
-                kit.notice(id, &format!("{} 已经不在了，这一场搬不走", gone.display()));
+                kit.notice(
+                    id,
+                    &format!("{} 已经不在了，这个会话搬不走", gone.display()),
+                );
                 return;
             }
             crate::session::AttachCheck::Unreadable(reason) => {
-                kit.notice(id, &format!("读不出这一场的事件流：{reason}"));
+                kit.notice(id, &format!("读不出这个会话的事件流：{reason}"));
                 return;
             }
         }
@@ -2184,11 +2187,11 @@ async fn open_session(
 
     // 切前台：只改指针，忙闲不阻挡（决策票 04 §2）。
     host.switch(id);
-    // 再给渲染器一条「换到这一场」：事实 + 事件流快照（票 19）。
+    // 再给渲染器一条「换到这个会话」：事实 + 事件流快照（票 19）。
     console.switch_session(kit.ui_facts(&stored, &events), events);
 }
 
-/// 一场会话自己的交互循环。
+/// 一个会话自己的交互循环。
 ///
 /// 这段代码以前是 `interactive_loop(&mut harness, …)`，由 `interactive` 直接驱动；现在它是
 /// [`CliActor`] 的一次 `Run`，而 `Harness` 归宿主表的那个 task
@@ -2212,10 +2215,10 @@ struct CliActor {
     quit: ExitRequest,
 }
 
-/// 主循环能对一场会话做的事（`.scratch/session-tab/spec.md` §1、决策票 04 §3）。
+/// 主循环能对一个会话做的事（`.scratch/session-tab/spec.md` §1、决策票 04 §3）。
 ///
 /// **输入归主循环、执行归 task**：前端事件接收端是单一消费者，只有一处读得动它，所以主循环
-/// 读一次提交、解析成 `Submission`，再把它交给宿主表里**前台**那一场执行。切换前台于是只是
+/// 读一次提交、解析成 `Submission`，再把它交给宿主表里**前台**那个会话执行。切换前台于是只是
 /// 「换一个命令的收件人」。
 enum CliCommand {
     /// 一次前台提交。`raw` 是那一行**原文** —— 「这一条提交会不会在流上留痕」要读它
@@ -2234,11 +2237,11 @@ enum CliCommand {
         goal: String,
         summary: Option<String>,
     },
-    /// 结束这一场。
+    /// 结束这个会话。
     Close,
 }
 
-/// 把一条前端手势转给**当前前台**那一场（票 04 §3：输入只有一处消费者，手势从这里转发）。
+/// 把一条前端手势转给**当前前台**那个会话（票 04 §3：输入只有一处消费者，手势从这里转发）。
 fn forward_gesture(host: &SessionHost<CliCommand>, event: FrontEndEvent) {
     let running = host.running() > 0;
     if let Some(entry) = host.get(&host.foreground()) {
@@ -2248,11 +2251,11 @@ fn forward_gesture(host: &SessionHost<CliCommand>, event: FrontEndEvent) {
 
 /// 一条前端手势在主循环里变成哪一条宿主表请求（`.scratch/session-tab/spec.md` §1、§3）。
 ///
-/// 会话级的那三条 —— 切一场、新建、关一场 —— 要动的是**宿主表**，而宿主表就在这个循环里，
+/// 会话级的那三条 —— 切一个、新建、关一个会话 —— 要动的是**宿主表**，而宿主表就在这个循环里，
 /// 所以它们**就地**转成一条 [`CliRequest`]，由上面那个请求分支接住。
 ///
-/// 它们曾经绕一圈：主循环把它们转发给前台那一场，那一场的 `CliActor::gesture` 再转回来
-/// （票 20 的实现记录）。输入归主循环之后那一圈不再必要，而它有两个代价：前台那一场正在跑
+/// 它们曾经绕一圈：主循环把它们转发给前台那个会话，那个会话的 `CliActor::gesture` 再转回来
+/// （票 20 的实现记录）。输入归主循环之后那一圈不再必要，而它有两个代价：前台那个会话正在跑
 /// 回合时手势落进回合的 `select` 里被丢掉，于是「切换不因为目标在跑回合而阻挡」那条验收
 /// 并不成立；更要紧的是 `OpenSession` 一旦在主循环这边被一个空分支吃掉，那条圈就再也没有别的
 /// 路 —— 点会话页上的一行于是什么都不发生。
@@ -2317,7 +2320,7 @@ impl CliActor {
     /// 运行中的一个手势（原 `interactive_loop` 的 `events.recv()` 那几支）。
     async fn gesture(&mut self, harness: &mut Harness, event: FrontEndEvent, running: bool) {
         match event {
-            // 一次运行中途有人举手退出时，那个回合（或那场讨论、那趟目标循环）已经拿到它的
+            // 一次运行中途有人举手退出时，那个回合（或那次讨论、那趟目标循环）已经拿到它的
             // 收尾；这里只把「取消」送到。
             FrontEndEvent::Cancel | FrontEndEvent::Quit => harness.cancel_signal().cancel(),
             FrontEndEvent::CycleMode => {
@@ -2394,7 +2397,7 @@ impl CliActor {
         inbox: &mut tokio::sync::mpsc::Receiver<CliCommand>,
     ) {
         // 命令在转录里留一条**原文**（`.scratch/command-echo/spec.md`）：判据是「这一条提交
-        // 会不会变成一句 user 消息」。记在执行之前，所以 `/clear` 自己的那一条留在**这场**
+        // 会不会变成一句 user 消息」。记在执行之前，所以 `/clear` 自己的那一条留在**这个会话**
         // 会话里。
         if records_itself(&submission)
             && let Err(error) = harness.record_command_run(raw.trim_end())
@@ -2474,7 +2477,7 @@ impl CliActor {
                     }
                 }
             }
-            // `/discuss [问题]`：在**当前会话的流上**的一场讨论（spec §15）。讨论者是这场会话的兄
+            // `/discuss [问题]`：在**当前会话的流上**的一次讨论（spec §15）。讨论者是这个会话的兄
             // 弟，所以继承它的上下文，并把轮次追加到它的日志上；之后用户回到提示符前。
             Submission::Discuss(question) => {
                 if let Err(error) =
@@ -2493,7 +2496,7 @@ impl CliActor {
             // 这回事。
             Submission::Clear => {
                 // `/clear` 与阈值 rollover 与页签 `新建` 是**同一个动作**（票 21）：同 cwd 再
-                // 加载一场空会话、切过去，旧的留在宿主表里。**闸门取消** —— 旧会话不再被换
+                // 加载一个空会话、切过去，旧的留在宿主表里。**闸门取消** —— 旧会话不再被换
                 // 掉，拦它没有理由。
                 let _ = self.requests.send(CliRequest::New);
             }
@@ -2658,8 +2661,8 @@ enum Submission {
         prompt: String,
         inline: String,
     },
-    /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
-    /// 那时循环把这场会话最后一个问题交给那两位讨论者。
+    /// `/discuss [问题]`：在**当前会话的流上**跑一次讨论（spec §15）。用户没打问题时问题为空 ——
+    /// 那时循环把这个会话最后一个问题交给那两位讨论者。
     Discuss(String),
     /// `/goal-new <名字> <来源> [--force]`：从一批票生成一份目标清单
     /// （`.scratch/goal-loop/spec.md` §2）。它是一个**手势**，不是工具调用：由循环直接执行，
@@ -2667,7 +2670,7 @@ enum Submission {
     Goal(String),
     /// `/loop <名字>`：选定目标并连续工作（§4）。参数是目标的名字，一个不断开的词。
     Loop(String),
-    /// `/model <model id>`：换这一场会话用的模型（spec §7）。缺参数是**用法错误**而不是
+    /// `/model <model id>`：换这个会话用的模型（spec §7）。缺参数是**用法错误**而不是
     /// 「打开选择器」—— 选择器是 TUI 独占的交互，命令这一路必须能一步到位（plain 前端就靠
     /// 它换模型）。
     Model(String),
@@ -3129,7 +3132,7 @@ async fn run_goal_loop(
     let manifest = manifest.expect("check_start 放行就意味着清单在");
     let progress = progress.expect("清单在就有进度");
 
-    // 预算的口径（§8）：这个目标**别处**已经花掉的，先填进这场会话 —— 当前会话自己那份不算
+    // 预算的口径（§8）：这个目标**别处**已经花掉的，先填进这个会话 —— 当前会话自己那份不算
     // 在里面，它就在自己这条流上。
     let current = harness.session_id().as_str().to_owned();
     harness.carry_usage(goal_usage(goals, name, &current));
@@ -3271,7 +3274,7 @@ async fn run_goal_loop(
             }
             crate::goals::ThresholdStep::Compact => {
                 // 压缩与翻页是一个动作（§7）。压缩照做 —— 它是**这一趟**的收尾；而**翻页**从
-                // 「换掉这一场」变成「新建一场、旧的留在宿主表里」（票 21）。
+                // 「换掉这个会话」变成「新建一个会话、旧的留在宿主表里」（票 21）。
                 let from = harness.session_id().as_str().to_owned();
                 let summary = match harness.compact().await {
                     Ok(summary) => summary,
@@ -3306,7 +3309,7 @@ async fn run_goal_loop(
                     goal: name.to_owned(),
                     summary,
                 });
-                // 这一趟到这里收工：接着跑的是**新的那一场**。
+                // 这一趟到这里收工：接着跑的是**新的那个会话**。
                 *running = false;
                 return Ok(());
             }
@@ -3369,7 +3372,7 @@ fn goal_usage(goals: &GoalSetup, name: &str, current: &str) -> u64 {
 
 /// 属于这个目标的那些会话的流（§4 的归属筛）：扫本桶、按 `GoalSelected` 过滤。
 ///
-/// 扫的是磁盘上的会话文件，所以进行中的这一场也在里面 —— 它的每一行都已经刷下去了。
+/// 扫的是磁盘上的会话文件，所以进行中的这个会话也在里面 —— 它的每一行都已经刷下去了。
 fn goal_streams(goals: &GoalSetup, name: &str) -> Vec<Vec<Event>> {
     let Ok(sessions) = goals.store.list(&goals.cwd) else {
         return Vec::new();
@@ -3569,7 +3572,7 @@ async fn run_one_turn(
                 Some(CliCommand::Gesture { event, .. }) => quit.apply(&event, &signal),
                 // 输入结束让回合像被取消一样落下来，所以流仍然得到它的收尾。
                 Some(CliCommand::Close) | None => signal.cancel(),
-                // 跑着的时候到达的提交：这一场的循环一次只办一件，多的忽略。
+                // 跑着的时候到达的提交：这个会话的循环一次只办一件，多的忽略。
                 Some(_) => {}
             },
         }
@@ -3738,7 +3741,7 @@ async fn probe_model(
         .map_err(ProbeError::failed)?;
     let mcp = mcp_service(config, &dir, env, home, None).await;
     let probe_session = SessionId::new(format!("probe-{model_id}"));
-    // 进程级的一张锁表：同一入口里开出的每一场会话都从它取自己 cwd 的那一张 —— 同 cwd
+    // 进程级的一张锁表：同一入口里开出的每一个会话都从它取自己 cwd 的那一张 —— 同 cwd
     // 共享一把（写互斥真的成立），异 cwd 各一把（不互相阻塞）（票 13）。取锁表要在
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&dir);
@@ -3814,7 +3817,7 @@ async fn probe_model(
             ),
             None => println!("  第 {} 回合：没有记下用量", turn + 1),
         }
-        // 钱只作显示（spec §17）：模型有价格时探针显示这场会话花了多少，没有时说清缺的是哪张表。
+        // 钱只作显示（spec §17）：模型有价格时探针显示这个会话花了多少，没有时说清缺的是哪张表。
         // `sessions stats`（票 17）才是它长期该待的地方；探针是今天真有人读的那份报告。
         let spent = total_usage(&events);
         match config.pricing.cost(model_id, spent) {
@@ -3936,7 +3939,7 @@ fn probe_dir(model_id: &str) -> PathBuf {
 
 #[derive(Debug)]
 struct PruneArgs {
-    /// 这个桶里要留多少场最近的会话。
+    /// 这个桶里要留多少个最近的会话。
     keep: usize,
     dry_run: bool,
     /// 要 prune 哪个工作区的桶；默认是当前目录。
@@ -3945,7 +3948,7 @@ struct PruneArgs {
 
 fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
     let mut parsed = PruneArgs {
-        // 留下 `--continue` 会接着跑的那场会话，删掉其余的。
+        // 留下 `--continue` 会接着跑的那个会话，删掉其余的。
         keep: 1,
         dry_run: false,
         cwd: None,
@@ -3980,7 +3983,7 @@ fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
 /// `prune` 手动删掉会话目录（spec §11：什么都不自动 prune）。
 ///
 /// 它只作用在一个桶上 —— 这个工作区的桶 —— 因为那是 store 所绑定的单位，而它留下最新的 `--keep`
-/// 场会话（默认一场，即 `--continue` 会接着跑的那场）。stdout 承载结果，诊断走 stderr。
+/// 个会话（默认一个会话，即 `--continue` 会接着跑的那个会话）。stdout 承载结果，诊断走 stderr。
 fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", render::wording::help_prune());
@@ -4142,7 +4145,7 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
 /// `sessions` 子命令一族：`ls`、`show`、`replay`、`stats`。
 ///
 /// 不管哪个动词，stdout 都承载结果、stderr 承载诊断；每个视图都有 `--json` 形式，好让管道能读它。
-/// 没有索引：找一场会话靠扫它的桶，而 `--continue` 的「最新在前」就是 `ls` 显示的顺序。
+/// 没有索引：找一个会话靠扫它的桶，而 `--continue` 的「最新在前」就是 `ls` 显示的顺序。
 pub fn run_sessions(
     args: &[String],
     env: &EnvMap,
@@ -4208,23 +4211,23 @@ fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
     }
 }
 
-/// 这一趟打开的那场会话，以及它落在哪里。
+/// 这一趟打开的那个会话，以及它落在哪里。
 #[derive(Debug)]
 struct SessionChoice {
     stored: StoredSession,
     /// 这一趟的工作目录。
     cwd: PathBuf,
-    /// 那场会话在**别的工作区**里（工作目录因此跟着它走）—— 前端要说一句。
+    /// 那个会话在**别的工作区**里（工作目录因此跟着它走）—— 前端要说一句。
     elsewhere: bool,
 }
 
-/// 这一趟打开哪场会话，以及它落在哪个工作目录里。
+/// 这一趟打开哪个会话，以及它落在哪个工作目录里。
 ///
-/// `-c` 的三种含义都在这里：不带 `resume` 是新开一场；`Latest` 是这个工作区最近写下的那场；
-/// `Session(id)` 是**指名**续哪一场 —— 先在本桶找，找不到就全 store 找（id 全局唯一，
+/// `-c` 的三种含义都在这里：不带 `resume` 是新开一个会话；`Latest` 是这个工作区最近写下的那个会话；
+/// `Session(id)` 是**指名**续哪个会话 —— 先在本桶找，找不到就全 store 找（id 全局唯一，
 /// `sessions show <id>` 一直是这么做的）。
 ///
-/// 按 id 续上别处的那场时，工作目录取**那场会话自己的**（它流里 `SessionStarted` 记的那个），
+/// 按 id 续上别处的那个会话时，工作目录取**那个会话自己的**（它流里 `SessionStarted` 记的那个），
 /// 而不是命令行上那个：续写要发生在它自己的目录里，否则工具的相对路径、前缀缓存与横幅全不对。
 /// 读不出 cwd（流坏了）就退回请求的那个。
 fn choose_session(
@@ -4272,7 +4275,7 @@ fn choose_session(
     }
 }
 
-/// 按 id（或按它目录的路径）找一场会话。
+/// 按 id（或按它目录的路径）找一个会话。
 fn find_session(store: &SessionStore, cwd: &Path, id: &str) -> Result<StoredSession, String> {
     let direct = PathBuf::from(id);
     if direct.join(crate::session::store::LOG_FILE).is_file() {
@@ -4393,13 +4396,13 @@ fn pad_start(text: &str, width: usize) -> String {
     format!("{}{text}", " ".repeat(width - used))
 }
 
-/// `sessions title <id> <text>`：给一场会话改名。
+/// `sessions title <id> <text>`：给一个会话改名。
 ///
 /// 写下的是**一条新事件**（`SessionTitled`），所以改名可重放、也能被 `-c` 带上 —— 标题不是
 /// 界面里的一份临时状态（`.scratch/session-tab/spec.md` §4）。空串（或归一化之后为空）就是
 /// **撤回**：那一条照样要写，否则最后一条手动标题仍然生效（决策票 01 §3）。
 ///
-/// **已知限制**：别在一场会话正跑着时用 CLI 改它的名。`EventLog::append` 的 `next_seq` 是打开
+/// **已知限制**：别在一个会话正跑着时用 CLI 改它的名。`EventLog::append` 的 `next_seq` 是打开
 /// 时按 `events.len() + 1` 算的，两个进程各持自己的那个数就会写出重复 `seq`。本图不为改名
 /// 引入文件锁（决策票 01 §9）。
 fn sessions_title(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
@@ -4987,7 +4990,7 @@ mod tests {
         assert_eq!(retargeted.profile, "minimax");
         assert_eq!(retargeted.config.model, "MiniMax-M3.1-Flash-Preview");
         assert_eq!(retargeted.config.carried_tokens, 12_345);
-        // 请求参数是从这个模型的配置条目读的，不是从上一场会话抄的。
+        // 请求参数是从这个模型的配置条目读的，不是从上一个会话抄的。
         assert_eq!(
             retargeted.config.executor_model,
             config.routing.executor_model
@@ -5293,7 +5296,7 @@ mod tests {
         );
     }
 
-    /// 这些测试里一场会话知道的技能。
+    /// 这些测试里一个会话知道的技能。
     fn has_skill(name: &str) -> bool {
         matches!(name, "ask-matt" | "review")
     }
@@ -5528,14 +5531,14 @@ mod tests {
 
     #[test]
     fn the_session_gestures_become_host_table_requests_where_the_host_table_is() {
-        // 点会话页上别的那一行、新建、关一场 —— 三条都落到宿主表，而宿主表在主循环手里，所以主
+        // 点会话页上别的那一行、新建、关一个会话 —— 三条都落到宿主表，而宿主表在主循环手里，所以主
         // 循环就地转成一条请求。曾经在主循环这边有一个空分支把 `OpenSession` 吃掉，于是点击
         // 既不装载也不切换：屏幕上什么都没有发生（2026-10-12 维护者报告）。
         let id = SessionId::new("01J8ZQ4K7M".to_owned());
         assert_eq!(
             front_to_request(&FrontEndEvent::OpenSession { id: id.clone() }),
             Some(CliRequest::Open(id.clone())),
-            "点会话页上的一行 = 切到那一场"
+            "点会话页上的一行 = 切到那个会话"
         );
         assert_eq!(
             front_to_request(&FrontEndEvent::NewSession),
@@ -5545,7 +5548,7 @@ mod tests {
             front_to_request(&FrontEndEvent::CloseSession { id: id.clone() }),
             Some(CliRequest::Close(id.clone()))
         );
-        // 其余手势不是会话级的：它们归前台那一场办（取消、模式、选择器、改名）。
+        // 其余手势不是会话级的：它们归前台那个会话办（取消、模式、选择器、改名）。
         for event in [
             FrontEndEvent::Cancel,
             FrontEndEvent::Quit,
@@ -5558,7 +5561,7 @@ mod tests {
     #[test]
     fn a_blank_submission_is_ignored_rather_than_sent_or_read_as_the_end_of_input() {
         // 在空输入上按回车产生什么。以前是循环自己决定这件事的，所以 `cargo test` 里没有任何东西把
-        // 它钉住 —— 而 TUI 曾经把空草稿当作输入结束的哨兵发出去，结果退掉了整场会话。
+        // 它钉住 —— 而 TUI 曾经把空草稿当作输入结束的哨兵发出去，结果退掉了整个会话。
         assert!(matches!(read(""), Submission::Ignore));
         assert!(matches!(read("   "), Submission::Ignore));
         assert!(matches!(read("\n\n\t\n"), Submission::Ignore));
@@ -5803,7 +5806,7 @@ mod tests {
     #[test]
     fn a_session_is_named_by_id_or_by_its_directory() {
         // `heng -c 20261001T155845Z-7a69cbff`：`-c` / `--continue` 后面跟一个不以 `-` 开头
-        // 的词就是**指名**续哪一场；`--session <id>` 是同一个意思的显式拼写。
+        // 的词就是**指名**续哪个会话；`--session <id>` 是同一个意思的显式拼写。
         use super::{Resume, parse_interactive};
 
         let args = |words: &[&str]| {
@@ -5845,7 +5848,7 @@ mod tests {
             ))
         );
 
-        // `-c` 后面那个词要是旗标，就不当 id —— 否则 `heng -c --plain` 会去续一场叫
+        // `-c` 后面那个词要是旗标，就不当 id —— 否则 `heng -c --plain` 会去续一个会话叫
         // 「--plain」的会话。
         let mixed = args(&["-c", "--plain"]).unwrap();
         assert_eq!(mixed.resume, Some(Resume::Latest));
@@ -5864,8 +5867,8 @@ mod tests {
 
     #[test]
     fn opening_a_session_is_newest_named_or_fresh() {
-        // `choose_session` 是 `-c` 三种含义的**唯一**决定处：新开、续本工作区最新那场、按 id 续
-        // 指名的那场（先本桶、再全 store，命中别处时工作目录跟着那场会话走）。
+        // `choose_session` 是 `-c` 三种含义的**唯一**决定处：新开、续本工作区最新那个会话、按 id 续
+        // 指名的那个会话（先本桶、再全 store，命中别处时工作目录跟着那个会话走）。
         use super::{Resume, choose_session};
         use crate::events::{Event, EventPayload, SCHEMA_VERSION, SpeakerId};
         use crate::session::SessionStore;
@@ -5876,7 +5879,7 @@ mod tests {
         std::fs::create_dir_all(&here).unwrap();
         std::fs::create_dir_all(&there).unwrap();
         let store = SessionStore::new(dir.path().join("store"));
-        // 一场会话开在哪里由它流里那条 `SessionStarted` 说 —— 目录名是编码过的桶名，读不回来。
+        // 一个会话开在哪里由它流里那条 `SessionStarted` 说 —— 目录名是编码过的桶名，读不回来。
         let seed = |session: &crate::session::store::StoredSession, cwd: &std::path::Path| {
             let event = Event::new(
                 1,
@@ -5899,19 +5902,19 @@ mod tests {
             .unwrap();
         };
 
-        // 不带 `resume`：新开一场，工作目录就是请求的那个。
+        // 不带 `resume`：新开一个会话，工作目录就是请求的那个。
         let fresh = choose_session(&store, &here, None).unwrap();
         assert_eq!(fresh.cwd, here);
         assert!(!fresh.elsewhere);
         seed(&fresh.stored, &here);
 
-        // 续最新：这个桶里最近写下的那场。
+        // 续最新：这个桶里最近写下的那个会话。
         let latest = choose_session(&store, &here, Some(&Resume::Latest)).unwrap();
         assert_eq!(latest.stored.id, fresh.stored.id);
         assert_eq!(latest.cwd, here);
         assert!(!latest.elsewhere);
 
-        // 桶里一场都没有：报错，而不是悄悄新开一场 —— `-c` 是「接着跑」，接不上就要说出来。
+        // 桶里一个会话都没有：报错，而不是悄悄新开一个会话 —— `-c` 是「接着跑」，接不上就要说出来。
         let error = choose_session(&store, &there, Some(&Resume::Latest)).unwrap_err();
         assert!(error.contains("没有可继续的会话"), "{error}");
 
@@ -5922,14 +5925,14 @@ mod tests {
         assert_eq!(found.cwd, here);
         assert!(!found.elsewhere, "本桶命中不算「跟着走了」");
 
-        // 按 id：那场会话在**别的工作区**里 —— 找得到（id 全局唯一），而工作目录跟着它走：
+        // 按 id：那个会话在**别的工作区**里 —— 找得到（id 全局唯一），而工作目录跟着它走：
         // 续写要发生在它自己的目录里，否则工具的相对路径、前缀缓存与横幅全不对。
         let other = store.create(&there).unwrap();
         seed(&other, &there);
         let elsewhere = Resume::Session(other.id.as_str().to_owned());
         let found = choose_session(&store, &here, Some(&elsewhere)).unwrap();
         assert_eq!(found.stored.id, other.id);
-        assert_eq!(found.cwd, there, "续上别处的会话，工作目录跟着那场会话走");
+        assert_eq!(found.cwd, there, "续上别处的会话，工作目录跟着那个会话走");
         assert!(found.elsewhere, "这一条要让前端说一句");
 
         // 会话目录的路径也算 id（`sessions show` 一直这么收）。
@@ -5950,7 +5953,7 @@ mod tests {
     fn the_mode_flag_overrides_the_configuration_and_its_absence_does_not() {
         use super::{InteractiveArgs, effective_mode};
 
-        // 那一条入口点规则的两个方向：旗标设了就根本不看文件，没设时文件正是这场会话开始于的那一档
+        // 那一条入口点规则的两个方向：旗标设了就根本不看文件，没设时文件正是这个会话开始于的那一档
         // （`.scratch/todo-and-modes/spec.md` §1）。
         let configured = |written: Option<&str>| {
             crate::config::resolve(written, &crate::config::EnvMap::new()).unwrap()
@@ -6012,7 +6015,7 @@ mod tests {
             read("/discuss 第一行\n第二行\n\n"),
             Submission::Discuss("第一行\n第二行".to_owned())
         );
-        // 光秃秃的：循环把这场会话最后一个问题交给那两位讨论者。
+        // 光秃秃的：循环把这个会话最后一个问题交给那两位讨论者。
         assert_eq!(read("/discuss"), Submission::Discuss(String::new()));
         assert_eq!(read("  /discuss   "), Submission::Discuss(String::new()));
         // 只有那个名字才是命令：一个叫 `discussion` 的技能就只是个技能。
@@ -6081,7 +6084,7 @@ mod tests {
         assert_eq!(line.debaters, Some(["保守".to_owned(), "激进".to_owned()]));
         assert_eq!(line.question, "换个角度再看");
 
-        // 没有要问的问题：循环补上这场会话最后一个。
+        // 没有要问的问题：循环补上这个会话最后一个。
         let bare = parse_discuss_line("--debaters 保守,激进").unwrap();
         assert_eq!(bare.question, "");
         assert_eq!(bare.debaters.unwrap(), ["保守", "激进"]);
@@ -6167,7 +6170,7 @@ mod tests {
                 .contains("--model")
         );
         assert!(discuss_args(&["--cwd"]).unwrap_err().contains("--cwd"));
-        // 没有 `--continue`：一场讨论是一个问题、一个 harness。
+        // 没有 `--continue`：一次讨论是一个问题、一个 harness。
         assert!(
             discuss_args(&["--continue"])
                 .unwrap_err()
@@ -6333,7 +6336,7 @@ mod tests {
             },
         })
         .await
-        .expect("组装一场 ask 档的会话");
+        .expect("组装一个会话 ask 档的会话");
 
         let (console, _port, _events) = crate::render::console();
         let goals = GoalSetup {
@@ -6425,7 +6428,7 @@ mod tests {
             },
         })
         .await
-        .expect("组装一场 auto 档的会话");
+        .expect("组装一个会话 auto 档的会话");
 
         let (console, _port, _events) = crate::render::console();
         let goals = GoalSetup {
@@ -6587,7 +6590,7 @@ mod tests {
             },
         })
         .await
-        .expect("组装一场接手的会话");
+        .expect("组装一个接手的会话");
 
         let (console, _port, _front_end) = crate::render::console();
         let goals = GoalSetup {

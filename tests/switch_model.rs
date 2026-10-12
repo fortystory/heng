@@ -61,7 +61,7 @@ fn retargeting_a_session_swaps_the_configuration_and_nothing_else() {
         session.config().params.reasoning_effort,
         Some(ReasoningEffort::Xhigh)
     );
-    // 身份、工作区、日志与工具表都不动：换的是模型，不是这一场会话。
+    // 身份、工作区、日志与工具表都不动：换的是模型，不是这个会话。
     assert_eq!(session.id(), &id);
     assert_eq!(session.cwd(), cwd);
     assert_eq!(session.log_path(), log_path);

@@ -23,7 +23,7 @@ fn fixture() -> Fixture {
     Fixture { _dir: dir, store }
 }
 
-/// 在 `cwd` 那条桶里造一场会话，写一条 `SessionStarted` 与一句人话。
+/// 在 `cwd` 那条桶里造一个会话，写一条 `SessionStarted` 与一句人话。
 fn session(store: &SessionStore, cwd: &Path, first_words: Option<&str>) -> SessionId {
     let stored = store.create(cwd).unwrap();
     let mut log = EventLog::create(&stored.log_path).unwrap();
@@ -91,10 +91,10 @@ fn a_row_carries_its_cwd_title_and_time() {
 fn the_newest_session_in_a_group_comes_first() {
     let fixture = fixture();
     let dir = tempfile::tempdir().unwrap();
-    let older = session(&fixture.store, dir.path(), Some("先的那一场"));
+    let older = session(&fixture.store, dir.path(), Some("先的那个会话"));
     // mtime 的先后是这一条用例的判据，而两次写入可能落在同一刻 —— 显式拉开一点。
     std::thread::sleep(std::time::Duration::from_millis(20));
-    let newer = session(&fixture.store, dir.path(), Some("后的一场"));
+    let newer = session(&fixture.store, dir.path(), Some("后的一个会话"));
 
     let listing = list(&fixture.store, &SessionId::new("nobody"));
     let ids: Vec<&SessionId> = listing.rows.iter().map(|row| &row.id).collect();
@@ -130,8 +130,8 @@ fn a_group_header_is_the_directory_name_and_repeats_are_disambiguated() {
     let right = root.path().join("b").join("heng");
     std::fs::create_dir_all(&left).unwrap();
     std::fs::create_dir_all(&right).unwrap();
-    session(&fixture.store, &left, Some("左边那一场"));
-    session(&fixture.store, &right, Some("右边那一场"));
+    session(&fixture.store, &left, Some("左边那个会话"));
+    session(&fixture.store, &right, Some("右边那个会话"));
 
     let listing = list(&fixture.store, &SessionId::new("nobody"));
     let groups: Vec<&str> = listing.rows.iter().map(|row| row.group.as_str()).collect();
@@ -184,7 +184,7 @@ fn a_broken_stream_marks_only_its_own_row() {
 fn a_moved_away_workspace_shows_up_as_missing() {
     let fixture = fixture();
     let dir = tempfile::tempdir().unwrap();
-    let id = session(&fixture.store, dir.path(), Some("搬走的那一场"));
+    let id = session(&fixture.store, dir.path(), Some("搬走的那个会话"));
     let gone = dir.path().to_path_buf();
     drop(dir);
     assert!(!gone.is_dir(), "临时目录真的没了");
@@ -197,7 +197,7 @@ fn a_moved_away_workspace_shows_up_as_missing() {
 fn the_host_mark_rides_along_on_the_row() {
     let fixture = fixture();
     let dir = tempfile::tempdir().unwrap();
-    let id = session(&fixture.store, dir.path(), Some("待答的那一场"));
+    let id = session(&fixture.store, dir.path(), Some("待答的那个会话"));
 
     let mut marks = HashMap::new();
     marks.insert(id.clone(), SessionMark::Awaiting);

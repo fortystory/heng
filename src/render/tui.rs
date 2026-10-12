@@ -268,7 +268,7 @@ impl SpeakerColors {
     /// 名册在会话中途换了（换 provider 就换了发言者的名字，spec §4）时的更新。
     ///
     /// **已经分配过槽位的名字一个都不动** —— 颜色对读的人必须稳定，而新名字走「没人认领的
-    /// 槽位」那条路，与 `/discuss` 中途加入的讨论者同一条。于是同一场会话里先后两个名字各有
+    /// 槽位」那条路，与 `/discuss` 中途加入的讨论者同一条。于是同一个会话里先后两个名字各有
     /// 各的颜色，而转录里已经画过的行不改名（事件流只追加）：那正是那一段注释写明的意图。
     ///
     /// 注意 [`Self::roster`] **不**被换掉：它是**组装时**那份名册，也就是槽位按位置分配
@@ -372,7 +372,7 @@ pub struct SessionFacts {
     /// 与 `file_viewer` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
     /// （`.scratch/diff-page/spec.md` §8）。
     pub diff_viewer: crate::config::DiffViewerSettings,
-    /// 这一场会话的工具表里，每个工具的**声明 schema**：工具名 → provider 收到的那份 JSON
+    /// 这个会话的工具表里，每个工具的**声明 schema**：工具名 → provider 收到的那份 JSON
     /// Schema（`Registry::specs()` 里 `parameters` 那一个字段）。
     ///
     /// 详情覆盖层的 Schema 面按工具名查它，把那一份**原样** `pretty` 打出来。与 `number_style` /
@@ -380,7 +380,7 @@ pub struct SessionFacts {
     /// 变** —— 工具表在组装时就建好，此后只读（工具数组是缓存前缀的一部分，spec §14）。
     ///
     /// 注入的是**主会话那张表**：执行者手里的 [`crate::tools::Registry::for_executor`] 是它的
-    /// 子集（滤掉不可委派的），所以这个名字集合覆盖得了这一场会话里出现的每一次调用。
+    /// 子集（滤掉不可委派的），所以这个名字集合覆盖得了这个会话里出现的每一次调用。
     pub tool_schemas: BTreeMap<String, serde_json::Value>,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
@@ -389,7 +389,7 @@ pub struct SessionFacts {
     /// 状态行那两格能不能点、能不能真的换（spec §12）。
     ///
     /// 单 agent 会话是 `true`；**讨论 CLI 那条路径**是 `false`，因为那里的
-    /// [`model`](Self::model) 是两个模型的拼法 —— 那是名册里的配置事实，不是一场活会话
+    /// [`model`](Self::model) 是两个模型的拼法 —— 那是名册里的配置事实，不是一个活会话
     /// 能中途改的值（`.scratch/model-switching/spec.md` §12）。组装时定下来：讨论那些参与者
     /// 是同时组装的，而换档要换 provider 与请求参数，与模式手势不同形。
     pub switchable: bool,
@@ -441,7 +441,7 @@ impl Tui {
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
         let mut terminal = ratatui::init();
-        // 第一版标题在这里就写：它不该跟着那场「等重放」一起等下去，而且快照也从这一刻
+        // 第一版标题在这里就写：它不该跟着那个会话「等重放」一起等下去，而且快照也从这一刻
         // 起算，绘制路径只管之后的变化（`.scratch/terminal-title/spec.md` §4、§5）。
         let first = state.sync_title().expect("首帧之前还没有标题快照");
         let modes = TerminalModes::enter(&first);
@@ -769,10 +769,10 @@ pub enum Gesture {
     DeclineQuestion,
 }
 
-/// 一场会话的**投影**：由这一场的事件流累积出来的一切，加上构造时注入的两份事实
+/// 一个会话的**投影**：由这个会话的事件流累积出来的一切，加上构造时注入的两份事实
 /// （[`SessionFacts`] 与发言者配色）。
 ///
-/// 判据是「重放这一场的事件流能不能重建出它」：能重建的住这里，重建不出来的
+/// 判据是「重放这个会话的事件流能不能重建出它」：能重建的住这里，重建不出来的
 /// （键盘、鼠标、终端几何、进程意愿、进程级轻状态）留在 [`TuiState`] 本体。
 ///
 /// 分块的用处是切换会话：**整块换**这个值，而不是靠一份容易漏字段的 reset 清单
@@ -861,7 +861,7 @@ pub struct View {
     colors: SpeakerColors,
     /// 状态行那一格显示的推理档位（spec §11）。它是**渲染器状态**，与 `mode` 同一格：
     /// 循环推一条 `SessionUpdate` 过来，前端并进它自己的显示，不进事件流 ——
-    /// 换档是会话属性，不是这一场会话发生过的一件事。
+    /// 换档是会话属性，不是这个会话发生过的一件事。
     effort: Option<crate::config::ReasoningEffort>,
     /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
     /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
@@ -959,7 +959,7 @@ pub struct View {
 }
 
 impl View {
-    /// 一场新会话的空投影。`facts` 是这一场的会话事实，配色由它的发言者名册算出来。
+    /// 一个新会话的空投影。`facts` 是这个会话的会话事实，配色由它的发言者名册算出来。
     pub fn new(facts: SessionFacts) -> Self {
         let colors = SpeakerColors::new(&facts.speaker_order);
         let mode = facts.mode;
@@ -1494,7 +1494,7 @@ impl View {
             EventPayload::ToolCallStarted {
                 tool_name, args, ..
             } => self.running_tool = Some((tool_name.clone(), args.clone())),
-            // 一次调用结束、一个回合结束、一场会话收尾：都说明没有工具在跑了。
+            // 一次调用结束、一个回合结束、一个会话收尾：都说明没有工具在跑了。
             EventPayload::ToolCallCompleted { .. }
             | EventPayload::TurnEnded { .. }
             | EventPayload::SessionEnded { .. } => self.running_tool = None,
@@ -2327,10 +2327,10 @@ impl View {
                 | Block::Diagnostic(_)
         )
     }
-    /// 把一条事件并进这一场会话的投影，并回答它画了多少条转录来源行。
+    /// 把一条事件并进这个会话的投影，并回答它画了多少条转录来源行。
     ///
     /// 它只管投影里面的事；「工作区变了」那条静默信号与整帧的 `dirty` 账留在
-    /// [`TuiState::apply`] 那一层（它们不属于任何一场会话）。
+    /// [`TuiState::apply`] 那一层（它们不属于任何一个会话）。
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
         // （`.scratch/trace-in-main/spec.md` §5）。
@@ -2467,10 +2467,10 @@ impl View {
 
 /// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
 pub struct TuiState {
-    /// 这一场会话的投影。切换会话就是**整块换掉**它（`.scratch/session-tab/spec.md` §6）。
+    /// 这个会话的投影。切换会话就是**整块换掉**它（`.scratch/session-tab/spec.md` §6）。
     view: View,
-    /// 当前**前台**是哪一场会话。进程级的一个值：渲染器只有一份，而它面前可以同时活着
-    /// 不止一场会话（`.scratch/session-tab/spec.md` §6）。渲染通道上那些带会话身份的事件
+    /// 当前**前台**是哪一个会话。进程级的一个值：渲染器只有一份，而它面前可以同时活着
+    /// 不止一个会话（`.scratch/session-tab/spec.md` §6）。渲染通道上那些带会话身份的事件
     /// 按它分派 —— 前台的进投影，别的只更新状态读数。
     front: crate::events::SessionId,
     /// 会话的工作目录与用户的家目录：终端标题那一段路径的两半
@@ -2522,15 +2522,15 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
-    /// 这一场是不是**只读预览**（票 18）：凡写流的一律禁，包括渲染器自己发起的那几处。
+    /// 这个会话是不是**只读预览**（票 18）：凡写流的一律禁，包括渲染器自己发起的那几处。
     read_only: bool,
-    /// **后台**有几场在等人答（票 25 的标题状态段）。N 不含当前前台。
+    /// **后台**有几个在等人答（票 25 的标题状态段）。N 不含当前前台。
     background_waiting: usize,
-    /// **后台**有几场刚跑完、还没被读（票 25）。
+    /// **后台**有几个刚跑完、还没被读（票 25）。
     background_finished: usize,
-    /// 每场会话现在忙不忙（票 22）。它按**会话 id** 存，切走切回都还在。
+    /// 每个会话现在忙不忙（票 22）。它按**会话 id** 存，切走切回都还在。
     states: std::collections::HashMap<crate::events::SessionId, crate::session::host::SessionState>,
-    /// 每场会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
+    /// 每个会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
     /// （`.scratch/session-tab/spec.md` §6）。
     light: std::collections::HashMap<crate::events::SessionId, SessionLight>,
     /// 会话页那一页自己的状态：它是**第一签**，也是唯一一页由外部推数据进来的
@@ -2570,7 +2570,7 @@ pub struct TuiState {
     /// 会话中途换模型/档位的选择器浮层（spec §10）。
     ///
     /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
-    /// 选择器是人发起的会话属性，答完要回循环去改这一场会话
+    /// 选择器是人发起的会话属性，答完要回循环去改这个会话
     /// （`.scratch/model-switching/spec.md` §10）。键盘归属按「谁立着谁拿」判。
     picker: Option<Picker>,
     /// 提示行上那一句短的说明（spec §12：讨论会话里点状态行那两格）。
@@ -2734,7 +2734,7 @@ enum Zone {
 /// 模型发起的问卷，在它占着底部输入区的时候。
 ///
 /// 状态住在这里而不是会话里，因为问卷是键盘状态，不是会话状态：它没有任何东西被记录，
-/// 这场交换唯一持久的痕迹是那次工具调用的参数与它那一条结果（spec §7）。
+/// 这个会话交换唯一持久的痕迹是那次工具调用的参数与它那一条结果（spec §7）。
 struct Questionnaire {
     /// 那些问题，按模型发出来的顺序。
     questions: Vec<UserQuestion>,
@@ -3843,7 +3843,7 @@ fn block_text(block: &Block) -> String {
 
 /// 搜索索引：每块一条记录，字段是**块自己那段文字的全文**（票 20 第 3 条）。
 ///
-/// 不另立字段、不做分词预处理。它**覆盖整场会话** —— `CAP` 只裁窗格的源行、裁不到这里，
+/// 不另立字段、不做分词预处理。它**覆盖整个会话** —— `CAP` 只裁窗格的源行、裁不到这里，
 /// 所以早就滚出屏的那一块照样搜得到；也**不做截断**：截断就是拿一个静默的洞换内存，
 /// 而搜不到的东西没人知道（票 20 第 5 条）。
 ///
@@ -3911,7 +3911,7 @@ struct Replay {
     /// 收尾时插不插那条「以下是历史」的分隔行。
     ///
     /// 启动那次重放插（历史与这次运行之间有一条看得见的接缝，`.scratch/tui-history-replay/spec.md`
-    /// §6）；**切换会话时不插**（`.scratch/session-tab/spec.md` §6）—— 切过去看到的是一整场
+    /// §6）；**切换会话时不插**（`.scratch/session-tab/spec.md` §6）—— 切过去看到的是一整个
     /// 会话，不是「历史 + 本段」。
     divider: bool,
     /// 快照里最大的那个 `seq`，记作 `S`。收尾时只放出 `seq > S` 的实时事件 —— 快照已经
@@ -3930,7 +3930,7 @@ impl TuiState {
         cwd: std::path::PathBuf,
         home: Option<std::path::PathBuf>,
     ) -> Self {
-        // 前台初值就是这一场：单会话下它恒等于流上每一个事件带的那个身份。
+        // 前台初值就是这个会话：单会话下它恒等于流上每一个事件带的那个身份。
         let front = crate::events::SessionId::new(facts.session_id.clone());
         Self {
             view: View::new(facts),
@@ -4006,7 +4006,7 @@ impl TuiState {
         }
     }
 
-    /// 当前前台是哪一场会话。
+    /// 当前前台是哪一个会话。
     pub fn front(&self) -> &crate::events::SessionId {
         &self.front
     }
@@ -4075,7 +4075,7 @@ impl TuiState {
         self.dirty = true;
     }
 
-    /// 任何一次按键都算「看过了」——如果标题上正写着 `N 场跑完` 的话（票 25）。
+    /// 任何一次按键都算「看过了」——如果标题上正写着 `N 个跑完` 的话（票 25）。
     ///
     /// 只在**真有未读**时才往上游加一件事：没有未读的进程不该为每一次按键多付一条消息。
     fn note_attention_seen(&mut self) {
@@ -4087,12 +4087,12 @@ impl TuiState {
     /// `Ctrl-C` 与 `Ctrl-D` 的两条路（`.scratch/session-tab/spec.md` §1、票 23、票 28）。
     ///
     /// * **`Ctrl-C` 只取消前台当前的动作，永不退出**（票 23）。没有可取消的东西时由循环回一句
-    ///   （它才知道后台有几场）。它**不碰退出的举手**：取消是一次完整手势，把另一把尚未兑现的
+    ///   （它才知道后台有几个）。它**不碰退出的举手**：取消是一次完整手势，把另一把尚未兑现的
     ///   举手作废掉，才不会让「我按 Ctrl-C 想停下来，结果它顺手退出了」发生（一次手势一层）。
     /// * **`Ctrl-D` 是退出请求**，而它走**双击**：第一下只举手，提示行出口那段换成「再按一次
     ///   ctrl-d 退出」，500 毫秒内第二下才真的发出去（`.scratch/exit-gesture/spec.md` §1）。
-    ///   多会话之后误触的代价是一次按掉**几场**，所以这一层回来了。过不过**退出闸门**仍由循环判
-    ///   （票 23）—— 渲染层不知道有几场在跑。闸门拒了的时候主循环会推一条 `ExitBlocked`，
+    ///   多会话之后误触的代价是一次按掉**几个**，所以这一层回来了。过不过**退出闸门**仍由循环判
+    ///   （票 23）—— 渲染层不知道有几个在跑。闸门拒了的时候主循环会推一条 `ExitBlocked`，
     ///   那一把举手随之作废：拒了之后下一次按下仍然只是第一下。
     /// * **立着的那一层先归它**（详情覆盖层、问题框那些）：`Ctrl-D` **关掉**它而不是被它静默
     ///   吞掉 —— 静默的那一版让人以为键盘坏了（2026-10-12 维护者报告）。唯一的例外是**问卷**：
@@ -4214,7 +4214,7 @@ impl TuiState {
         }
     }
 
-    /// 把当前这一场的轻状态收进表里（切换的第一步）。
+    /// 把当前这个会话的轻状态收进表里（切换的第一步）。
     ///
     /// 收的是**整份**：草稿、两个窗格的视口意图、浮层（详情 / 文件查看器 / 选择器 / `/` 菜单 /
     /// 轨迹搜索与折叠）。用 `mem::take` 而不是 clone：这些东西马上就要被换掉。
@@ -4237,7 +4237,7 @@ impl TuiState {
         self.light.insert(self.front.clone(), light);
     }
 
-    /// 把目标那一场的轻状态装进来（没有就装一份干净的）。
+    /// 把目标那个会话的轻状态装进来（没有就装一份干净的）。
     fn load_light(&mut self) {
         let light = self.light.remove(&self.front).unwrap_or_default();
         self.editor = light.editor;
@@ -6524,7 +6524,7 @@ impl TuiState {
     ///
     /// 刻意是一个**推出来**的量：视口才是状态，而存下来的「当前单位」会在任何一个事件
     /// 到达、或读的人滚动一下的瞬间就漂开。在末尾时它是最新的那个单位，也就是「我在跟着
-    /// 这场对话走」的意思，哪怕整条转录一屏就装得下（spec §4）。
+    /// 这个会话对话走」的意思，哪怕整条转录一屏就装得下（spec §4）。
     fn focused_turn(&self) -> Option<usize> {
         let units = self.view.turn_rail.units();
         if units == 0 {
@@ -6849,10 +6849,10 @@ impl TuiState {
                 }
                 self.picker = Some(Picker::new(request));
             }
-            // 换到另一场会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**，而会话级的
+            // 换到另一个会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**，而会话级的
             // 轻状态先收走当前那份、再装入目标那份。
             ConsoleRequest::SwitchSession { facts, events } => {
-                // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一场**，不能泄到这一场来。
+                // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一个**，不能泄到这个会话来。
                 if let Some(old) = self.replay.take() {
                     self.finish_replay(old);
                 }
@@ -6860,14 +6860,14 @@ impl TuiState {
                 self.front = crate::events::SessionId::new(facts.session_id.clone());
                 // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
                 // 的，而它只在启动推一次 —— 继续拿它画 `▍` 与 `LIVE` 色，标记会一直停在启动
-                // 那一场（2026-10-12 维护者：「切了别的会话，当前会话没变」）。重扫一份
+                // 那个会话（2026-10-12 维护者：「切了别的会话，当前会话没变」）。重扫一份
                 // listing 要碰 store（票 03 实测全量解析 155–172ms），不值得为一个标记付。
                 for row in &mut self.sessions.shown {
                     row.foreground = row.id == self.front;
                 }
                 self.view = View::new(facts);
                 self.load_light();
-                // 上一场攒下的实时事件不带过去。
+                // 上一个会话攒下的实时事件不带过去。
                 self.live_buffer.clear();
                 if !events.is_empty() {
                     let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
@@ -6876,13 +6876,13 @@ impl TuiState {
                         max_seq,
                         next: 0,
                         lines: 0,
-                        // 切过去看到的是一整场会话，不是「历史 + 本段」。
+                        // 切过去看到的是一整个会话，不是「历史 + 本段」。
                         divider: false,
                     });
                 }
                 self.dirty = true;
             }
-            // 场外通知那两个数（票 25）：标题状态段照它们取值。
+            // 后台通知那两个数（票 25）：标题状态段照它们取值。
             ConsoleRequest::TitleAttention { waiting, finished } => {
                 if self.background_waiting != waiting || self.background_finished != finished {
                     self.background_waiting = waiting;
@@ -6905,7 +6905,7 @@ impl TuiState {
                 self.sessions.focus = Some(first);
                 self.dirty = true;
             }
-            // 一场会话的忙闲（票 22）。
+            // 一个会话的忙闲（票 22）。
             ConsoleRequest::SessionState { id, state } => {
                 if state == crate::session::host::SessionState::Idle {
                     self.states.remove(&id);
@@ -6914,11 +6914,11 @@ impl TuiState {
                 }
                 self.dirty = true;
             }
-            // 这一场是不是只读预览（票 18）。
+            // 这个会话是不是只读预览（票 18）。
             ConsoleRequest::ReadOnly { read_only } => {
                 self.read_only = read_only;
             }
-            // 一场被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
+            // 一个会话被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
             ConsoleRequest::SessionClosed { id, empty } => {
                 self.light.remove(&id);
                 self.sessions.hosted.remove(&id);
@@ -6930,12 +6930,12 @@ impl TuiState {
                 }
                 self.dirty = true;
             }
-            // 宿主表里有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
+            // 宿主表里有几个、其中几个在跑（票 21 的 `已装载 N 个`、票 22 的 `M 个在跑`）。
             ConsoleRequest::HostCount { sessions, running } => {
                 self.sessions.host_sessions = Some(sessions);
                 self.sessions.host_running = Some(running);
             }
-            // 宿主表里装着哪几场（票 29）：会话页那三档标题色。
+            // 宿主表里装着哪几个（票 29）：会话页那三档标题色。
             ConsoleRequest::Hosted { ids } => {
                 self.sessions.hosted = ids.into_iter().collect();
                 self.dirty = true;
@@ -7344,19 +7344,19 @@ impl TuiState {
         self.sync_menu();
     }
 
-    /// 键盘是不是在**忙** —— 而忙闲既看**一次运行**的边沿，也看**眼前这一场**的三态。
+    /// 键盘是不是在**忙** —— 而忙闲既看**一次运行**的边沿，也看**眼前这个会话**的三态。
     ///
     /// 两个来源是并起来的关系，不是二选一：
     ///
     /// * [`running`](Self::running) 是**一次运行**的边沿，由循环经 `ConsoleRequest::RunState`
     ///   推过来。它盖得住那些**不经过宿主表**的运行 —— 一次性的 `discuss` 没有 task，也就发不出
     ///   会话三态。
-    /// * [`states`](Self::states) 是宿主表那份三态（票 22），它说的是**眼前这一场**。多会话之后
-    ///   只有它分得清「切过去那一场正跑着、而这一场没有」—— 曾经 `busy()` 只读 `running`，
-    ///   而那个开关只由循环在提交与回到提示那两处写，切场之后没人重算它，于是状态行按空闲那一档
+    /// * [`states`](Self::states) 是宿主表那份三态（票 22），它说的是**眼前这个会话**。多会话之后
+    ///   只有它分得清「切过去那个会话正跑着、而这个会话没有」—— 曾经 `busy()` 只读 `running`，
+    ///   而那个开关只由循环在提交与回到提示那两处写，切换会话之后没人重算它，于是状态行按空闲那一档
     ///   说话，而那时 `Ctrl-C` 明明可用（2026-10-12 维护者报告）。
     ///
-    /// `AwaitingHuman` 也算忙：那一场有动作挂在等人答，`Ctrl-C` 取消的正是它 —— 与退出闸门的
+    /// `AwaitingHuman` 也算忙：那个会话有动作挂在等人答，`Ctrl-C` 取消的正是它 —— 与退出闸门的
     /// 口径一致（`session::exit_gate` 把「不在空闲」当成没收尾）。
     fn busy(&self) -> bool {
         self.running || self.states.contains_key(&self.front)
@@ -7374,7 +7374,7 @@ impl TuiState {
     /// —— Enter 干脆什么都不做，而不是把草稿扔掉：循环在准备好接一行的时候才要一行
     /// （spec §6），在那之前那份草稿是用户打的东西的唯一副本。
     fn submit(&mut self) {
-        // 重放不是一场对话：`Enter` 不许往历史中间打出一个回合。草稿原封不动留在那儿，而
+        // 重放不是一个会话对话：`Enter` 不许往历史中间打出一个回合。草稿原封不动留在那儿，而
         // 这个键就是不是它看起来的那个提交（`spec` §3）。
         if self.replay.is_some() {
             return;
@@ -8628,7 +8628,7 @@ fn draw_todo_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) 
 /// 左栏第一签：store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。
 ///
 /// 三级降级阶梯按**页区高度**分：≥8 行画组头与页顶读数行；6–7 行丢组头、保读数行；<6 行两者
-/// 都不画，只保列表与末行那句「还有多少场没露面」。
+/// 都不画，只保列表与末行那句「还有多少个会话没露面」。
 fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
     state.sessions.rect = Some(page);
     state.sessions.headers.clear();
@@ -8717,11 +8717,12 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
         .iter()
         .filter(|row| row.mark == crate::session::listing::SessionMark::Running)
         .count();
-    // `N 场` 是**宿主表**的读数（几场同时活着），不是 store 里的条数（票 21）。还没报过就退回
+    // `已装载 N 个` 是**宿主表**的读数（几个同时活着），不是 store 里的条数（票 21）。还没报过就退回
     // 列表总数 —— 票 17 那一版就是这么读的。
     let left = wording::session_count(
         state.sessions.host_sessions.unwrap_or(state.sessions.total),
         state.sessions.host_running.unwrap_or(running),
+        wide,
     );
     let left_w = text_columns(&left) as u16;
     let new_w = text_columns(wording::SESSION_NEW) as u16;
@@ -8800,7 +8801,7 @@ fn session_line(
     use crate::session::host::SessionState;
     use crate::session::listing::SessionMark;
     let focused = focus == Some(&row.id);
-    // **内存里的三态优先**（票 22）：它比 store 扫描出来的那一份准，也更新 —— 后台那一场刚
+    // **内存里的三态优先**（票 22）：它比 store 扫描出来的那一份准，也更新 —— 后台那个会话刚
     // 开始跑、或者正等着人答，只有它知道。
     let live = match live {
         Some(SessionState::AwaitingHuman) => Some(SessionMark::Awaiting),
@@ -8809,7 +8810,7 @@ fn session_line(
         // 还没报过三态：退回列表自己那份（store 扫出来的「上次没跑完」仍有意义）。
         None => None,
     };
-    // **标题色回答「这一场在哪儿」**（票 29）：当前前台、已在宿主表（切过去零延迟、`关闭`对它
+    // **标题色回答「这个会话在哪儿」**（票 29）：当前前台、已在宿主表（切过去零延迟、`关闭`对它
     // 可用）、只在盘上（切过去要先装载）。三档必须有别 —— 撞成同一个颜色就是「看不出来哪些已装载」。
     //
     // **焦点是字重，不是颜色**：那一档与「在不在前台」是两个正交的问题，而焦点那一行往往不是
@@ -9456,7 +9457,7 @@ impl Picker {
 ///
 /// 与 [`Panel`]、[`TodoPanel`] 同一族，也与 [`DetailView`] 共用同一条纪律：状态由画它的那一处
 /// 顺手记下（「记住读的人真看到了什么」），只有真画出来的行才回应指针与键盘。
-/// 一场会话在渲染器里的**轻状态**：与投影无关、却跟会话走的那几样
+/// 一个会话在渲染器里的**轻状态**：与投影无关、却跟会话走的那几样
 /// （`.scratch/session-tab/spec.md` §6）。
 ///
 /// 切换 = 先收走当前那份、再装入目标那份。**页签选择、主列页、`Ctrl-O` 意愿与会话页的过滤态
@@ -9498,17 +9499,17 @@ struct SessionLight {
 struct SessionsPage {
     /// 数据侧排好的那些行（`crate::session::listing`）。
     rows: Vec<crate::session::listing::SessionRow>,
-    /// store 里的总数：末行 `＋N 场` 的 N 就是它与 `rows.len()` 之差。
+    /// store 里的总数：末行 `＋N 个会话` 的 N 就是它与 `rows.len()` 之差。
     total: usize,
     /// store 整个读不出（与「没有会话」是两件事）。
     unreadable: bool,
-    /// 空宿主（票 21）：宿主表里一场都没有。
+    /// 空宿主（票 21）：宿主表里一个会话都没有。
     host_empty: bool,
-    /// 宿主表里有几场（票 21 的 `N 场` 读数）；还没报过就用列表总数。
+    /// 宿主表里有几个（票 21 的 `已装载 N 个` 读数）；还没报过就用列表总数。
     host_sessions: Option<usize>,
-    /// 宿主表里有几场在跑（票 22 的 `M`）；还没报过就用列表里的读数。
+    /// 宿主表里有几个在跑（票 22 的 `M`）；还没报过就用列表里的读数。
     host_running: Option<usize>,
-    /// 宿主表里此刻装着**哪几场**（票 29）：会话页那三档标题色靠它。
+    /// 宿主表里此刻装着**哪几个**（票 29）：会话页那三档标题色靠它。
     ///
     /// 它是**渲染器自己的轻状态**，与 `light` 同一格 —— 数据经 `ConsoleRequest::Hosted` 推过来，
     /// 渲染层自己不问宿主表要什么在场。
@@ -9525,7 +9526,7 @@ struct SessionsPage {
     headers: Vec<usize>,
     /// 画在屏幕上的行下标 → 会话 id。
     hits: Vec<(usize, crate::events::SessionId)>,
-    /// 改名模式：正在改哪一场，以及它那一份草稿（复用常驻编辑器的那一份）。
+    /// 改名模式：正在改哪个会话，以及它那一份草稿（复用常驻编辑器的那一份）。
     renaming: Option<crate::events::SessionId>,
     rename_draft: Option<String>,
 }
@@ -12383,7 +12384,7 @@ fn selects(view: Viewport, block: &Block) -> bool {
 
 /// 这个块是否结束回合条计数的那个单位。
 ///
-/// 讨论数的是它的**轮**，交互会话数的是它的回合；两个边界都存在于一场讨论的流里，所以哪一个
+/// 讨论数的是它的**轮**，交互会话数的是它的回合；两个边界都存在于一次讨论的流里，所以哪一个
 /// 算数是会话的性质、而不是块的性质（spec §4）。
 fn is_boundary(block: &Block, discussion: bool) -> bool {
     if discussion {
@@ -13111,7 +13112,7 @@ fn tool_output_rows(tool: &ToolBlock, session_dir: &str, width: usize) -> Vec<De
 /// Schema），**原样** `pretty` 打印、按正文宽度折行 —— 与参数面同一套 [`folded_text`] 排法。
 ///
 /// 查不到时写一句话（[`wording::detail_schema_missing`]）：不画空面、也不编一份 schema 出来。
-/// 工具表是**这一场会话**建的那张，而重放一场老会话时那个工具可能已经不在表里，一条没有配对
+/// 工具表是**这个会话**建的那张，而重放一个老会话时那个工具可能已经不在表里，一条没有配对
 /// 开始的调用还会把工具名记成 `?`。
 fn tool_schema_rows(
     tool: &ToolBlock,
@@ -14487,7 +14488,7 @@ fn picker_row(
                 option.detail.clone(),
                 Style::default().fg(palette::MUTED),
             )),
-            // 第三列：这一行是不是当前这一场会话在用的。
+            // 第三列：这一行是不是当前这个会话在用的。
             2 => spans.push(Span::styled(
                 status.to_owned(),
                 Style::default().fg(if option.current {
@@ -15182,7 +15183,7 @@ mod tests {
         assert!(state.events.is_empty(), "也没有手势被误发出去");
     }
 
-    /// 让**眼前这一场**处在「正在跑」那一档。
+    /// 让**眼前这个会话**处在「正在跑」那一档。
     ///
     /// 它走产品路径（`ConsoleRequest::SessionState`）而不是直接写字段：忙闲是**会话级**事实
     /// （票 22），而 `busy()` 读的就是那张表。
@@ -15192,7 +15193,7 @@ mod tests {
             id,
             state: crate::session::host::SessionState::RunningTurn,
         });
-        assert!(state.busy(), "这一场确实在跑");
+        assert!(state.busy(), "这个会话确实在跑");
     }
 
     #[test]
@@ -15584,7 +15585,7 @@ mod tests {
     // （`tests/render_layout.rs`）；这里管的是更划算的那几件：选中在**块**之间怎么走、
     // 身份怎么换回源行。
 
-    /// 一场两个块、其**第一块占两条源行**（一次失败的调用：调用行 + 错误正文首行）的会话 ——
+    /// 一个会话两个块、其**第一块占两条源行**（一次失败的调用：调用行 + 错误正文首行）的会话 ——
     /// 「附属行不是落点」这件事要的正是它。
     fn a_page_with_a_failed_call() -> TuiState {
         let mut page = state();
@@ -17406,7 +17407,7 @@ mod tests {
         assert!(!hits_terms(&[], "没有词就不命中"), "空词表什么都不命中");
     }
 
-    /// 索引覆盖**整场会话**，不受 `CAP` 裁剪 —— 早就滚出屏的那一块照样搜得到；而还在流的
+    /// 索引覆盖**整个会话**，不受 `CAP` 裁剪 —— 早就滚出屏的那一块照样搜得到；而还在流的
     /// 增量不进索引，它定稿那一刻才进（票 20 第 4、5 条）。
     #[test]
     fn the_index_covers_the_whole_session_and_waits_for_a_delta_to_settle() {
@@ -17437,7 +17438,7 @@ mod tests {
             "那一段思考定稿之后搜得到"
         );
 
-        // 一整场会话比窗格的上限更长：窗格裁到 `CAP`，索引一条不少。
+        // 一整个会话比窗格的上限更长：窗格裁到 `CAP`，索引一条不少。
         let mut long = state();
         for index in 0..pane::CAP + 20 {
             long.apply(RenderEvent::notice(s(), format!("第 {index} 句话")));

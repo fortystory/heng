@@ -7,11 +7,11 @@
 //!
 //! [`assemble`] 与 [`assemble_discussion`] 是那条唯一的端到端接缝的两头。它们接收
 //! 注入的 [`Provider`]、注入的渲染接收端与注入的配置值，并且**不读任何环境** —— 于是
-//! 一个测试可以拿一个按脚本应答的假 provider 驱动整场会话，再对 JSONL 事件流与那两个
+//! 一个测试可以拿一个按脚本应答的假 provider 驱动整个会话，再对 JSONL 事件流与那两个
 //! 接收端做断言。后来的票给这条接缝加场景；它们不会另开 mock 接缝。
 //!
 //! 一次讨论就是同一个脚手架按参与者各开一次：一条事件流、两个共享它的讨论者会话，再加
-//! 一场会话负责收尾那一次单发调用（spec §15）。
+//! 一个会话负责收尾那一次单发调用（spec §15）。
 //!
 //! # 边界
 //!
@@ -62,25 +62,25 @@ use crate::session::{Session, SessionParts, StoredSession};
 use crate::tools::sandbox;
 use crate::tools::{PathLocks, Registry};
 
-/// 一场会话需要的一切，除了谁在发言、用的又是哪个模型。
+/// 一个会话需要的一切，除了谁在发言、用的又是哪个模型。
 ///
-/// 一个脚手架可以开出不止一场会话，一次讨论就是这样：两个讨论者必然共享事件流、工具
+/// 一个脚手架可以开出不止一次，一次讨论就是这样：两个讨论者必然共享事件流、工具
 /// 表、路径锁、权限策略、询问端口与钩子，因为那些是会话级事实、而不是每个 agent 各自的
 /// 东西（spec §15）。渲染接收端刻意**不**在这里：一个进程只有一个渲染器，所以它们由
 /// 组装的那一方一次性消费掉。
 pub struct SessionScaffold {
     /// 会话的工作目录，记在 `SessionStarted` 里。
     pub cwd: PathBuf,
-    /// 这场会话 JSONL 事件日志的路径。它的父目录必须已存在。
+    /// 这个会话 JSONL 事件日志的路径。它的父目录必须已存在。
     pub log_path: PathBuf,
     /// 会话身份；跨 `--continue` 永不改变。
     pub session_id: SessionId,
     /// 工具表。一个运行时值，在这里组装出来，永远不是全局量。
     pub tools: Registry,
-    /// 按路径的写锁。**同一张**表必须到达每一个执行者，否则写互斥就只是每场会话各自
+    /// 按路径的写锁。**同一张**表必须到达每一个执行者，否则写互斥就只是每个会话各自
     /// 的、也就等于根本没有锁。
     pub locks: PathLocks,
-    /// 这场会话的权限策略：一个模式加上它的规则。
+    /// 这个会话的权限策略：一个模式加上它的规则。
     pub policy: Policy,
     /// 权限门答 `Ask` 时用的询问端口。`None` 表示没有交互式作答者，于是循环把 `Ask`
     /// 降级成 `Deny`。
@@ -97,16 +97,16 @@ pub struct SessionScaffold {
 
 /// 单 agent 会话需要的一切，全部注入。
 pub struct AssemblyParts {
-    /// 这一切跑在其中的那场会话。
+    /// 这一切跑在其中的那个会话。
     pub scaffold: SessionScaffold,
     /// 模型客户端。真的 profile 在票 02 到；测试注入假的。
     pub provider: Box<dyn Provider>,
-    /// 这场会话扮演的那个 agent。
+    /// 这个会话扮演的那个 agent。
     pub speaker: SpeakerId,
     /// 这个 agent 的模型与预算值。
     pub config: SessionConfig,
-    /// **进程级**的渲染端（票 13）：那个唯一的渲染器与拥有它的任务。一场会话从它取一个
-    /// 带自己身份的写端 —— 渲染器只能起一次，所以它不是一场会话的东西
+    /// **进程级**的渲染端（票 13）：那个唯一的渲染器与拥有它的任务。一个会话从它取一个
+    /// 带自己身份的写端 —— 渲染器只能起一次，所以它不是一个会话的东西
     /// （`.scratch/session-tab/spec.md` §1）。
     pub render: RenderChannel,
 }
@@ -132,7 +132,7 @@ pub struct SynthesizerParts {
 
 /// 一次讨论需要的一切，全部注入。
 pub struct DiscussionParts {
-    /// 这一切跑在其中的那场会话。每个讨论者各开一次。
+    /// 这一切跑在其中的那个会话。每个讨论者各开一次。
     pub scaffold: SessionScaffold,
     /// 正好 [`discussion::DEBATERS`] 个讨论者（spec §15；N > 2 会重新打开「N = 2 不做
     /// 裁决」那个决议，所以 v1 拒掉它）。
@@ -148,21 +148,21 @@ pub struct DiscussionParts {
 
 /// 组装好之后由调用方驱动的 harness。
 pub struct Harness {
-    /// 这场会话**开在**的那个脚手架：日志、工具、锁、策略、技能与那个渲染器。
+    /// 这个会话**开在**的那个脚手架：日志、工具、锁、策略、技能与那个渲染器。
     ///
     /// 留着它是为了翻页（`.scratch/goal-loop/spec.md` §7）：换一份日志与会话身份，其余原样
     /// 留下，于是「同一进程、同一渲染器与终端，换一个新会话」是一条真实可行的事。渲染器
     /// 只能起一次 —— 它占有终端与键盘 —— 所以翻页绝不能重新组装一个渲染器。
     opened: OpenedSession,
     session: Session,
-    /// 共享的，因为这场会话派出的执行者在同一个客户端上作答：执行者的模型是继承来的，
+    /// 共享的，因为这个会话派出的执行者在同一个客户端上作答：执行者的模型是继承来的，
     /// 除非有 profile 覆盖（spec §16）。
     provider: Arc<dyn Provider>,
     speaker: SpeakerId,
-    /// 这场会话自己那一端的取消手势（spec §6）。前端持有一个并举起它；各回合拿到的是
+    /// 这个会话自己那一端的取消手势（spec §6）。前端持有一个并举起它；各回合拿到的是
     /// 它的观察端。
     cancel: CancelSignal,
-    /// 这一场说出去的话所带的身份（票 14）。渲染端是进程级的，而写端是按会话给的。
+    /// 这个会话说出去的话所带的身份（票 14）。渲染端是进程级的，而写端是按会话给的。
     render: RenderHandle,
     /// 那个进程级的渲染端，留着只为收尾时等它（[`Harness::shutdown`]）。
     channel: RenderChannel,
@@ -205,7 +205,7 @@ pub struct DiscussionHarness {
 }
 
 /// 做完它那一次性工作的脚手架：一份日志、一张工具表、一张锁表、一份策略、一个渲染器。
-/// 从它开出的每一场会话都共享这些。
+/// 从它开出的每一个会话都共享这些。
 struct OpenedSession {
     id: SessionId,
     cwd: PathBuf,
@@ -215,7 +215,7 @@ struct OpenedSession {
     outputs_dir: PathBuf,
     policy: Arc<Mutex<Policy>>,
     asker: Option<Arc<dyn Asker>>,
-    /// 这场会话的提问端口（spec §7）。会话级，像询问端那样与每一场兄弟会话共享：讨论者
+    /// 这个会话的提问端口（spec §7）。会话级，像询问端那样与每一个兄弟会话共享：讨论者
     /// 也通过同一个渲染器发问。
     questions: Option<Arc<dyn UserQuestions>>,
     hook: Option<Arc<dyn Hook>>,
@@ -224,9 +224,9 @@ struct OpenedSession {
     /// `AGENTS.md`，在会话存在之前读一次。
     agents_md: Option<String>,
     /// 这条流是否已经带着一条 `SessionStarted`：带着的那份日志是继续中的会话，不是新的
-    /// 一场。
+    /// 一个会话。
     resuming: bool,
-    /// 沙箱那一次探测的结果（沙箱 spec §3）：组装期探一次，这场会话开出的每一个 agent 复用同一个
+    /// 沙箱那一次探测的结果（沙箱 spec §3）：组装期探一次，这个会话开出的每一个 agent 复用同一个
     /// 答案。`mode = "off"` 或者调用方已经给了结果时，这个格子根本不会被填。
     sandbox_probe: OnceLock<SandboxAvailability>,
 }
@@ -257,7 +257,7 @@ impl OpenedSession {
         // session id 下分配的一条路径，或是更早一次运行留下的那份。这样库就不用去读环境
         // 旗标（spec §1），同时 `--continue` 仍然只有一条代码路径（spec §11）。
         let log = if log_path.exists() {
-            // **半读**的流（中间有坏行）用宽松那一档打开：严格的 `open` 会直接报错，而那一场
+            // **半读**的流（中间有坏行）用宽松那一档打开：严格的 `open` 会直接报错，而那个会话
             // 该降级成**只读预览**、不是装不起来（`.scratch/session-tab/spec.md` §2、票 18）。
             // 尾行坏仍是严格那一档 —— `open` 会把那条坏尾巴收拾掉。
             let health = crate::session::attach::health(&log_path);
@@ -320,7 +320,7 @@ impl OpenedSession {
     /// 锁、策略、技能、渲染器与终端）原样留下。
     ///
     /// 渲染器只能起一次 —— 它占着终端与键盘 —— 所以翻页**绝不**重新组装一个渲染器，只换会话。
-    /// 旧会话的文件不动、不合并：它留在磁盘上，而 `--continue` 打开的是最新的那一场。
+    /// 旧会话的文件不动、不合并：它留在磁盘上，而 `--continue` 打开的是最新的那个会话。
     fn reopen(&mut self, stored: &StoredSession) -> Result<(), Error> {
         self.id = stored.id.clone();
         self.log = EventLog::create(&stored.log_path)?;
@@ -331,7 +331,7 @@ impl OpenedSession {
     }
 
     /// 沙箱那一次探测（沙箱 spec §3）：`mode = "off"` 或调用方已经给了结果时原样返回，否则探一次
-    /// 并记住 —— 这场会话开出的每一个 agent（讨论的两个讨论者、以及每一个执行者）拿到的都是
+    /// 并记住 —— 这个会话开出的每一个 agent（讨论的两个讨论者、以及每一个执行者）拿到的都是
     /// 同一个答案，PATH 中途变了也不重探。
     fn sandbox_availability(&self, settings: &SandboxSettings) -> SandboxAvailability {
         if !settings.needs_probe() {
@@ -383,10 +383,10 @@ impl OpenedSession {
         agent::record_sandbox_status(session, render, mode, reason.as_deref())
     }
 
-    /// 通过其中一场会话记下会话骨架：`SessionStarted`，然后那两条钉住的注入。
+    /// 通过其中一个记下会话骨架：`SessionStarted`，然后那两条钉住的注入。
     ///
     /// 身份 -> 规则 -> 技能清单 -> 历史（spec §10）。缺 `AGENTS.md` 不是错误，只表示
-    /// 没有那条注入。每条流正好有一场会话做这件事，一次讨论的所有讨论者因此投影出同一个
+    /// 没有那条注入。每条流正好有一个会话做这件事，一次讨论的所有讨论者因此投影出同一个
     /// 钉住的头部。
     fn record_skeleton(&self, session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
         agent::record_session_started(session, render)?;
@@ -450,7 +450,7 @@ fn sandbox_unavailable_reason(settings: &SandboxSettings, cwd: &Path) -> Option<
 
 /// 名册里的每一个参与者都得过 [`workspace_needs_a_sandbox`] 那一关。
 ///
-/// 两个讨论组装点（一场自己的讨论、一场跑在活会话上的讨论）共用它，于是「新增一个组装
+/// 两个讨论组装点（一次自己的讨论、一个跑在活会话上的讨论）共用它，于是「新增一个组装
 /// 点时漏掉某一个参与者」这件事不会发生。
 fn roster_needs_a_sandbox(
     mode: Mode,
@@ -466,7 +466,7 @@ fn roster_needs_a_sandbox(
 
 /// 一次装载的结果（`.scratch/session-tab/spec.md` §2、票 18）。
 pub struct Loaded {
-    /// 装起来的那一场。
+    /// 装起来的那个会话。
     pub harness: Harness,
     /// 它是**只读预览**：流半读（坏行后面还有好行），装起来只能看。
     pub read_only: bool,
@@ -474,7 +474,7 @@ pub struct Loaded {
     pub filled: Vec<&'static str>,
 }
 
-/// 装载一场磁盘上的会话（`.scratch/session-tab/spec.md` §2、票 18）。
+/// 装载一个磁盘上的会话（`.scratch/session-tab/spec.md` §2、票 18）。
 ///
 /// 一条共用路径：`-c <id>` 与界面点选都走它。三件事：
 ///
@@ -492,7 +492,7 @@ pub async fn load(parts: AssemblyParts) -> Result<Loaded, Error> {
         crate::session::attach::health(&log_path),
         crate::session::StreamHealth::ReadOnly { .. }
     );
-    // 流上那五格缺的，回退的就是这一场自己的装配值（进程配置默认）。
+    // 流上那五格缺的，回退的就是这个会话自己的装配值（进程配置默认）。
     let from_stream = crate::session::SessionFacts::current(&harness.events());
     let (_, filled) = from_stream.with_fallback(&harness.session_facts());
     Ok(Loaded {
@@ -502,7 +502,7 @@ pub async fn load(parts: AssemblyParts) -> Result<Loaded, Error> {
     })
 }
 
-/// 组装一场单 agent 会话。不读任何环境。
+/// 组装一个会话单 agent 会话。不读任何环境。
 pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let AssemblyParts {
         scaffold,
@@ -514,7 +514,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     workspace_needs_a_sandbox(scaffold.policy.mode(), &config.sandbox, &scaffold.cwd)?;
 
-    // 这一场说出去的话所带的身份：进程级渲染端给出一个按会话的写端（票 13）。
+    // 这个会话说出去的话所带的身份：进程级渲染端给出一个按会话的写端（票 13）。
     let handle = render.handle(scaffold.session_id.clone());
     let opened = OpenedSession::open(scaffold)?;
     let mut session = opened.session(config, Some(agent::agent_identity()));
@@ -533,7 +533,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
 /// 名册的那些不变量，凡组装讨论的地方都查一遍。
 ///
-/// 两条入口 —— 一场有自己事件流的讨论（[`assemble_discussion`]）与一场跑在活动会话上
+/// 两条入口 —— 一个会话有自己事件流的讨论（[`assemble_discussion`]）与一个跑在活动会话上
 /// 的讨论（[`Harness::discuss`]）—— 问的是同一组问题，于是一份名册不可能在一条路径上
 /// 可以接受、在另一条上被拒。
 fn validate_roster(
@@ -622,8 +622,8 @@ fn validate_roster(
 
 /// 一次讨论的三个参与者，落在 `fork` 够得到的那条流上。
 ///
-/// `fork` 就是组装一场讨论的两条路径之间的全部差别：一场自己的讨论从它刚建好的脚手架开
-/// 会话，一场跑在活动会话上的讨论则分叉出用户所在的那场会话。绝不能有差别的东西在这里
+/// `fork` 就是组装一次讨论的两条路径之间的全部差别：一次自己的讨论从它刚建好的脚手架开
+/// 会话，一个跑在活动会话上的讨论则分叉出用户所在的那个会话。绝不能有差别的东西在这里
 /// 定下 —— 每个讨论者的私有身份，以及合成器的落点（spec §15、§17）。
 fn discussion_participants(
     debaters: Vec<DebaterParts>,
@@ -666,7 +666,7 @@ fn discussion_participants(
     (roster, synthesizer)
 }
 
-/// 组装一场讨论：一条流上两个讨论者，加上合成器。
+/// 组装一次讨论：一条流上两个讨论者，加上合成器。
 ///
 /// 和 [`assemble`] 一样不读任何环境。讨论者就是同一个会话脚手架开两次，所以它们共享
 /// 日志、工具、路径锁与权限策略；不同的是它们的发言归属、模型与私有身份（spec §15）。
@@ -698,7 +698,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         discussion_participants(debaters, synthesizer, |config, identity| {
             opened.session(config, identity)
         });
-    // 第一场会话为整条流记下骨架，或者在继续时收尾更早那个进程留下没答完的调用：它就是
+    // 第一个会话为整条流记下骨架，或者在继续时收尾更早那个进程留下没答完的调用：它就是
     // 每个讨论者随后要投影的那个会话级头部。
     if let Some(first) = roster.first_mut() {
         opened.start(&mut first.session, &handle)?;
@@ -744,18 +744,18 @@ impl Harness {
         .await
     }
 
-    /// 在**这场会话的流上**跑一次讨论（spec §15）。
+    /// 在**这个会话的流上**跑一次讨论（spec §15）。
     ///
-    /// 讨论者与合成器是这场会话的*兄弟*：它们共享它的日志、工具表、写锁、权限策略、
+    /// 讨论者与合成器是这个会话的*兄弟*：它们共享它的日志、工具表、写锁、权限策略、
     /// 作答者、技能与渲染器，只在各自的模型与私有身份上不同。两条后果才是重点：
     ///
     /// * 投影把**这个 agent 的**回合变成它们眼里的 `user` 消息（spec §5），于是一次
-    ///   讨论继承这场会话的上下文 —— 它争论的是这场会话在谈什么，而不是真空里的一个
+    ///   讨论继承这个会话的上下文 —— 它争论的是这个会话在谈什么，而不是真空里的一个
     ///   问题；
-    /// * 轮次追加在同一条流上，接在它已有的内容之后，于是一场会话可以装一个回合、一次
+    /// * 轮次追加在同一条流上，接在它已有的内容之后，于是一个会话可以装一个回合、一次
     ///   讨论、再来一个回合 —— 而 `sessions show` 把整段读回来。
     ///
-    /// 名册的校验与 [`assemble_discussion`] 一模一样。这场会话**没有**开出的流（一场
+    /// 名册的校验与 [`assemble_discussion`] 一模一样。这个会话**没有**开出的流（一个会话
     /// 全新的、自己的讨论）走 [`assemble_discussion`]：那条路径记骨架，这条往一个骨架
     /// 已经躺在它上面的流里追加。
     pub async fn discuss(
@@ -782,7 +782,7 @@ impl Harness {
         agent::run_discussion(&mut discussion, &self.render, question, &cancelled).await
     }
 
-    /// **用户**在这场会话里最后问的那句话，或者 `None`。
+    /// **用户**在这个会话里最后问的那句话，或者 `None`。
     ///
     /// 一个裸 `/discuss` 讨论的就是它：「我们刚才在聊的那件事」才是值得摆给两个模型的
     /// 问题。只有 user 角色的 `MessageCompleted` 算数 —— 一条上下文注入也归属于用户，
@@ -802,7 +802,7 @@ impl Harness {
             })
     }
 
-    /// 这场会话自己那一端的取消手势（spec §6）。
+    /// 这个会话自己那一端的取消手势（spec §6）。
     ///
     /// 前端持有它并在 Esc 时举起；当 [`is_cancelled`](CancelSignal::is_cancelled) 已经
     /// 为真时再按一次，由前端把它变成一个退出，因为会话本身永远不需要知道自己是怎么被
@@ -862,12 +862,12 @@ impl Harness {
         self.drive_turn().await
     }
 
-    /// 这场会话眼下跑在哪一档。
+    /// 这个会话眼下跑在哪一档。
     pub fn mode(&self) -> Mode {
         self.session.mode()
     }
 
-    /// 这场会话自己那一端的模式循环手势（spec §12）。
+    /// 这个会话自己那一端的模式循环手势（spec §12）。
     ///
     /// 这个手势是策略上的一个值、永远不是一条事件，也什么都不注入。模型是在自己某次调用
     /// 被拒时、从 `PermissionDecided` 的 reason 里才知道立场变了 —— 这是刻意的代价，
@@ -888,7 +888,7 @@ impl Harness {
         self.session.id()
     }
 
-    /// 这场会话的工作目录（`--cwd` 已经在这一层解析过），于是调用方不必去问进程的 cwd。
+    /// 这个会话的工作目录（`--cwd` 已经在这一层解析过），于是调用方不必去问进程的 cwd。
     pub fn cwd(&self) -> &Path {
         self.session.cwd()
     }
@@ -915,11 +915,11 @@ impl Harness {
         crate::events::current_goal(&self.session.events()).map(str::to_owned)
     }
 
-    /// 把「别处已经花掉的 token」填进这场会话的额度口径
+    /// 把「别处已经花掉的 token」填进这个会话的额度口径
     /// （`.scratch/goal-loop/spec.md` §8）。
     ///
     /// 一个目标横跨的所有会话共用一个额度，而每条流只看得见自己 —— 循环按归属把更早那些会话的
-    /// `UsageRecorded` 加起来，填给当前这场。翻页开的新会话带着同一个累计继续，于是**翻页不
+    /// `UsageRecorded` 加起来，填给当前这个会话。翻页开的新会话带着同一个累计继续，于是**翻页不
     /// 重置额度**。
     pub fn carry_usage(&mut self, tokens: u64) {
         self.session.carry_usage(tokens);
@@ -935,7 +935,7 @@ impl Harness {
     /// 记下人刚运行的那一条 `/` 命令，原文入流（`.scratch/command-echo/spec.md`）。
     ///
     /// 它落**当前**会话：`/clear` 那类命令后面紧跟着一次翻页，而它自己那一条记在翻页**之前**
-    /// —— 它是这场会话的最后一个手势，留在这一场里才对得上「我在这场里做过什么」。
+    /// —— 它是这个会话的最后一个手势，留在这个会话里才对得上「我在这个会话里做过什么」。
     pub fn record_command_run(&mut self, text: &str) -> Result<(), Error> {
         agent::record_command_run(&mut self.session, &self.render, text)
     }
@@ -1010,7 +1010,7 @@ impl Harness {
         Ok(summary)
     }
 
-    /// 往这场会话的上下文尾部注入一段内容。
+    /// 往这个会话的上下文尾部注入一段内容。
     ///
     /// 目标清单（§4）、压缩摘要（§7）与过半提醒（§6）都走这一条：注入是**一等事件**，所以
     /// 它进流、可重放，`--continue` 之后还在。它自己投影成一条 `user` 消息，所以模型看见的
@@ -1027,14 +1027,14 @@ impl Harness {
         self.drive_turn().await
     }
 
-    /// 这一场会话当前用的模型 id。
+    /// 这个会话当前用的模型 id。
     ///
-    /// 循环读它来回答「这一场会话现在是什么」，以及给 `/effort` 判那一档当前模型认不认。
+    /// 循环读它来回答「这个会话现在是什么」，以及给 `/effort` 判那一档当前模型认不认。
     pub fn model(&self) -> &str {
         &self.session.config().model
     }
 
-    /// 这一场会话当前的推理档位；`None` 就是「默认」那一档（spec §5）。
+    /// 这个会话当前的推理档位；`None` 就是「默认」那一档（spec §5）。
     pub fn effort(&self) -> Option<crate::config::ReasoningEffort> {
         self.session.config().params.reasoning_effort
     }
@@ -1078,7 +1078,7 @@ impl Harness {
         switched
     }
 
-    /// 这场会话的上下文用掉了窗口的百分之多少（`.scratch/goal-loop/spec.md` §6 的阈值判据）。
+    /// 这个会话的上下文用掉了窗口的百分之多少（`.scratch/goal-loop/spec.md` §6 的阈值判据）。
     ///
     /// 分子是**投影之后、裁剪之前**的估算，分母是 [`context::usable_input`] —— 也就是状态行
     /// 那个百分比用的同一个数，所以用户眼睛看到的数就是触发的数。
@@ -1189,12 +1189,12 @@ impl Harness {
     /// 目前为止的整条流，按 `seq` 顺序。
     ///
     /// [`DiscussionHarness::events`] 的单 agent 对应物：两个 harness 一个取值形状，
-    /// 于是调用方（或测试）拿哪一个都用同样的方式读这场会话的真相源。
+    /// 于是调用方（或测试）拿哪一个都用同样的方式读这个会话的真相源。
     pub fn events(&self) -> Vec<Event> {
         self.session.events()
     }
 
-    /// 回滚这场会话最近一次 `edit_file`：把它替换掉的字节还原回来，并退掉它的事件
+    /// 回滚这个会话最近一次 `edit_file`：把它替换掉的字节还原回来，并退掉它的事件
     /// （spec §11）。
     ///
     /// `Ok(None)` 表示已经没有可撤销的东西了。手势只在前端存在；这是 `/undo` 调的那个
@@ -1211,7 +1211,7 @@ impl Harness {
         self.channel.clone()
     }
 
-    /// 主循环要的那份**只读快照**（票 15 的接线用）：这一场叫什么、用哪个模型与档位、
+    /// 主循环要的那份**只读快照**（票 15 的接线用）：这个会话叫什么、用哪个模型与档位、
     /// 有哪些技能、目标是什么。
     ///
     /// 会话的 `Harness` 一旦交给宿主表的 task，主循环就不能再直接问它 —— 而解析每一次提交都
@@ -1227,7 +1227,7 @@ impl Harness {
         }
     }
 
-    /// 这场会话**此刻**的五样会话级事实（库层那一份，`.scratch/session-tab/spec.md` §2）。
+    /// 这个会话**此刻**的五样会话级事实（库层那一份，`.scratch/session-tab/spec.md` §2）。
     ///
     /// 与 [`Harness::front_facts`] 不是一回事：那一份是主循环解析提交要的（技能名、目标名），
     /// 这一份是**进流**的那五样。
@@ -1245,14 +1245,14 @@ impl Harness {
         }
     }
 
-    /// 把这场会话**此刻**的五样事实补成一条完整快照（`.scratch/session-tab/spec.md` §2、票 18）。
+    /// 把这个会话**此刻**的五样事实补成一条完整快照（`.scratch/session-tab/spec.md` §2、票 18）。
     ///
     /// 每次装载之后补一条：`SessionStarted` 那五格是开场那一刻的值。
     pub fn record_facts(&mut self) -> Result<(), Error> {
         agent::record_session_facts(&mut self.session, &self.render)
     }
 
-    /// 给这场会话改名（`.scratch/session-tab/spec.md` §4）。空串即撤回。
+    /// 给这个会话改名（`.scratch/session-tab/spec.md` §4）。空串即撤回。
     ///
     /// 它写下的是**一条新事件**，所以改名可重放、也能被 `-c` 带上 —— 标题不是界面里的一份
     /// 临时状态。
@@ -1260,7 +1260,7 @@ impl Harness {
         agent::record_session_title(&mut self.session, &self.render, title)
     }
 
-    /// 这场会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
+    /// 这个会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
     pub fn outputs_dir(&self) -> &std::path::Path {
         self.session.outputs_dir()
     }
@@ -1334,11 +1334,11 @@ impl DiscussionHarness {
     }
 }
 
-/// 这场会话自己那一端的模式循环手势（spec §12；`Shift+Tab`）。
+/// 这个会话自己那一端的模式循环手势（spec §12；`Shift+Tab`）。
 ///
 /// 一个**句柄**，和 [`CancelSignal`] 一样，理由也一样：手势必须在一个钉住的 run future
 /// 借着 harness 的时候够到策略 —— 循环能持有它，因为它是在那次借用之前克隆下来的。一条
-/// 流上的每一场会话都共享它指向的那份策略，所以按一次动的是整场讨论对写的立场，而那就是
+/// 流上的每一个会话都共享它指向的那份策略，所以按一次动的是整次讨论对写的立场，而那就是
 /// 模式该有的东西。
 #[derive(Clone)]
 pub struct ModeCycle {
@@ -1362,7 +1362,7 @@ impl ModeCycle {
     }
 }
 
-/// 编译期断言：一场会话的 harness 要能交给一个 tokio task 拥有 —— 宿主表（票 15）会把每一场
+/// 编译期断言：一个会话的 harness 要能交给一个 tokio task 拥有 —— 宿主表（票 15）会把每一个会话
 /// 会话钉在它自己的任务上，而 `tokio::spawn` 只收 `Send` 的 future
 /// （`.scratch/session-tab/spec.md` §1、票 13）。
 const _: fn() = || {

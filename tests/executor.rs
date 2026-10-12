@@ -4,7 +4,7 @@
 //! 会话，经公开的库 API 驱动，断言 JSONL 事件流、工作区
 //! 与两个渲染 sink。执行者跑在派出它的那个会话的
 //! provider 上（spec §16：模型是继承来的），所以一个 `FakeProvider`
-//! 按调用顺序脚本化了整场嵌套对话。
+//! 按调用顺序脚本化了整个嵌套对话。
 
 mod support;
 
@@ -1561,7 +1561,7 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
 async fn an_executor_inherits_the_outside_read_knob() {
     // `outside_read` 是一条**策略级**的旋钮、与档位正交（`.scratch/workspace-mode` 的
     // spec §2）：执行者沿用派发者的立场，所以父会话把区外读放开之后，`task` 派出的执行者
-    // 也读得到 —— 否则同一场会话里讨论者读得到、执行者读不到。
+    // 也读得到 —— 否则同一次里讨论者读得到、执行者读不到。
     let policy = Policy::for_mode(Mode::Ask).with_outside_read(Decision::Allow);
     let mut fixture = fixture(
         &[("../outside/secret.txt", "peek")],

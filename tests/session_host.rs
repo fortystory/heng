@@ -1,8 +1,8 @@
-//! 宿主表与前台指针：一场会话 = 一个 `Harness` + 一个拥有它的 task
+//! 宿主表与前台指针：一个会话 = 一个 `Harness` + 一个拥有它的 task
 //! （`.scratch/session-tab/spec.md` §1、票 15 的宿主接缝）。
 //!
 //! 这一层用**真的** `Harness` 驱动（假 provider 照脚本应答），因为要证的正是「表里那一行
-//! 真的拥有那一场会话」—— task 收命令、跑回合、把状态写回 `watch`。
+//! 真的拥有那一个会话」—— task 收命令、跑回合、把状态写回 `watch`。
 
 mod support;
 
@@ -20,7 +20,7 @@ use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 use tokio::sync::Notify;
 
-/// 一场挂在 `root` 下的真会话，外加它的日志路径。
+/// 一个会话挂在 `root` 下的真会话，外加它的日志路径。
 struct Hosted {
     harness: Harness,
     log_path: PathBuf,
@@ -96,18 +96,18 @@ async fn a_turn_runs_in_the_task_and_the_state_comes_back_to_idle() {
     let id = SessionId::new("s-1");
     host.get(&id).unwrap().cmd.send(turn("你好")).await.unwrap();
     wait_for_text(&log_path, "收到").await;
-    // 那一场自己的流上落了这一回合：task 真的拥有它。
+    // 那个会话自己的流上落了这一回合：task 真的拥有它。
     let events = read_events(&log_path).unwrap();
     assert!(
         events.iter().any(|event| matches!(
             &event.payload,
             EventPayload::MessageCompleted { text, .. } if text.contains("收到")
         )),
-        "回合的结果落在这一场自己的流上：{events:?}"
+        "回合的结果落在这个会话自己的流上：{events:?}"
     );
 }
 
-/// 等这一场的流上出现一段文本。
+/// 等这个会话的流上出现一段文本。
 ///
 /// 跨 task 的完成信号只有流本身（状态通道会「保最新不丢」，所以一次短回合可能整段错过
 /// `RunningTurn`）—— 于是这里轮询它，而不是猜一个时长。
@@ -173,7 +173,7 @@ async fn a_running_turn_shows_up_in_the_state_and_the_running_count() {
         .unwrap();
     let mut state = host.get(&id).unwrap().state.clone();
     wait_for_entry(&mut state, SessionState::RunningTurn).await;
-    assert_eq!(host.running(), 1, "读数数的是在跑的那几场");
+    assert_eq!(host.running(), 1, "读数数的是在跑的那几个");
 
     // 取消：回合收尾，状态回到空闲。
     host.get(&id).unwrap().cancel.cancel();
@@ -195,7 +195,7 @@ async fn switching_only_moves_the_pointer() {
     host.switch(&SessionId::new("s-2"));
     follow.changed().await.unwrap();
     assert_eq!(host.foreground().as_str(), "s-2");
-    assert_eq!(host.len(), 2, "切换不卸载任何一场");
+    assert_eq!(host.len(), 2, "切换不卸载任何一个会话");
 }
 
 #[tokio::test]
@@ -254,14 +254,14 @@ async fn two_sessions_run_their_own_turns() {
     let first_text = text_of(&first_log);
     let second_text = text_of(&second_log);
     assert!(first_text.contains("一号回答"), "{first_text}");
-    assert!(!first_text.contains("二号回答"), "两场的流不串");
+    assert!(!first_text.contains("二号回答"), "两个的流不串");
     assert!(second_text.contains("二号回答"), "{second_text}");
-    assert!(!second_text.contains("一号回答"), "两场的流不串");
+    assert!(!second_text.contains("一号回答"), "两个的流不串");
 }
 
 #[tokio::test]
 async fn a_read_only_preview_keeps_its_three_states() {
-    // 第二档损坏流（半读）装起来是一场**只读预览**：表里多一个标志，三态不动。
+    // 第二档损坏流（半读）装起来是一个会话**只读预览**：表里多一个标志，三态不动。
     let dir = tempfile::tempdir().unwrap();
     let hosted = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
     let mut host = SessionHost::new(SessionId::new("s-1"));
@@ -290,7 +290,7 @@ async fn the_attach_check_refuses_to_load_what_is_already_hosted() {
     assert_eq!(
         check(&host, &SessionId::new("s-1"), Some(&workspace), &log_path),
         AttachCheck::AlreadyHosted(SessionId::new("s-1")),
-        "已经在表里的一场绝不重走装载：那会把进行中的工具调用读成崩溃遗留"
+        "已经在表里的一个会话绝不重走装载：那会把进行中的工具调用读成崩溃遗留"
     );
 }
 
@@ -341,7 +341,7 @@ impl SessionActor for RecordingActor {
 
 #[tokio::test]
 async fn the_host_hands_commands_to_the_actor_that_owns_the_session() {
-    // 解释器拿到的 harness 就是这一场：它报得出自己的 id，也真的能把回合跑完。
+    // 解释器拿到的 harness 就是这个会话：它报得出自己的 id，也真的能把回合跑完。
     let dir = tempfile::tempdir().unwrap();
     let hosted = session(dir.path(), "s-1", vec![Reply::text("收到")]).await;
     let log_path = hosted.log_path.clone();
@@ -380,7 +380,7 @@ async fn the_front_facts_snapshot_carries_what_the_loop_parses_with() {
     assert_eq!(facts.goal, None);
 }
 
-/// 与 [`session`] 同一场，但走**装载**那条路（`load`）：它会补一条会话事实快照、并判只读。
+/// 与 [`session`] 同一个会话，但走**装载**那条路（`load`）：它会补一条会话事实快照、并判只读。
 async fn load_session(root: &Path, id: &str, replies: Vec<Reply>) -> (heng::Loaded, PathBuf) {
     let session_dir = root.join(id);
     let workspace = root.join("workspace");
@@ -470,7 +470,7 @@ async fn a_half_read_stream_loads_as_a_read_only_preview() {
 
 #[tokio::test]
 async fn loading_a_second_session_hosts_it_and_moves_the_foreground() {
-    // 票 20 装载那条路的机制：不在表里的一场走 `load`（票 18 的共用路径）装起来、入表、
+    // 票 20 装载那条路的机制：不在表里的一个会话走 `load`（票 18 的共用路径）装起来、入表、
     // 切前台 —— 而**旧的留在表里不卸载**。
     let dir = tempfile::tempdir().unwrap();
     let first = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
@@ -485,7 +485,10 @@ async fn loading_a_second_session_hosts_it_and_moves_the_foreground() {
     host.switch(&SessionId::new("s-2"));
     assert_eq!(host.foreground().as_str(), "s-2");
     assert_eq!(host.len(), 2, "旧的留在表里");
-    assert!(host.contains(&SessionId::new("s-1")), "切走的那一场不卸载");
+    assert!(
+        host.contains(&SessionId::new("s-1")),
+        "切走的那个会话不卸载"
+    );
 }
 
 #[tokio::test]
@@ -550,17 +553,17 @@ async fn closing_the_last_session_empties_the_host_and_a_new_one_comes_back() {
     let mut host = SessionHost::new(SessionId::new("s-1"));
     host.adopt(first.harness, workspace.clone()).unwrap();
 
-    // 唯一一场永远是前台，所以规则上关不掉；直接卸下来就是「关掉最后一场」。
+    // 唯一一个会话永远是前台，所以规则上关不掉；直接卸下来就是「关掉最后一个会话」。
     host.close_with(&SessionId::new("s-1"), SessionCommand::Close)
         .await
         .unwrap();
-    assert!(host.is_empty(), "关掉最后一场就是空宿主");
+    assert!(host.is_empty(), "关掉最后一个会话就是空宿主");
 
-    // 空宿主里再新建一场回来（票 21）：加载一场空会话、入表、切前台。
+    // 空宿主里再新建一个会话回来（票 21）：加载一个空会话、入表、切前台。
     let (fresh, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
     host.adopt(fresh.harness, workspace).unwrap();
     host.switch(&SessionId::new("s-2"));
-    assert_eq!(host.len(), 1, "新建之后表里又有一场");
+    assert_eq!(host.len(), 1, "新建之后表里又有一个会话");
     assert_eq!(host.foreground().as_str(), "s-2");
 }
 
@@ -574,10 +577,10 @@ async fn the_exit_gate_refuses_while_anything_is_unfinished() {
     let mut host = SessionHost::new(SessionId::new("s-1"));
     host.adopt(first.harness, workspace.clone()).unwrap();
 
-    // 一场都不忙：可以退。
+    // 一个会话都不忙：可以退。
     assert_eq!(exit_gate(&host), ExitGate::Clear);
 
-    // 后台那一场跑起来：闸门拦下，并指向它。
+    // 后台那个会话跑起来：闸门拦下，并指向它。
     let opened = Arc::new(Notify::new());
     let (busy, _) = load_session(
         dir.path(),
@@ -604,7 +607,7 @@ async fn the_exit_gate_refuses_while_anything_is_unfinished() {
             count: 1,
             first: SessionId::new("s-2"),
         },
-        "拦下并指向在跑的那一场"
+        "拦下并指向在跑的那个会话"
     );
 
     // 取消之后放行。

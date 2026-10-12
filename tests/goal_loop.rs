@@ -25,9 +25,9 @@ use heng::tools::{PathLocks, builtin, todo};
 use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 
-// --- 一场会话 --------------------------------------------------------------
+// --- 一个会话 --------------------------------------------------------------
 
-/// 一场真会话，外加它那份 JSONL 的路径 —— `sessions replay` 读的就是它。
+/// 一个真会话，外加它那份 JSONL 的路径 —— `sessions replay` 读的就是它。
 struct Session {
     harness: Harness,
     log_path: PathBuf,
@@ -364,7 +364,7 @@ fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
         todo::Status::Pending
     );
 
-    // 同一场会话里按 seq（大的后落地）：与它们在调用方那边的顺序无关。
+    // 同一个会话里按 seq（大的后落地）：与它们在调用方那边的顺序无关。
     let calls = [
         call(at(10), 9, items(&[("01", "一", "completed")])),
         call(at(10), 1, items(&[("01", "一", "pending")])),
@@ -372,7 +372,7 @@ fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
     assert_eq!(
         progress(&manifest, &calls).statuses["01"],
         todo::Status::Completed,
-        "会话 10 点这一场里，seq 9 是后落地的那份列表"
+        "会话 10 点这个会话里，seq 9 是后落地的那份列表"
     );
     let calls = [
         call(at(10), 1, items(&[("01", "一", "completed")])),
@@ -383,7 +383,7 @@ fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
         todo::Status::Pending
     );
 
-    // 时间打平时（同一秒铸出的两场会话）仍然有确定的先后。
+    // 时间打平时（同一秒铸出的两个会话）仍然有确定的先后。
     let tie = [call(at(10), 1, items(&[("01", "一", "completed")]))];
     assert!(progress(&manifest, &tie).is_complete());
 }
@@ -839,7 +839,7 @@ fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
     );
 }
 
-/// 一场上下文已经超过八成、但一个 token 都没花的会话：窗口小、预算无穷。
+/// 一个会话上下文已经超过八成、但一个 token 都没花的会话：窗口小、预算无穷。
 async fn nearly_full_session(root: &Path) -> Session {
     use heng::provider::capability::caps_for;
 
@@ -874,7 +874,7 @@ async fn the_judgement_reads_the_window_and_not_the_budget() {
         ThresholdStep::Compact
     );
 
-    // 判据与预算无关：这场会话一个 token 都还没花（两者混起来是本文件要防的那个错）。
+    // 判据与预算无关：这个会话一个 token 都还没花（两者混起来是本文件要防的那个错）。
     let spent = heng::events::total_usage(&session.events()).total_tokens();
     assert_eq!(spent, 0, "百分比看的是窗口，不是累计 token");
 
@@ -974,7 +974,7 @@ async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the
         "当前会话已经换了"
     );
 
-    // `--continue` 打开的是**最新**的那一个 —— 也就是刚开的这场。
+    // `--continue` 打开的是**最新**的那一个 —— 也就是刚开的这个会话。
     let latest = store.latest(&root.join("workspace")).unwrap().unwrap();
     assert_eq!(latest.id, stored.id);
 
@@ -1287,7 +1287,7 @@ async fn a_rollover_does_not_carry_the_goal_budget_into_an_untargeted_session() 
 
 // --- 崩溃恢复与主动停（§10） ------------------------------------------------
 
-/// 一场会话跑过的东西：一个归属、一个回合，以及（可选的）一条收尾。
+/// 一个会话跑过的东西：一个归属、一个回合，以及（可选的）一条收尾。
 async fn session_with_ending(root: &Path, id: &str, ending: Option<&str>) -> Session {
     let mut session = session_with(
         root,

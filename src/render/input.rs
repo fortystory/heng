@@ -47,7 +47,7 @@ pub struct QuestionnaireRequest {
 ///
 /// 与 [`Ask`](ConsoleRequest::Ask) 同形的**一问一答**通道，只是答案是一个下标而不是一个许可。
 /// 走自己的那一格而不是复用问卷：问卷是**模型发起**的（答完它那条工具调用就结束了），选择
-/// 器是**人发起**的会话属性（答完回循环，改这一场会话用什么模型）。这两件事的生命周期不同，
+/// 器是**人发起**的会话属性（答完回循环，改这个会话用什么模型）。这两件事的生命周期不同，
 /// 共用一条通道会让其中一个悬着等人回答。
 #[derive(Debug)]
 pub struct PickerRequest {
@@ -67,7 +67,7 @@ pub struct PickerRequest {
 pub struct PickerOption {
     pub label: String,
     pub detail: String,
-    /// 当前这一场会话用的就是它。
+    /// 当前这个会话用的就是它。
     pub current: bool,
     pub enabled: bool,
 }
@@ -158,31 +158,31 @@ pub enum ConsoleRequest {
         /// 新的发言者名册（spec §4）：名字是 provider profile 的名字，换厂商就换名。
         speakers: Vec<String>,
     },
-    /// 换到另一场会话（`.scratch/session-tab/spec.md` §6）。
+    /// 换到另一个会话（`.scratch/session-tab/spec.md` §6）。
     ///
-    /// 带的是那一场的**会话事实**与它的事件流**快照**：渲染器的投影整块换，然后按这份快照
+    /// 带的是那个会话的**会话事实**与它的事件流**快照**：渲染器的投影整块换，然后按这份快照
     /// 重建。切换与启动那次重放共用同一套机制 —— 差别只在收尾不插「以下是历史」那条分隔行。
     SwitchSession {
         facts: super::tui::SessionFacts,
         events: Vec<Event>,
     },
-    /// 一场被从宿主表里卸下来了，以及卸完之后表空不空（票 21）。
+    /// 一个会话被从宿主表里卸下来了，以及卸完之后表空不空（票 21）。
     ///
-    /// 渲染器要它做三件事：删掉轻状态表里那一行、把页顶读数改成宿主表的场数、空宿主时禁用
+    /// 渲染器要它做三件事：删掉轻状态表里那一行、把页顶读数改成宿主表的会话数、空宿主时禁用
     /// 输入区。
     SessionClosed {
         id: crate::events::SessionId,
         empty: bool,
     },
-    /// 宿主表现在有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
+    /// 宿主表现在有几个、其中几个在跑（票 21 的 `已装载 N 个`、票 22 的 `M 个在跑`）。
     HostCount { sessions: usize, running: usize },
-    /// 宿主表里此刻装着**哪几场**（票 29）。
+    /// 宿主表里此刻装着**哪几个**（票 29）。
     ///
     /// 会话页上那三档标题色靠它：当前前台、已在表里（切过去零延迟、`关闭`对它可用）、只在盘上
-    /// （切过去要先装载）。`HostCount` 只给两个数，说不出「是哪几场」。
+    /// （切过去要先装载）。`HostCount` 只给两个数，说不出「是哪几个」。
     Hosted { ids: Vec<crate::events::SessionId> },
-    /// **退出被闸门拒了**（票 23 的闸门、票 28 的双击）：还有 `count` 场没收尾，而 `first` 是
-    /// 第一场 —— 提示行那句话的可点入口就指它。
+    /// **退出被闸门拒了**（票 23 的闸门、票 28 的双击）：还有 `count` 个会话没收尾，而 `first` 是
+    /// 第一个会话 —— 提示行那句话的可点入口就指它。
     ///
     /// 它顺带作废那把退出的举手：被拒之后下一次按下仍然只是第一下，于是人看见的是「第一下
     /// 举手 → 第二下被拒 → 再按还是第一下」，而不是「第二下之后直接退」。
@@ -190,17 +190,17 @@ pub enum ConsoleRequest {
         count: usize,
         first: crate::events::SessionId,
     },
-    /// 场外通知那两个数（票 25）：**后台**待答几场、**后台**刚跑完几场。
+    /// 后台通知那两个数（票 25）：**后台**待答几个、**后台**刚跑完几个。
     TitleAttention { waiting: usize, finished: usize },
     /// 提示行那句话有**可点入口**（票 23 的退出闸门）：把会话页交到前台、焦点落在这一行上 ——
     /// 点它（或按 Enter）就切过去。
     Attention { id: crate::events::SessionId },
-    /// 一场会话的忙闲（票 22）。
+    /// 一个会话的忙闲（票 22）。
     SessionState {
         id: crate::events::SessionId,
         state: crate::session::host::SessionState,
     },
-    /// 这一场是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
+    /// 这个会话是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
     ///
     /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
     /// 路径，得由它自己挡住。
@@ -223,7 +223,7 @@ pub enum ConsoleRequest {
     /// `.scratch/interjection-flow` 那条种子）：键位照旧响应，只是不落字。知道这件事的只有
     /// 循环，所以它自己说。
     Muted { muted: bool },
-    /// 循环是不是**在一次运行里面** —— 一个回合，或它正在驱动的一场讨论。
+    /// 循环是不是**在一次运行里面** —— 一个回合，或它正在驱动的一次讨论。
     ///
     /// 知道这件事的只有循环，所以它自己说，而不是让前端去推断（spec §6）。从渲染流上推
     /// 断，对不是回合的任何东西都失效 —— 合成器那次单一调用会吐增量，却不结束任何
@@ -252,21 +252,21 @@ pub enum FrontEndEvent {
     Quit,
     /// 用户有过一次输入 —— 未读的「跑完」到此为止（`.scratch/session-tab/spec.md` §7、票 25）。
     ///
-    /// 渲染器只在**真有未读**（标题上写着 `N 场跑完`）时才发它：这样既守住了「未读寿命到下一次
+    /// 渲染器只在**真有未读**（标题上写着 `N 个跑完`）时才发它：这样既守住了「未读寿命到下一次
     /// 输入为止」，又不会让每一次按键都往上游加一件事。
     AttentionSeen,
-    /// 会话页页顶点了 `新建`：开一场空会话（`.scratch/session-tab/spec.md` §3、票 21）。
+    /// 会话页页顶点了 `新建`：开一个空会话（`.scratch/session-tab/spec.md` §3、票 21）。
     NewSession,
-    /// 会话页页顶点了 `关闭`：把焦点行那一场从内存里卸下来（票 21）。
+    /// 会话页页顶点了 `关闭`：把焦点行那个会话从内存里卸下来（票 21）。
     CloseSession { id: crate::events::SessionId },
-    /// 会话页上点了**别的**一场：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
+    /// 会话页上点了**别的**一个会话：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
     ///
     /// 渲染层只上报「有人点了这一行」—— 能不能切（cwd 还在不在、流坏没坏、在不在宿主表里）
     /// 是循环那一侧的事。
     OpenSession { id: crate::events::SessionId },
     /// 会话页里改完名（票 17 的单键入口 `r`）：把新标题交给循环去落流。
     ///
-    /// 渲染层不写事件流 —— 它连会话目录都不知道。所以它只上报「有人给这一场起了这个名字」。
+    /// 渲染层不写事件流 —— 它连会话目录都不知道。所以它只上报「有人给这个会话起了这个名字」。
     SessionTitled {
         id: crate::events::SessionId,
         title: String,
@@ -309,52 +309,52 @@ impl ConsoleHandle {
     ///
     /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
     /// 是会话的技能，所以菜单读起来的顺序就是循环会尝试它们的顺序。
-    /// 换到另一场会话：把这一场的事实与事件流快照推过去，渲染器据此整块换成它。
+    /// 换到另一个：把这个会话的事实与事件流快照推过去，渲染器据此整块换成它。
     pub fn switch_session(&self, facts: super::tui::SessionFacts, events: Vec<Event>) {
         let _ = self
             .requests
             .send(ConsoleRequest::SwitchSession { facts, events });
     }
 
-    /// 说一场被卸下来了，以及表空不空。
+    /// 说一个会话被卸下来了，以及表空不空。
     pub fn session_closed(&self, id: crate::events::SessionId, empty: bool) {
         let _ = self
             .requests
             .send(ConsoleRequest::SessionClosed { id, empty });
     }
 
-    /// 说宿主表现在有几场、其中几场在跑。
+    /// 说宿主表现在有几个、其中几个在跑。
     pub fn host_count(&self, sessions: usize, running: usize) {
         let _ = self
             .requests
             .send(ConsoleRequest::HostCount { sessions, running });
     }
 
-    /// 说宿主表里此刻装着**哪几场**（票 29）：会话页那三档标题色靠它。
+    /// 说宿主表里此刻装着**哪几个**（票 29）：会话页那三档标题色靠它。
     pub fn hosted(&self, ids: Vec<crate::events::SessionId>) {
         let _ = self.requests.send(ConsoleRequest::Hosted { ids });
     }
 
-    /// 说退出被闸门拒了，以及第一场没收尾的是谁（票 28）。
+    /// 说退出被闸门拒了，以及第一个会话没收尾的是谁（票 28）。
     pub fn exit_blocked(&self, count: usize, first: crate::events::SessionId) {
         let _ = self
             .requests
             .send(ConsoleRequest::ExitBlocked { count, first });
     }
 
-    /// 说场外通知那两个数。
+    /// 说后台通知那两个数。
     pub fn title_attention(&self, waiting: usize, finished: usize) {
         let _ = self
             .requests
             .send(ConsoleRequest::TitleAttention { waiting, finished });
     }
 
-    /// 说「去会话页看这一场」。
+    /// 说「去会话页看这个会话」。
     pub fn attention(&self, id: crate::events::SessionId) {
         let _ = self.requests.send(ConsoleRequest::Attention { id });
     }
 
-    /// 说一场会话现在忙不忙。
+    /// 说一个会话现在忙不忙。
     pub fn session_state(
         &self,
         id: crate::events::SessionId,
@@ -365,7 +365,7 @@ impl ConsoleHandle {
             .send(ConsoleRequest::SessionState { id, state });
     }
 
-    /// 说这一场是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
+    /// 说这个会话是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
     pub fn read_only(&self, read_only: bool) {
         let _ = self.requests.send(ConsoleRequest::ReadOnly { read_only });
     }
@@ -610,11 +610,11 @@ pub fn spawn_plain_console_with(
                 }
                 // 会话页只在 TUI 左栏；plain 前端连那一页都没有。
                 ConsoleRequest::Sessions { .. } => {}
-                // 换会话也是 TUI 左栏的事：plain 前端一个进程只跑一场。
+                // 换会话也是 TUI 左栏的事：plain 前端一个进程只跑一个会话。
                 ConsoleRequest::SwitchSession { .. } => {}
                 // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
                 ConsoleRequest::ReadOnly { .. } => {}
-                // 多会话那几件同理：plain 一个进程只跑一场。
+                // 多会话那几件同理：plain 一个进程只跑一个会话。
                 ConsoleRequest::SessionClosed { .. }
                 | ConsoleRequest::HostCount { .. }
                 | ConsoleRequest::Hosted { .. }

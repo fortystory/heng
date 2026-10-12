@@ -1,7 +1,7 @@
 //! `Session` 值：唯一持有可变状态的结构。
 //!
 //! 它持有事件流句柄、会话身份、注入的配置、工具表、共享的路径锁、这个 agent 的读集合、这个 agent
-//! 的私有身份，以及会话的权限策略。名册不在这里：一场讨论的讨论者各自是一个 `Session`，并排组装
+//! 的私有身份，以及会话的权限策略。名册不在这里：一次讨论的讨论者各自是一个 `Session`，并排组装
 //! 并共用一个日志，而执行者是一个嵌套 `Session`，它的事件仍然追加到父级的流上，工具表与路径锁也
 //! 是同一批值。
 //!
@@ -9,7 +9,7 @@
 //! 以 `agent` 层是事件流的唯一写者；工具、钩子、权限与讨论都写不了。
 //!
 //! [`store`] 是它在磁盘上的对应物：会话目录住在哪里、`--continue` 怎么找到它、`prune` 怎么删掉
-//! 它。[`ledger`] 读的正是这些目录，用来回答单场会话答不了的那个问题：某个 UTC 自然日花掉了厂商
+//! 它。[`ledger`] 读的正是这些目录，用来回答单个会话答不了的那个问题：某个 UTC 自然日花掉了厂商
 //! 滚动配额窗口的多少（spec §17）。
 
 use std::path::{Path, PathBuf};
@@ -45,21 +45,21 @@ use crate::permissions::{Asker, Mode, Policy, Rule};
 use crate::questions::UserQuestions;
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 
-/// 组装一场会话所需的全部东西。它是注入的，库从不自己从环境里读：权限策略、权限门答 `Ask` 时用
+/// 组装一个会话所需的全部东西。它是注入的，库从不自己从环境里读：权限策略、权限门答 `Ask` 时用
 /// 的询问端口，以及用户的家目录（只有 `rm` 断路器读它）都从这里进来。
 ///
-/// 工具表与策略以共享句柄的形式进来，因为一场讨论同时有不止一场会话（spec §15）：两个讨论者必须
+/// 工具表与策略以共享句柄的形式进来，因为一次讨论同时有不止一个会话（spec §15）：两个讨论者必须
 /// 派发进**同一批**工具、用**同一批**逐路径锁，而其中一个挣到的会话级许可必须到达另一个。
 pub struct SessionParts {
     pub id: SessionId,
     pub cwd: PathBuf,
     pub log: EventLog,
     pub config: SessionConfig,
-    /// 这场会话的工具表。
+    /// 这个会话的工具表。
     pub tools: Arc<Registry>,
     /// 逐路径写锁。**同一张**表必须到达每个执行者，否则写互斥就成了按会话算，也就根本不算锁。
     pub locks: PathLocks,
-    /// 这场会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
+    /// 这个会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
     pub outputs_dir: PathBuf,
     /// 会话的权限策略：一个模式加上它的规则。
     pub policy: Arc<Mutex<Policy>>,
@@ -74,7 +74,7 @@ pub struct SessionParts {
     pub hook: Option<Arc<dyn Hook>>,
     /// 用户的家目录，已知时。
     pub home: Option<PathBuf>,
-    /// 组装时发现的技能（spec §9）。与每一场嵌套会话共享，所以执行者看到的名录和它的父级一样。
+    /// 组装时发现的技能（spec §9）。与每一个嵌套会话共享，所以执行者看到的名录和它的父级一样。
     pub skills: Arc<Skills>,
     /// 这个 agent 的私有身份：给它的那条 `system` 消息，以及关于它、却永不进入事件流的那一件事
     /// （spec §15）。讨论的协议指令正住在这里，好让一轮的 `messages` 仍能从流重算出来。
@@ -93,11 +93,11 @@ pub struct Session {
     /// 这个 agent 读过的路径。从不继承：读权限是每个 agent 各自的。
     read_set: ReadSet,
     /// 会话的权限策略。一个值，绝不是事件：`--continue` 会回到配置里的那一档（spec §12）。共享，
-    /// 因为某个讨论者回合里挣到的会话许可是一件属于整场会话的事实。
+    /// 因为某个讨论者回合里挣到的会话许可是一件属于整个会话的事实。
     policy: Arc<Mutex<Policy>>,
     /// 询问端口，与任何嵌套会话共享，好让执行者通过同一个渲染器提问。
     asker: Option<Arc<dyn Asker>>,
-    /// 问卷端口，与任何兄弟会话共享，理由与询问端口相同：同一个键盘为整场会话作答。
+    /// 问卷端口，与任何兄弟会话共享，理由与询问端口相同：同一个键盘为整个会话作答。
     questions: Option<Arc<dyn UserQuestions>>,
     /// 钩子策略，与任何嵌套会话共享，好让执行者逃不出约束它父级的那个策略（spec §16）。
     hook: Option<Arc<dyn Hook>>,
@@ -149,7 +149,7 @@ impl Session {
         }
     }
 
-    /// 这场会话事件的一份快照，按序。
+    /// 这个会话事件的一份快照，按序。
     ///
     /// 快照而不是借用：日志是共享句柄，两个讨论者的回合可能在两次读之间往它上面追加，没有任何借用
     /// 能跨越那段时间。
@@ -170,7 +170,7 @@ impl Session {
         &self.cwd
     }
 
-    /// 把「别处已经花掉的 token」填进这场会话的额度口径
+    /// 把「别处已经花掉的 token」填进这个会话的额度口径
     /// （`.scratch/goal-loop/spec.md` §8）：翻页开的新会话带着同一个累计继续。
     pub fn carry_usage(&mut self, tokens: u64) {
         self.config.carried_tokens = tokens;
@@ -180,7 +180,7 @@ impl Session {
         &self.config
     }
 
-    /// 会话中途换模型与档位：换掉这一场的配置，其余（流、工具表、策略、读集、取消信号）原样。
+    /// 会话中途换模型与档位：换掉这个会话的配置，其余（流、工具表、策略、读集、取消信号）原样。
     ///
     /// **只有 [`crate::Harness`] 调它** —— 它是 `/model`、`/effort`、点状态行与快捷键四个入口
     /// 的共同落点，渲染器碰不到，也不该碰（spec §2）。字段保持私有而不改成 `pub`，是为了让
@@ -195,7 +195,7 @@ impl Session {
         self.config = config;
     }
 
-    /// 把这场会话已经定下来的沙箱那一格带进一份**新造**的配置里。
+    /// 把这个会话已经定下来的沙箱那一格带进一份**新造**的配置里。
     ///
     /// 沙箱是会话的事实，不是每个 agent、也不是每次换模型的（`.scratch/sandbox/spec.md` §3）：
     /// 组装期探过一次就不再探第二次（库不读进程环境）。而 `Config::session_config` 造出来的每
@@ -208,7 +208,7 @@ impl Session {
         }
     }
 
-    /// 这场会话在文本进入事件流的路上会打码掉的那些值（spec §20）。
+    /// 这个会话在文本进入事件流的路上会打码掉的那些值（spec §20）。
     ///
     /// 由 [`SessionConfig`] 持有，因为 `Config::session_config` 是配置变成注入值的唯一一处；这个
     /// 访问器让唯一写入路径与离开 harness 的文本都能拿到它，而不必亲自走进配置的字段里。
@@ -216,7 +216,7 @@ impl Session {
         &self.config.redactor
     }
 
-    /// 用这场会话的值给 `text` 打码（spec §20）。
+    /// 用这个会话的值给 `text` 打码（spec §20）。
     ///
     /// 离开 harness 的文本 —— 即将落盘的工具结果、一个回合的收尾、合成器的产出 —— 走这里、而不是
     /// 走流的写入路径，这样两边携带的是同一份文本。
@@ -228,7 +228,7 @@ impl Session {
         self.log.path()
     }
 
-    /// 这场会话的工具表。
+    /// 这个会话的工具表。
     pub fn tools(&self) -> &Registry {
         &self.tools
     }
@@ -241,7 +241,7 @@ impl Session {
         Arc::clone(&self.tools)
     }
 
-    /// 这场会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
+    /// 这个会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
     pub fn outputs_dir(&self) -> &Path {
         &self.outputs_dir
     }
@@ -267,7 +267,7 @@ impl Session {
         self.policy.lock().expect("策略互斥锁中毒").push(rule);
     }
 
-    /// 这场会话当前跑在哪一档。
+    /// 这个会话当前跑在哪一档。
     pub fn mode(&self) -> Mode {
         self.policy.lock().expect("策略互斥锁中毒").mode()
     }
@@ -289,8 +289,8 @@ impl Session {
     /// 钩子、家目录与发现到的技能 —— 只有 agent 自己的值不同（它的模型、它的生成参数、它的私有身
     /// 份）。
     ///
-    /// 这正是讨论能**跑在一场活会话上**的原因（spec §15）：它的讨论者是用户所在那场会话的兄弟，所
-    /// 以它们的投影把那场会话的回合变成 `user` 消息，而它们的轮次追加到同一份流上。读集合刻意
+    /// 这正是讨论能**跑在一个活会话上**的原因（spec §15）：它的讨论者是用户所在那个会话的兄弟，所
+    /// 以它们的投影把那个会话的回合变成 `user` 消息，而它们的轮次追加到同一份流上。读集合刻意
     /// **不**继承 —— 读权限是每个 agent 各自的（spec §12），而讨论者什么都没读过。
     ///
     /// 沙箱那一格经 [`Self::inherit_sandbox`] 带过去：它是**会话**的事实，不是每个 agent
@@ -315,12 +315,12 @@ impl Session {
         })
     }
 
-    /// 询问端口，如果这场会话有交互式应答者。
+    /// 询问端口，如果这个会话有交互式应答者。
     pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
         self.asker.as_ref()
     }
 
-    /// 问卷端口，如果这场会话能把模型发起的提问交给用户（spec §7）。循环把它拷进每次调用的派发上
+    /// 问卷端口，如果这个会话能把模型发起的提问交给用户（spec §7）。循环把它拷进每次调用的派发上
     /// 下文中，`ask_user_question` 工具在那里读它。
     pub fn questions(&self) -> Option<&Arc<dyn UserQuestions>> {
         self.questions.as_ref()

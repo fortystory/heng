@@ -32,7 +32,7 @@ issue、一张工单、一份远端数据。MCP（Model Context Protocol）就�
 - **连接层**（`src/mcp/rmcp_client.rs`）是唯一碰 `rmcp` 的地方。
 
 `McpService` 在组装期建、随会话活；连接关不关走 `Drop` 兜底（`close` 要 `&mut self`，而工具只拿
-`&self`）。**不自动重连**：server 崩了同一场会话里不再重试，重开会话才重连。
+`&self`）。**不自动重连**：server 崩了同一个里不再重试，重开会话才重连。
 
 ## 开关与配置
 
@@ -164,7 +164,7 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
 - `jira`（stdio）：连不上 —— 起不了 server 进程：No such file or directory
 ```
 
-- 它**进流、可重放**，也投影成一条 `user` 消息：模型因此知道这一场会话手里有哪些外部 server。
+- 它**进流、可重放**，也投影成一条 `user` 消息：模型因此知道这个会话手里有哪些外部 server。
 - 转录里那行**点得开**（`▸` 那一族），详情就是同一段数据。
 - **工具清单不在里面** —— 那是 `mcp_list` 现问的事，问了既贵又会漂。
 - `env` / `headers` 的**值**也不在里面（只报键名与条数）：那是秘密。

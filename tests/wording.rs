@@ -117,10 +117,10 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::session_receipt("20260922T101500Z-ab12"),
         "会话 20260922T101500Z-ab12；接着跑：heng -c 20260922T101500Z-ab12"
     );
-    // 按 id 续上了一场面**别的工作区**的会话：横幅之前先说一句目录跟着它走了。
+    // 按 id 续上了一个**别的工作区**的会话：横幅之前先说一句目录跟着它走了。
     assert_eq!(
         wording::session_followed("/home/forty/other"),
-        "接着跑的是 /home/forty/other 里的那场会话"
+        "接着跑的是 /home/forty/other 里的那个会话"
     );
     // `discuss` 拒绝启动的那两条路都会说清该改怎么做。
     assert!(
@@ -690,10 +690,10 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
 
 #[test]
 fn the_exit_hint_separates_cancelling_from_exiting_and_asks_twice_to_leave() {
-    // 多会话之后 `Ctrl-C` 只取消眼前那一场当前的动作、**永不退出**，`Ctrl-D` 才是退出请求
+    // 多会话之后 `Ctrl-C` 只取消眼前那个会话当前的动作、**永不退出**，`Ctrl-D` 才是退出请求
     // （`.scratch/session-tab/spec.md` §1、票 23）。出口那一段必须把这两件事分开说 —— 它曾经
     // 把两个键并排写成「ctrl-c/ctrl-d 退出」，于是读的人按着一个写着「退出」的键，得到的是一句
-    // 「这一场现在没有在跑的东西」（2026-10-12 维护者报告）。
+    // 「这个会话现在没有在跑的东西」（2026-10-12 维护者报告）。
     assert_eq!(wording::EXIT_HINT_IDLE, "ctrl-d 退出");
     assert_eq!(wording::EXIT_HINT_BUSY, "ctrl-c 取消 · ctrl-d 退出");
     assert_eq!(wording::exit_hint(false, false), wording::EXIT_HINT_IDLE);
@@ -717,7 +717,7 @@ fn the_exit_hint_separates_cancelling_from_exiting_and_asks_twice_to_leave() {
         "空闲那一档不宣传取消"
     );
 
-    // **`Ctrl-D` 的第一下只举手**（票 28）：多会话之后误触的代价是一次按掉几场，于是出口那一段
+    // **`Ctrl-D` 的第一下只举手**（票 28）：多会话之后误触的代价是一次按掉几个，于是出口那一段
     // 换成「再按一次」。四档各有一句，而举手换掉的是**那一段**、不是往后追加。
     assert_eq!(wording::EXIT_HINT_IDLE_RAISED, "再按一次 ctrl-d 退出");
     assert_eq!(
@@ -1267,7 +1267,7 @@ fn the_status_row_gives_up_the_model_with_the_effort_then_the_mode_and_never_its
     let model = "claude-sonnet-4-5";
     let share = wording::context_share_value(Some(12_345), 200_000);
     // 五段，降级顺序是**先丢模型 + 档位、再丢模式，最后剩「上下文 + 状态词」**
-    // —— 模型与档位是同一件事的两半（这一场会话由谁答、答多深），所以它们同生共死；
+    // —— 模型与档位是同一件事的两半（这个会话由谁答、答多深），所以它们同生共死；
     // 「在跑」最后才丢（spec §11、§12）。
     // 模型与档位之间**不**放 `┆` —— 那会把同一格说成两件事，所以它们之间是段内的 `·`。
     assert_eq!(
@@ -1773,7 +1773,7 @@ fn the_title_segment_takes_the_first_thing_that_holds() {
     );
     assert_eq!(
         word(TitleState::WaitingBackground(2)).as_deref(),
-        Some("2 场待答")
+        Some("2 个待答")
     );
     // 前台重放压过前台待答与在跑。
     assert_eq!(title_state(0, true, true, 3, true), TitleState::Replaying);
@@ -1786,7 +1786,7 @@ fn the_title_segment_takes_the_first_thing_that_holds() {
     );
     assert_eq!(
         word(TitleState::FinishedBackground(3)).as_deref(),
-        Some("3 场跑完")
+        Some("3 个跑完")
     );
     // 前台在跑。
     assert_eq!(title_state(0, false, false, 0, true), TitleState::Running);

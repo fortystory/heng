@@ -1,4 +1,4 @@
-//! 左栏第一签「会话」：页签、行格式、标记、`＋N 场`、降级阶梯、空态与页内键位
+//! 左栏第一签「会话」：页签、行格式、标记、`＋N 个会话`、降级阶梯、空态与页内键位
 //! （`.scratch/session-tab/spec.md` §3）。
 //!
 //! 帧级断言照 `tests/render_layout.rs` 的写法：`TestBackend` 上画一帧，把屏幕文本读回来。
@@ -143,7 +143,7 @@ fn the_session_tab_comes_first_and_lists_the_history() {
     assert!(text.contains("2 分钟前"), "宽档的时间措辞：{text}");
     assert!(text.contains("1 小时前"), "90 分钟就是 1 小时前：{text}");
     // 页顶读数与右端两个入口。
-    assert!(text.contains("2 场"), "页顶左端是读数：{text}");
+    assert!(text.contains("已装载 2 个"), "页顶左端是读数：{text}");
     assert!(text.contains(wording::SESSION_NEW), "右端有新建：{text}");
     assert!(text.contains(wording::SESSION_CLOSE), "右端有关闭：{text}");
 }
@@ -160,14 +160,20 @@ fn the_tab_bar_puts_the_session_label_before_the_others() {
 #[test]
 fn the_rows_carry_their_marks() {
     let mut state = fresh();
-    let mut front = row("s-front", "当前这一场", "heng", SessionMark::Idle, 1);
+    let mut front = row("s-front", "当前这个会话", "heng", SessionMark::Idle, 1);
     front.foreground = true;
     load(
         &mut state,
         vec![
             front,
-            row("s-wait", "等我答的一场", "heng", SessionMark::Awaiting, 3),
-            row("s-run", "在跑的一场", "heng", SessionMark::Running, 5),
+            row(
+                "s-wait",
+                "等我答的一个会话",
+                "heng",
+                SessionMark::Awaiting,
+                3,
+            ),
+            row("s-run", "在跑的一个会话", "heng", SessionMark::Running, 5),
         ],
         3,
     );
@@ -179,8 +185,8 @@ fn the_rows_carry_their_marks() {
     assert!(text.contains('●'), "活跃那一行带 `●`：{text}");
     // 页顶读数的 `M` 只数在跑的。
     assert!(
-        text.contains("3 场 · 1 场在跑"),
-        "读数只数在跑的那几场：{text}"
+        text.contains("已装载 3 个 · 1 个在跑"),
+        "读数只数在跑的那几个：{text}"
     );
 }
 
@@ -188,18 +194,24 @@ fn the_rows_carry_their_marks() {
 fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
     let mut state = fresh();
     // 启动那一份 listing 说第一行是前台 —— 它只在启动扫过一次，之后不再重来。
-    let mut snapshot = row("01J8ZQ4K7M", "启动那一场", "heng", SessionMark::Idle, 5);
+    let mut snapshot = row("01J8ZQ4K7M", "启动那个会话", "heng", SessionMark::Idle, 5);
     snapshot.foreground = true;
     load(
         &mut state,
         vec![
             snapshot,
-            row("s-other", "刚切过去的一场", "heng", SessionMark::Idle, 1),
+            row(
+                "s-other",
+                "刚切过去的一个会话",
+                "heng",
+                SessionMark::Idle,
+                1,
+            ),
         ],
         2,
     );
 
-    // 切到第二场：列表快照不动，换的是渲染侧那个前台（`SwitchSession`）。
+    // 切到第二个会话：列表快照不动，换的是渲染侧那个前台（`SwitchSession`）。
     let mut switched = facts();
     switched.session_id = "s-other".to_owned();
     state.request(ConsoleRequest::SwitchSession {
@@ -211,12 +223,12 @@ fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
     let frame = buffer(120, 24, &mut state);
     let (_, marked) = find_cell(&frame, 120, 24, "▍");
     assert!(
-        row_text(&frame, marked, 120).contains("刚切过去的一场"),
+        row_text(&frame, marked, 120).contains("刚切过去的一个会话"),
         "`▍` 跟着切换走，不停在启动那一份 listing 上"
     );
     for y in 0..24 {
         let line = row_text(&frame, y, 120);
-        if line.contains("启动那一场") {
+        if line.contains("启动那个会话") {
             assert!(!line.contains('▍'), "旧前台不再带 `▍`：{line}");
         }
     }
@@ -227,14 +239,20 @@ fn the_more_line_counts_what_never_showed() {
     let mut state = fresh();
     load(
         &mut state,
-        vec![row("s-a", "只露一面的那一场", "heng", SessionMark::Idle, 1)],
+        vec![row(
+            "s-a",
+            "只露一面的那个会话",
+            "heng",
+            SessionMark::Idle,
+            1,
+        )],
         6,
     );
     open_sessions(&mut state, 120, 24);
     let text = screen(120, 24, &mut state);
     assert!(
         text.contains(&wording::session_more(5)),
-        "末行说还有 5 场没露面：{text}"
+        "末行说还有 5 个会话没露面：{text}"
     );
 }
 
@@ -244,8 +262,8 @@ fn groups_are_whole_rows_and_the_ladder_drops_them() {
     load(
         &mut state,
         vec![
-            row("s-a", "第一组的一场", "alpha", SessionMark::Idle, 1),
-            row("s-b", "第二组的一场", "beta", SessionMark::Idle, 2),
+            row("s-a", "第一组的一个会话", "alpha", SessionMark::Idle, 1),
+            row("s-b", "第二组的一个会话", "beta", SessionMark::Idle, 2),
         ],
         2,
     );
@@ -254,15 +272,15 @@ fn groups_are_whole_rows_and_the_ladder_drops_them() {
     let tall = screen(120, 40, &mut state);
     assert!(tall.contains("alpha"), "组头是检出目录名：{tall}");
     assert!(tall.contains("beta"), "另一组也在：{tall}");
-    assert!(tall.contains("2 场"), "读数行在：{tall}");
+    assert!(tall.contains("已装载 2 个"), "读数行在：{tall}");
 
     // 页区 6–7 行：丢组头、保读数行。
     let mut short = fresh();
     short.request(ConsoleRequest::Sessions {
         listing: SessionListing {
             rows: vec![
-                row("s-a", "第一组的一场", "alpha", SessionMark::Idle, 1),
-                row("s-b", "第二组的一场", "beta", SessionMark::Idle, 2),
+                row("s-a", "第一组的一个会话", "alpha", SessionMark::Idle, 1),
+                row("s-b", "第二组的一个会话", "beta", SessionMark::Idle, 2),
             ],
             total: 2,
             unreadable: false,
@@ -271,7 +289,7 @@ fn groups_are_whole_rows_and_the_ladder_drops_them() {
     open_sessions(&mut short, 120, 24);
     let low = screen(120, 14, &mut short);
     assert!(
-        low.contains("第一组的一场") && low.contains("第二组的一场"),
+        low.contains("第一组的一个会话") && low.contains("第二组的一个会话"),
         "丢了组头之后两行都还在：{low}"
     );
     assert!(!low.contains("alpha"), "页区不够 8 行时组头让位：{low}");
@@ -347,7 +365,7 @@ fn a_live_event_from_another_session_still_stays_out() {
     let mut state = fresh();
     load(
         &mut state,
-        vec![row("s-a", "一场会话", "heng", SessionMark::Idle, 1)],
+        vec![row("s-a", "一个会话", "heng", SessionMark::Idle, 1)],
         1,
     );
     state.live_event(RenderEvent::identity(
@@ -448,8 +466,8 @@ fn groups_survive_the_filter_and_empty_ones_are_not_drawn() {
     load(
         &mut state,
         vec![
-            row("s-a", "甲组的一场", "alpha", SessionMark::Idle, 2),
-            row("s-b", "乙组的一场", "beta", SessionMark::Idle, 1),
+            row("s-a", "甲组的一个会话", "alpha", SessionMark::Idle, 2),
+            row("s-b", "乙组的一个会话", "beta", SessionMark::Idle, 1),
         ],
         2,
     );
@@ -457,7 +475,7 @@ fn groups_survive_the_filter_and_empty_ones_are_not_drawn() {
     let text = screen(120, 24, &mut state);
     assert!(text.contains("alpha"), "命中行的组头还在：{text}");
     assert!(!text.contains("beta"), "空组的组头不画：{text}");
-    assert!(!text.contains("乙组的一场"), "{text}");
+    assert!(!text.contains("乙组的一个会话"), "{text}");
 }
 
 #[test]
@@ -496,31 +514,31 @@ fn the_filter_gives_up_the_pinned_top() {
     // 未过滤：前台所在的组钉组顶。过滤生效之后钉顶让位，排序回到 mtime 降序
     // （决策票 10 §3）。
     let mut state = fresh();
-    let mut front = row("s-old", "旧的那一场", "alpha", SessionMark::Idle, 30);
+    let mut front = row("s-old", "旧的那个会话", "alpha", SessionMark::Idle, 30);
     front.foreground = true;
     load(
         &mut state,
         vec![
             front,
-            row("s-new", "新的那一场", "beta", SessionMark::Idle, 1),
+            row("s-new", "新的那个会话", "beta", SessionMark::Idle, 1),
         ],
         2,
     );
     open_sessions(&mut state, 120, 24);
     let plain = screen(120, 24, &mut state);
-    let old_at = plain.lines().position(|line| line.contains("旧的那一场"));
-    let new_at = plain.lines().position(|line| line.contains("新的那一场"));
+    let old_at = plain.lines().position(|line| line.contains("旧的那个会话"));
+    let new_at = plain.lines().position(|line| line.contains("新的那个会话"));
     assert!(old_at < new_at, "没过滤时前台那一组钉在顶上：{plain}");
 
-    filter_with(&mut state, "一场");
+    filter_with(&mut state, "会话");
     let filtered = screen(120, 24, &mut state);
     let old_at = filtered
         .lines()
-        .position(|line| line.contains("旧的那一场"))
+        .position(|line| line.contains("旧的那个会话"))
         .expect("命中");
     let new_at = filtered
         .lines()
-        .position(|line| line.contains("新的那一场"))
+        .position(|line| line.contains("新的那个会话"))
         .expect("命中");
     assert!(
         new_at < old_at,
@@ -536,14 +554,14 @@ fn the_more_line_still_counts_what_this_page_holds() {
         vec![
             row("s-a", "命中甲", "alpha", SessionMark::Idle, 1),
             row("s-b", "命中乙", "beta", SessionMark::Idle, 2),
-            row("s-c", "别的一场", "gamma", SessionMark::Idle, 3),
+            row("s-c", "别的一个会话", "gamma", SessionMark::Idle, 3),
         ],
         3,
     );
     filter_with(&mut state, "命中");
     let text = screen(120, 24, &mut state);
     assert!(text.contains(&wording::hit_count(2)), "命中两句：{text}");
-    assert!(!text.contains("别的一场"), "{text}");
+    assert!(!text.contains("别的一个会话"), "{text}");
 }
 
 /// 某一行的标题是什么颜色：找到含那个标题的那一行，取它第一个字的颜色。
@@ -570,7 +588,7 @@ fn the_title_colour_says_where_a_session_is() {
     // **只在盘上**（切过去要先装载）。此前「已装载但空闲」与「只在盘上」共用一个空标记，于是
     // 读的人判断不了 `关闭` 对哪一行可用（2026-10-12 维护者报告）。
     let mut state = fresh();
-    let mut front = row("s-front", "当前这一场", "heng", SessionMark::Idle, 1);
+    let mut front = row("s-front", "当前这个会话", "heng", SessionMark::Idle, 1);
     front.foreground = true;
     load(
         &mut state,
@@ -586,7 +604,7 @@ fn the_title_colour_says_where_a_session_is() {
     });
     open_sessions(&mut state, 120, 24);
 
-    let live = title_colour(&mut state, "当前这一场");
+    let live = title_colour(&mut state, "当前这个会话");
     let hosted = title_colour(&mut state, "已装载空闲");
     let cold = title_colour(&mut state, "只在盘上");
     assert_ne!(live, hosted, "前台与已装载撞了颜色");
@@ -596,7 +614,7 @@ fn the_title_colour_says_where_a_session_is() {
     assert_eq!(hosted, heng::render::palette::HOSTED, "已装载那一行");
     assert_eq!(cold, heng::render::palette::MUTED, "只在盘上那一行");
 
-    // 关掉一场之后它退回「只在盘上」那一档 —— 盘上那份还在，只是这个进程不再装着它。
+    // 关掉一个会话之后它退回「只在盘上」那一档 —— 盘上那份还在，只是这个进程不再装着它。
     state.request(ConsoleRequest::SessionClosed {
         id: SessionId::new("s-hosted"),
         empty: false,
@@ -606,5 +624,32 @@ fn the_title_colour_says_where_a_session_is() {
         title_colour(&mut state, "已装载空闲"),
         heng::render::palette::MUTED,
         "卸下来之后就是只在盘上了"
+    );
+}
+
+#[test]
+fn the_head_line_keeps_both_entries_in_the_narrow_sidebar() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![row("s-a", "一个会话", "heng", SessionMark::Idle, 1)],
+        1,
+    );
+    // 窄档：整屏 80 列 → 左栏 28 列（`layout::SIDEBAR_NARROW_FROM`）。读数里那句「已装载」
+    // 放不下，它会挤掉右端的两个入口（票 09 的宽度复核）。
+    open_sessions(&mut state, 80, 24);
+    let text = screen(80, 24, &mut state);
+
+    assert!(
+        text.contains(wording::SESSION_NEW),
+        "窄档下 `新建` 仍在：{text}"
+    );
+    assert!(
+        text.contains(wording::SESSION_CLOSE),
+        "窄档下 `关闭` 仍在：{text}"
+    );
+    assert!(
+        !text.contains("已装载"),
+        "窄档只报数，不写「已装载」：{text}"
     );
 }

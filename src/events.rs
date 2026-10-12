@@ -228,7 +228,7 @@ pub enum ContextSource {
     /// 组装期这一层 MCP 加载成什么样：哪些 server 连上了、哪些没有、各自的可信配置
     /// （`.scratch/mcp-support/issues/19-mcp-catalog-in-context.md`）。
     ///
-    /// 与技能清单同形：进流、可重放，也投影成一条 `user` 消息 —— 模型因此知道这一场会话手里
+    /// 与技能清单同形：进流、可重放，也投影成一条 `user` 消息 —— 模型因此知道这个会话手里
     /// 有哪些外部 server。**工具清单不在这里**：那是 `mcp_list` 现问的事。
     McpCatalog,
     /// **用户**用 `/<skill>` 载入的一份技能全文（spec §9）。它落在尾部，不像钉在头部
@@ -341,7 +341,7 @@ pub enum EventPayload {
         session_id: SessionId,
         cwd: String,
         schema_version: u32,
-        /// 这一场用哪几样会话级事实（`.scratch/session-tab/spec.md` §2、决策票 05）。
+        /// 这个会话用哪几样会话级事实（`.scratch/session-tab/spec.md` §2、决策票 05）。
         ///
         /// 五个 `Option` + `#[serde(default)]`：旧流没有它们，读出来是 `None`，回退**进程配置
         /// 默认**并如实说明。**不记** `context_window`（它由模型推得出来）与沙箱可用性（那是
@@ -372,7 +372,7 @@ pub enum EventPayload {
     SessionEnded {
         reason: StopReason,
     },
-    /// 人在这场会话里运行了一条 `/` 命令，**原文**记在这里（`.scratch/command-echo/spec.md`）。
+    /// 人在这个会话里运行了一条 `/` 命令，**原文**记在这里（`.scratch/command-echo/spec.md`）。
     ///
     /// 命令是**手势**而不是一句话：它不进模型上下文，所以转录里看不到「我刚才敲了什么」——
     /// 而回执只有成功才有，`/clear` 那类什么都不说。于是这一条补的是那句话本身。
@@ -382,7 +382,7 @@ pub enum EventPayload {
     CommandRun {
         text: String,
     },
-    /// 这场会话的**会话级事实**的一份全量快照（`.scratch/session-tab/spec.md` §2、决策票 05）。
+    /// 这个会话的**会话级事实**的一份全量快照（`.scratch/session-tab/spec.md` §2、决策票 05）。
     ///
     /// **只追加**，所以**当前事实 = 流上最后一条** —— 与目标、`todo`、标题同一条派生纪律。
     /// 每条流在装载之后都会补一条完整的快照：`SessionStarted` 那五个字段给的是**开场那一刻**
@@ -402,7 +402,7 @@ pub enum EventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sandbox_mode: Option<String>,
     },
-    /// 人给这场会话起的一个名字（`.scratch/session-tab/spec.md` §4 与决策票 01）。
+    /// 人给这个会话起的一个名字（`.scratch/session-tab/spec.md` §4 与决策票 01）。
     ///
     /// **只追加**，所以**当前标题 = 流上最后一条**（与目标、`todo` 同一条派生纪律）。自动
     /// 派生（首条用户消息首行）**不落流**：它每次进程启动重算一遍，只在进程内缓存 —— 落盘
@@ -1089,7 +1089,7 @@ impl EventLog {
     ///
     /// 它只给**只读预览**用（`.scratch/session-tab/spec.md` §2、票 18）：一条流中间有坏行时，
     /// 写下去会把洞留在那里，所以这一份 `EventLog` 只该被读。`seq` 与行号在这种流上不再相等
-    /// —— 而那一场本来就不追加，所以无害。
+    /// —— 而那个会话本来就不追加，所以无害。
     pub fn open_read_only(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         let events = read_events_lenient(&path)?;

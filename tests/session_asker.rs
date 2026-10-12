@@ -1,6 +1,6 @@
 //! 后台会话的询问**挂住**、切到前台即唤醒（`.scratch/session-tab/spec.md` §1、票 22）。
 //!
-//! 这一层要钉住的是两句话：**后台那一场的询问不弹到别人脸上**，以及**它永远不会被自动答掉**
+//! 这一层要钉住的是两句话：**后台那个会话的询问不弹到别人脸上**，以及**它永远不会被自动答掉**
 //! —— 请求从没被消费过，所以切过去时原样弹出来。
 
 use std::sync::{Arc, Mutex};
@@ -60,7 +60,7 @@ async fn a_background_session_holds_its_question_until_it_is_the_foreground() {
     let (state_tx, state_rx) = watch::channel(SessionState::Idle);
     asker.attach(state_tx);
 
-    // 后台那一场发问：它挂在 watch 上，问题**不往前端送**。
+    // 后台那个会话发问：它挂在 watch 上，问题**不往前端送**。
     let asking = tokio::spawn({
         let asker = Arc::clone(&asker);
         async move { asker.ask(&request("bash")).await }
@@ -94,7 +94,7 @@ async fn a_background_session_holds_its_question_until_it_is_the_foreground() {
 
 #[tokio::test]
 async fn the_foreground_session_goes_straight_through() {
-    // 前台那一场不必等：它直接送进既有的请求通道，状态也不经过待答那一档。
+    // 前台那个会话不必等：它直接送进既有的请求通道，状态也不经过待答那一档。
     let (_foreground, foreground_rx) = watch::channel(SessionId::new("s-1"));
     let inner = Arc::new(FakeAsker::default());
     let asker = SessionAsker::new(

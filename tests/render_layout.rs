@@ -21,7 +21,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::style::{Color, Modifier};
 
-/// 这一场会话的工具表里那些**声明 schema**：`bash` 在里面，别的名字都不在 —— Schema 面查得到
+/// 这个会话的工具表里那些**声明 schema**：`bash` 在里面，别的名字都不在 —— Schema 面查得到
 /// 与查不到两条路都能在这条接缝上测（票 24 收口补的那一面）。
 fn tool_schemas() -> BTreeMap<String, serde_json::Value> {
     let mut schemas = BTreeMap::new();
@@ -61,7 +61,7 @@ fn state() -> TuiState {
 }
 
 /// 指名册的会话用的注入 facts：一个名字是单口会话，
-/// 两个名字就是一场讨论。
+/// 两个名字就是一次讨论。
 fn facts_with_roster(names: &[&str]) -> SessionFacts {
     let mut facts = facts();
     facts.speaker_order = names.iter().map(|name| (*name).to_owned()).collect();
@@ -2965,7 +2965,7 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
 fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     use heng::events::{Event, EventPayload, Role, RoundMode, SpeakerId, StopReason};
 
-    // 有不止一个讨论者的 `speaker_order` 才让一场会话成为讨论，
+    // 有不止一个讨论者的 `speaker_order` 才让一次成为讨论，
     // 而讨论会数自己的轮次 —— `CONTEXT.md` 把 轮次 与 回合 分开
     // （spec §4）。
     let mut state = TuiState::new(
@@ -6814,7 +6814,7 @@ fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
 
 #[test]
 fn the_schema_face_says_so_when_the_tool_is_not_in_the_table() {
-    // 工具表里没有这个名字时**写一句话说明查不到** —— 重放一场老会话时那个工具可能已经不在
+    // 工具表里没有这个名字时**写一句话说明查不到** —— 重放一个老会话时那个工具可能已经不在
     // 表里。不画空面、也不编一份 schema 出来（票 24 收口的降级）。
     let mut session_facts = facts_with_roster(&["kimi"]);
     session_facts.tool_schemas = BTreeMap::new();
@@ -9386,7 +9386,7 @@ fn the_three_prefixes_wear_three_colours() {
 // 左栏不可见时过程行也只在轨迹里（`.scratch/trace-tab/spec.md` §6 的 2026-10-05 推翻）
 // ---------------------------------------------------------------------------
 
-/// 一场带过程行的会话：用户的话、一次调用、一段思考、一条回答、一次注入、一对
+/// 一个带过程行的会话：用户的话、一次调用、一段思考、一条回答、一次注入、一对
 /// 回合边界行与一条诊断。
 fn a_session_with_process_rows(state: &mut TuiState) {
     state.apply(user_message(1, "问题"));
@@ -10910,7 +10910,7 @@ fn clicking_a_status_cell_does_not_take_the_keyboard_away_from_the_input() {
 
 #[test]
 fn a_discussion_session_only_says_it_cannot_switch() {
-    // 讨论会话的模型是**两个模型的拼法**，那是名册里的配置事实，不是一场活会话能中途
+    // 讨论会话的模型是**两个模型的拼法**，那是名册里的配置事实，不是一个活会话能中途
     // 改的值（spec §12）。
     let mut state = {
         let mut facts = facts();
@@ -12306,7 +12306,7 @@ fn selected_rows_text(state: &mut TuiState, width: u16, height: u16) -> Vec<Stri
         .collect()
 }
 
-/// 一场四个块、其中一次调用失败（错误正文首行是它的**附属行**）的会话。
+/// 一个会话四个块、其中一次调用失败（错误正文首行是它的**附属行**）的会话。
 ///
 /// 失败那一次调用的两条源行共享一个身份，正是「选中的粒度是块」要跳过的那种落点。
 fn a_ledger_with_a_failed_call(state: &mut TuiState) {
@@ -13176,7 +13176,7 @@ fn an_unowned_row_answers_neither_bracket() {
 // （`.scratch/trace-ledger/spec.md` §7、§8、§11）。
 // ---------------------------------------------------------------------------
 
-/// 一场两个回合的会话，每个回合一次能分辨的调用 —— 过滤要看的就是「命中一个、另一个
+/// 一个两个回合的会话，每个回合一次能分辨的调用 —— 过滤要看的就是「命中一个、另一个
 /// 一条源行都不占」。
 fn two_turns_with_two_calls(state: &mut TuiState) {
     state.apply(user_message(1, "第一个问题"));
@@ -13345,7 +13345,7 @@ fn a_hit_brings_all_the_rows_of_its_block() {
     assert!(!page.contains("调用 bash"), "别的块一条源行都不占：{page}");
 }
 
-/// 索引覆盖**整场会话**：早就滚出屏的那一块照样搜得到 —— 这是与窗口内搜索不同的一档
+/// 索引覆盖**整个会话**：早就滚出屏的那一块照样搜得到 —— 这是与窗口内搜索不同的一档
 /// （票 20 第 5 条）。
 #[test]
 fn the_search_covers_the_whole_session_not_just_the_window() {

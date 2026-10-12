@@ -40,7 +40,7 @@ use super::store::{SessionStore, StoredSession};
 // 列表
 // ---------------------------------------------------------------------------
 
-/// 一场会话的一行：足以找到你想找的那一场。
+/// 一个会话的一行：足以找到你想找的那个会话。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
     pub id: SessionId,
@@ -73,7 +73,7 @@ pub fn list(store: &SessionStore, cwd: Option<&Path>) -> io::Result<Vec<Listing>
     sessions.iter().map(summarize).collect()
 }
 
-/// 从一场已存会话自己的流汇总出它的一行。
+/// 从一个已存会话自己的流汇总出它的一行。
 pub fn summarize(session: &StoredSession) -> io::Result<Listing> {
     let events = crate::events::read_events(&session.log_path)?;
     let mut listing = Listing {
@@ -512,9 +512,9 @@ fn entry_of(event: &Event) -> Option<Entry> {
         // 归属是只进日志的记账（`.scratch/goal-loop/spec.md` §4）：复盘视图不把它列成一条
         // 时间线条目 —— 它是这个会话在为谁干活的标记，不是发生了什么。
         EventPayload::GoalSelected { .. } => return None,
-        // 会话的名字同理：它是这场会话的标记，不是时间线上发生了什么。
+        // 会话的名字同理：它是这个会话的标记，不是时间线上发生了什么。
         EventPayload::SessionTitled { .. } => return None,
-        // 换档同理：它是这一场的档位标记，不是时间线上发生了什么。
+        // 换档同理：它是这个会话的档位标记，不是时间线上发生了什么。
         EventPayload::SessionFactsChanged { .. } => return None,
         // 收尾汇总同上：写它的那次调用已经留下一条助手消息，`sessions show` 从那里读得出
         // 来；这一条是流上的记录，不再重复列一遍。
@@ -862,7 +862,7 @@ pub struct AbsenceStats {
     pub rate: Option<f64>,
 }
 
-/// 一场会话派出过的执行者，以及它们为什么停下。
+/// 一个会话派出过的执行者，以及它们为什么停下。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutorStats {
     pub spawned: usize,
@@ -895,7 +895,7 @@ pub struct PermissionStats {
     pub decided: Vec<Count>,
 }
 
-/// 挂着的钩子在这场会话里做了什么。
+/// 挂着的钩子在这个会话里做了什么。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HookStats {
     pub executed: usize,
@@ -919,7 +919,7 @@ pub struct CostModel {
 }
 
 impl CostModel {
-    /// 为一场应答者全都用 `base_model` 的会话定价。
+    /// 为一个会话应答者全都用 `base_model` 的会话定价。
     pub fn new(base_model: impl Into<String>, pricing: PriceTable) -> Self {
         Self {
             config: SessionConfig::new(base_model).with_pricing(pricing),

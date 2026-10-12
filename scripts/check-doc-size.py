@@ -90,6 +90,7 @@ DOC_FILES = [
     "docs/adr/0019-command-records-are-log-only.md",
     "docs/adr/0020-first-token-time-rides-the-completion.md",
     "docs/adr/0021-line-identity-comes-from-the-event-envelope.md",
+    "docs/adr/0022-the-session-noun-is-session.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -388,7 +389,9 @@ def review_rules(unit: Unit) -> list[str]:
 #   13,784 / 73 → **13,889 / 74**（种子索引行也随 feature 增长）；字符侧靠把这一行压短收在
 #   13,900 内，未动字符棘轮。行数棘轮 73 → **74**。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 19800, "lines": 332, "target_chars": 18500, "target_lines": 320},
+    # 2026-10-12：补 ADR 0022（会话量词从「场」换成「会话」）的索引入口，README 实测
+    # 19,901 —— 一次显式上调：19,800 → 19,950（终点 18,500 不变）。
+    "README.md": {"chars": 19950, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
         "chars": 13900,
         "lines": 74,

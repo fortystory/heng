@@ -7,7 +7,7 @@
 //!
 //! 最终产物仍然去 `stdout`，叙述去 `stderr`，与 headless 模式用的是同一种分工：
 //! `heng --plain "q" 2>/dev/null` 只印出那个答案，别的什么都不印，而在终端前的人
-//! 看得见整场讨论。
+//! 看得见整次讨论。
 
 use std::io::Write;
 
@@ -33,7 +33,7 @@ pub struct PlainOptions {
 
 /// plain 渲染器。
 pub struct Plain {
-    /// 这个渲染器替哪一场会话说话的：它自己在通道上造的少数几条事件（丢掉增量那条诊断）
+    /// 这个渲染器替哪一个会话说话的：它自己在通道上造的少数几条事件（丢掉增量那条诊断）
     /// 也得带着会话身份（`.scratch/session-tab/spec.md` §6）。
     session: SessionId,
     sinks: RenderSinks,

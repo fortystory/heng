@@ -3,9 +3,9 @@
 //!
 //! 三条纪律在这里落地：
 //!
-//! * **绝不走 `observe::summarize`** —— 那个是全量解析（281 场实测 155.6–172.2 ms）。这里要的
+//! * **绝不走 `observe::summarize`** —— 那个是全量解析（281 个会话实测 155.6–172.2 ms）。这里要的
 //!   只有 `SessionStarted.cwd` 与前 8 行内首条用户消息，走 [`crate::session::titles::read_prefix`]
-//!   （281 场 3.7–4.8 ms 那一档）。
+//!   （281 个会话 3.7–4.8 ms 那一档）。
 //! * **绝不走 `EventLog::open`** —— 它会补换行、截断坏尾巴，也就是**改文件**。列表与派生都是
 //!   只读动作。
 //! * **一条坏流不毁整页**：`list_all` 只扫目录，坏流只体现在那一行的「流损坏」标记上。
@@ -49,7 +49,7 @@ pub struct SessionRow {
     pub broken: bool,
     /// `cwd` 那个目录现在不在了。
     pub missing_cwd: bool,
-    /// 这一场就是当前前台。
+    /// 这个会话就是当前前台。
     pub foreground: bool,
     /// 宿主表说的状态（票 22）。票 17 这一层只把它搬过来。
     pub mark: SessionMark,
@@ -60,7 +60,7 @@ pub struct SessionRow {
 pub struct SessionListing {
     pub rows: Vec<SessionRow>,
     /// 一条都没露过面的会话数不算在这里 —— 它是 `rows.len()` 与 store 总数之差，由调用方
-    /// 自己说（`＋N 场` 那一行）。
+    /// 自己说（`＋N 个会话` 那一行）。
     pub total: usize,
     /// store 整个读不出（不是「没有会话」）。
     pub unreadable: bool,
@@ -68,7 +68,7 @@ pub struct SessionListing {
 
 /// 扫 store，给会话页排出一份列表。
 ///
-/// `foreground` 是当前前台那一场：它所在的**检出组**被钉在组顶，它自己带 `▍`。
+/// `foreground` 是当前前台那个会话：它所在的**检出组**被钉在组顶，它自己带 `▍`。
 /// `marks` 是宿主表给的状态（票 22 填），票 17 这一层只负责把它贴到行上。
 pub fn sessions(
     store: &SessionStore,

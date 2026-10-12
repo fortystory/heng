@@ -7,7 +7,7 @@
 //! 三条纪律写在这里：
 //!
 //! * **连接归会话**：`[mcp] enabled` 打开时这些连接在组装期建、随会话活。关闭走 `Drop` 兜底
-//!   （`close` 要 `&mut self`，而 `Tool` 只给 `&self`）；**不自动重连** —— server 崩了之后同一场
+//!   （`close` 要 `&mut self`，而 `Tool` 只给 `&self`）；**不自动重连** —— server 崩了之后同一个会话
 //!   会话里不再重试，重开会话才重连（与 web 的失败语义同一条线）。
 //! * **子进程整组清理**：`rmcp` 的默认清理只保证直接子进程被杀，而 heng 的纪律是
 //!   `process_group(0)` + `killpg` 杀整棵树（`bash` 那一侧已经这样做了）。所以 stdio 传输在
@@ -52,7 +52,7 @@ use super::{
 ///
 /// 每台各自一个 `connect_timeout_ms` 的超时；失败的那台不挂连接、只记下原因，于是它的元工具
 /// 调用报出来的是一条**结构化错误 + 人话**（`MCP_SERVER_UNAVAILABLE：…`），而其余几台照常
-/// 工作。一个坏 server 不会拖垮整场会话。
+/// 工作。一个坏 server 不会拖垮整个会话。
 ///
 /// 不做 server 数量上限 —— 写进配置的就是人要的；重名在配置解析那一层就已经是启动错误。
 pub async fn connect_all(settings: &McpSettings, options: &ConnectOptions<'_>) -> McpService {

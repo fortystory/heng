@@ -394,13 +394,13 @@ fn a_lone_hit_keeps_the_cell_it_falls_in() {
 
 #[test]
 fn a_session_of_continuous_hits_is_one_band() {
-    // 几乎整场都是命中的会话里，底色连成一整段 —— 分辨率的诚实后果，不额外切碎
+    // 几乎整个都是命中的会话里，底色连成一整段 —— 分辨率的诚实后果，不额外切碎
     // （票 23 验收那一条）。
     let hits: Vec<(Lane, DateTime<Utc>)> = (0..20)
         .map(|index| (Lane::Model, ms(index * 700)))
         .collect();
     let bands = hit_bands(one_second_a_cell(), hits);
-    assert_eq!(bands.len(), 1, "一整场连成一段：{bands:?}");
+    assert_eq!(bands.len(), 1, "一整个连成一段：{bands:?}");
     assert_eq!(cells_of(&bands[0]), (0, 13), "从第一块铺到最后一块");
 }
 

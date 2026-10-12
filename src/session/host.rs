@@ -1,11 +1,11 @@
-//! 宿主表与前台指针：同一个进程里同时活着几场会话
+//! 宿主表与前台指针：同一个进程里同时活着几个会话
 //! （`.scratch/session-tab/spec.md` §1、决策票 04 §1–§3）。
 //!
 //! 三条形状钉在这里：
 //!
-//! * **一场会话 = 一个 [`Harness`] + 一个拥有它的 tokio task**。`Harness` 就是宿主，不造新词。
+//! * **一个会话 = 一个 [`Harness`] + 一个拥有它的 tokio task**。`Harness` 就是宿主，不造新词。
 //! * **主循环能做的事只有三个**：跑一次动作（[`SessionCommand::Turn`]）、取消、关闭。命令走
-//!   每场一条 `mpsc`，状态走每场一个 `watch`（保最新不丢 —— 渲染通道是 `broadcast`，满了会
+//!   每个一条 `mpsc`，状态走每个一个 `watch`（保最新不丢 —— 渲染通道是 `broadcast`，满了会
 //!   静默丢弃，而宿主表的快照不能被丢）。
 //! * **前台指针 = 全进程一个 `watch<SessionId>`**：切换只是改它，**忙闲不阻挡**。
 //!
@@ -21,7 +21,7 @@ use crate::Harness;
 use crate::agent::CancelSignal;
 use crate::events::SessionId;
 
-/// 一场会话的三态（决策票 04 §3）。
+/// 一个会话的三态（决策票 04 §3）。
 ///
 /// `AwaitingHuman` 由 asker 那一层置上（票 22）；这一层先把它摆在这里，因为标记列与页顶读数
 /// 都读它。
@@ -36,7 +36,7 @@ pub enum SessionState {
     AwaitingHuman,
 }
 
-/// 交给一场会话的一次动作。
+/// 交给一个会话的一次动作。
 ///
 /// 它比 CLI 的 `TurnStart` 少一层借用：命令要跨 task 边界，所以文本是 `String`。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +52,7 @@ pub enum SessionTurn {
 /// 前台会话的**只读快照**：主循环解析一次提交要的那几样。
 ///
 /// 它存在的理由：会话的 [`Harness`] 一旦交给宿主表的 task，主循环就不能再直接问它 —— 而
-/// 「这一场叫什么、用哪个模型、有哪些技能、目标是什么」是解析每一次提交都要的。于是装好之后
+/// 「这个会话叫什么、用哪个模型、有哪些技能、目标是什么」是解析每一次提交都要的。于是装好之后
 /// 取一份快照，需要的时刻（`/model` 之后）再取一次。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrontFacts {
@@ -60,14 +60,14 @@ pub struct FrontFacts {
     pub model: String,
     /// 推理档位；`None` 是「默认」那一档。
     pub effort: Option<String>,
-    /// 权限模式 —— 新建一场时它要被继承过去（票 21）。
+    /// 权限模式 —— 新建一个会话时它要被继承过去（票 21）。
     pub mode: crate::permissions::Mode,
     pub skills: Vec<String>,
     /// 正在推进的目标名。
     pub goal: Option<String>,
 }
 
-/// 主循环能对一场会话做的事。
+/// 主循环能对一个会话做的事。
 ///
 /// 决策票 04 §3 把它写成三个（`Submit(Submission)` / `Cancel` / `Close`）—— 那份形状的**意图**
 /// 是「一次提交整条交给 task 办」，而这里按同一意图把它**展开**成主循环解析得出的具体动作：
@@ -79,29 +79,29 @@ pub enum SessionCommand {
     Turn(SessionTurn),
     /// 把一条 `/` 命令的**原文**记进流（log-only，投影零产出）。
     ///
-    /// 它落在这场会话自己的流上，所以必须由拥有 `Harness` 的那一方写。
+    /// 它落在这个会话自己的流上，所以必须由拥有 `Harness` 的那一方写。
     RecordCommand(String),
     /// 把一个技能正文装进上下文尾部（`/<skill> <task>` 的前半步）。
     LoadSkill(String),
-    /// 撤销这场会话最近一次 `edit_file`。
+    /// 撤销这个会话最近一次 `edit_file`。
     Undo,
-    /// 换这一场用的模型。`effort` 是**当前**档位（换模型要重新校验它认不认这一档）。
+    /// 换这个会话用的模型。`effort` 是**当前**档位（换模型要重新校验它认不认这一档）。
     SwitchModel {
         model: String,
         effort: Option<String>,
     },
     /// 换思考档位。
     SwitchEffort(String),
-    /// 取消这场会话当前在跑的动作。
+    /// 取消这个会话当前在跑的动作。
     Cancel,
     /// 关闭并结束 task。
     Close,
 }
 
-/// 每场会话的那个**动作解释器**。
+/// 每个会话的那个**动作解释器**。
 ///
 /// 宿主自己认识 `Cancel` 与 `Close`，其余命令都交给它办 —— 而 `Turn` 只是其中一种。之所以
-/// 要这一层：会话级手势（换模型、装技能正文、撤销、记命令、跑一场讨论、目标循环）都要
+/// 要这一层：会话级手势（换模型、装技能正文、撤销、记命令、跑一次讨论、目标循环）都要
 /// `Config`、`ConsoleHandle`、`GoalSetup` 这些**进程级**的东西，而库层不认识它们。于是 task
 /// 拿一个盒子，命令交给它办，而状态转换仍由宿主自己管（它持有 `watch` 的发送端）。
 ///
@@ -110,7 +110,7 @@ pub enum SessionCommand {
 pub trait SessionActor<C = SessionCommand>: Send {
     /// 办一条命令。`Cancel` 与 `Close` 不会到达这里。
     ///
-    /// `inbox` 是这一场自己的命令通道：跑长动作（一个回合、一场讨论、一趟目标循环）时它要一边
+    /// `inbox` 是这个会话自己的命令通道：跑长动作（一个回合、一次讨论、一趟目标循环）时它要一边
     /// 跑一边收**运行中的手势** —— 主循环把那边的 `FrontEndEvent` 转成命令转发过来（前端事件
     /// 接收端是单一消费者，只归它）。
     async fn act(
@@ -135,7 +135,7 @@ impl SessionActor<SessionCommand> for TurnActor {
         _inbox: &mut mpsc::Receiver<SessionCommand>,
     ) -> bool {
         match command {
-            // 取消走既有的手势：信号是每场一份的，所以它只停这一场。
+            // 取消走既有的手势：信号是每个一份的，所以它只停这个会话。
             SessionCommand::Cancel => harness.cancel_signal().cancel(),
             SessionCommand::Close => return false,
             SessionCommand::Turn(start) => {
@@ -157,19 +157,19 @@ impl SessionActor<SessionCommand> for TurnActor {
 
 /// 关闭被拒的理由（`.scratch/session-tab/spec.md` §5、票 21 的四条规则）。
 ///
-/// 两条拒绝各有各的说法：前台是自己脚下那块地板，先切走；正在跑的那一场先取消 —— 别的都是
+/// 两条拒绝各有各的说法：前台是自己脚下那块地板，先切走；正在跑的那个会话先取消 —— 别的都是
 /// **单击即关、不二次确认**（只读预览也一样）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CloseRefusal {
-    #[error("别关脚下这一场：先切到别的会话再关")]
+    #[error("别关脚下这个会话：先切到别的会话再关")]
     Foreground(SessionId),
-    #[error("这一场正在跑回合：先在那一场按 ctrl-c 取消")]
+    #[error("这个会话正在跑回合：先在那个会话按 ctrl-c 取消")]
     Running(SessionId),
     #[error("会话 {0} 不在宿主表里")]
     NotHosted(SessionId),
 }
 
-/// 能不能关这一场。
+/// 能不能关这个会话。
 ///
 /// 它只回答「能不能」，不动那张表：真的卸下来是 [`SessionHost::close_with`]。
 pub fn close_check<C: Send + 'static>(
@@ -191,21 +191,21 @@ pub fn close_check<C: Send + 'static>(
 
 /// 退出闸门（`.scratch/session-tab/spec.md` §1、票 23）。
 ///
-/// 多会话之后「有人要退出」不再等价于「关掉这一场」：别的场可能还在跑。**只要有一场不在空闲
-/// 就拒绝**，并指出在跑集合的第一场 —— 提示行那个可点入口指的就是它。
+/// 多会话之后「有人要退出」不再等价于「关掉这个会话」：别的会话可能还在跑。**只要有一个会话不在空闲
+/// 就拒绝**，并指出在跑集合的第一个会话 —— 提示行那个可点入口指的就是它。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitGate {
-    /// 可以退：一场没收尾的都没有。
+    /// 可以退：一个会话没收尾的都没有。
     Clear,
-    /// 还有没收尾的：拒绝，并给出**第一场**（可点入口指它）。
+    /// 还有没收尾的：拒绝，并给出**第一个会话**（可点入口指它）。
     ///
-    /// `count` 数的是**全部**没收尾的场（含后台那些），不只是可见的几行。
+    /// `count` 数的是**全部**没收尾的会话（含后台那些），不只是可见的几行。
     Running { count: usize, first: SessionId },
 }
 
 /// 现在能不能退出。
 ///
-/// 「在跑」在这里读作**不在空闲** —— 包括 `AwaitingHuman`：那一场有一个动作挂在等人答，
+/// 「在跑」在这里读作**不在空闲** —— 包括 `AwaitingHuman`：那个会话有一个动作挂在等人答，
 /// 杀掉它等于替人做了决定（票 23 说「不自动取消、不代用户做决定」）。
 pub fn exit_gate<C: Send + 'static>(host: &SessionHost<C>) -> ExitGate {
     let unfinished: Vec<SessionId> = host
@@ -235,20 +235,20 @@ pub enum HostError {
 /// 宿主表的一行（决策票 04 §1）。
 pub struct HostEntry<C = SessionCommand> {
     pub id: SessionId,
-    /// 这一场的工作目录。
+    /// 这个会话的工作目录。
     pub cwd: PathBuf,
     /// 三态。接收端在这里 —— 发送端在拥有它的那个 task 手里。
     pub state: watch::Receiver<SessionState>,
-    /// 三态的发送端。按会话包装的应答者要它（票 22）：它得把这一场置成 `AwaitingHuman`。
+    /// 三态的发送端。按会话包装的应答者要它（票 22）：它得把这个会话置成 `AwaitingHuman`。
     pub state_tx: watch::Sender<SessionState>,
-    /// 主循环往这一场发命令的那条通道。命令的形状由调用方定 —— cli 那一侧装的是
+    /// 主循环往这个会话发命令的那条通道。命令的形状由调用方定 —— cli 那一侧装的是
     /// `Submit(Submission)` 与手势，缺省那一型只是「跑回合」。
     pub cmd: mpsc::Sender<C>,
-    /// 只读预览（票 18）：流半读装起来的那一场 —— 凡写流的一律禁，三态不动。
+    /// 只读预览（票 18）：流半读装起来的那个会话 —— 凡写流的一律禁，三态不动。
     pub read_only: bool,
-    /// 每场一份的取消手势（决策票 04 §3）。
+    /// 每个一份的取消手势（决策票 04 §3）。
     pub cancel: CancelSignal,
-    /// 拥有这场会话的那个 task。
+    /// 拥有这个会话的那个 task。
     pub join: JoinHandle<()>,
 }
 
@@ -266,15 +266,15 @@ pub struct SessionHost<C = SessionCommand> {
 }
 
 impl SessionHost<SessionCommand> {
-    /// 把一场组装好的会话交给它自己的 task，并**入表**。
+    /// 把一个组装好的会话交给它自己的 task，并**入表**。
     ///
-    /// `cwd` 由调用方给：表里记的是这一场的工作目录，而它不必等于进程的 cwd（票 18 的装载路径
+    /// `cwd` 由调用方给：表里记的是这个会话的工作目录，而它不必等于进程的 cwd（票 18 的装载路径
     /// 会让两者分开）。
     pub fn adopt(&mut self, harness: Harness, cwd: PathBuf) -> Result<(), HostError> {
         self.adopt_with(harness, cwd, false, Box::new(TurnActor))
     }
 
-    /// 同上，但这是一场**只读预览**（票 18 的第二档损坏流）。
+    /// 同上，但这是一个会话**只读预览**（票 18 的第二档损坏流）。
     ///
     /// 只读不是一个第四态：三态照旧，表里只多一个标志 —— 凡写流的一律禁（提交、所有 `/`
     /// 命令、`Shift+Tab`、页内改名、新建），各回一句。
@@ -284,7 +284,7 @@ impl SessionHost<SessionCommand> {
 }
 
 impl<C: Send + 'static> SessionHost<C> {
-    /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一场会话由 `adopt`（缺省那一
+    /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一个会话由 `adopt`（缺省那一
     /// 型）或 [`adopt_with`](Self::adopt_with) 入表。
     pub fn new(foreground: SessionId) -> Self {
         let (foreground, keep) = watch::channel(foreground);
@@ -318,7 +318,7 @@ impl<C: Send + 'static> SessionHost<C> {
                 // 状态由宿主自己管：解释器只负责把这条命令办完。
                 let _ = state_tx.send(SessionState::RunningTurn);
                 let keep_going = actor.act(&mut harness, command, &mut cmd_rx).await;
-                // 一场「等在一个人答」的动作（票 22）会在中间把状态置成 `AwaitingHuman`；
+                // 一个会话「等在一个人答」的动作（票 22）会在中间把状态置成 `AwaitingHuman`；
                 // 回到 `Idle` 是它收尾之后的事。
                 let _ = state_tx.send(SessionState::Idle);
                 if !keep_going {
@@ -339,7 +339,7 @@ impl<C: Send + 'static> SessionHost<C> {
         Ok(())
     }
 
-    /// 现在的前台是哪一场。
+    /// 现在的前台是哪个会话。
     pub fn foreground(&self) -> SessionId {
         self.foreground.borrow().clone()
     }
@@ -351,7 +351,7 @@ impl<C: Send + 'static> SessionHost<C> {
 
     /// 切前台。**忙闲不阻挡** —— 目标正在跑回合也照样切（决策票 04 §2）。
     ///
-    /// 它只改指针：已在表里的那一场因此是零延迟的，「不在表里就先装载」是票 18 的事。
+    /// 它只改指针：已在表里的那个会话因此是零延迟的，「不在表里就先装载」是票 18 的事。
     pub fn switch(&self, id: &SessionId) {
         let _ = self.foreground.send(id.clone());
     }
@@ -381,7 +381,7 @@ impl<C: Send + 'static> SessionHost<C> {
         self.foreground.subscribe()
     }
 
-    /// 有几场正在跑回合 —— 页顶读数 `M 场在跑` 数的就是它。
+    /// 有几个正在跑回合 —— 页顶读数 `M 个在跑` 数的就是它。
     pub fn running(&self) -> usize {
         self.entries
             .iter()
@@ -389,7 +389,7 @@ impl<C: Send + 'static> SessionHost<C> {
             .count()
     }
 
-    /// 把一场会话从表里卸下来：发一条**结束命令**、等它那个 task 结束。
+    /// 把一个会话从表里卸下来：发一条**结束命令**、等它那个 task 结束。
     ///
     /// 宿主不认识命令的语义，所以「结束」得由调用方给 —— cli 那一型的结束命令就是
     /// `SessionCommand::Close`（见 [`SessionHost::close`] 那一层）。
@@ -409,9 +409,9 @@ impl<C: Send + 'static> SessionHost<C> {
 }
 
 impl SessionHost<SessionCommand> {
-    /// 关掉一场缺省命令类型的会话：发 `Close`、等它那个 task 结束。
+    /// 关掉一个缺省命令类型的会话：发 `Close`、等它那个 task 结束。
     ///
-    /// 前台自己不许关、正在跑回合的那一场怎么处理是票 21 的规则，这一层只保证「表里真的少了
+    /// 前台自己不许关、正在跑回合的那个会话怎么处理是票 21 的规则，这一层只保证「表里真的少了
     /// 一行、task 真的结束了」。
     pub async fn close(&mut self, id: &SessionId) -> Result<(), HostError> {
         self.close_with(id, SessionCommand::Close).await

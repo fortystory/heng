@@ -470,6 +470,46 @@ def check_comments() -> list[str]:
     return problems
 
 
+def check_noun_discipline() -> list[str]:
+    """会话的量词说「个 / 会话」，不再用「场」（`chinese-ui` 票 09）。
+
+    查的是**禁用搭配**而不是裸的「场」字：固定词（开场 / 立场 / 现场 / 清场 / 退场 / 进场 / 收场 / 当场 /
+    在场 / 场景 / 场面 / 场合）里的「场」不是量词，照旧。带引号的「场」是**讨论这个词本身**
+    （元语言），也不算。
+    """
+    patterns = [
+        r"一场", r"这场", r"那场", r"整场", r"每场", r"多场", r"两场", r"几场", r"哪场",
+        r"场外", r"\d+ 场", r"[一二三四五六七八九十]场", r"场待答", r"场跑完", r"场在跑", r"场没收尾",
+    ]
+    scope = [
+        "src", "docs", "CONTEXT.md", "tests", "README.md", "AGENTS.md", ".scratch/README.md",
+        ".scratch/session-tab/spec.md", ".scratch/session-tab/map.md",
+    ]
+    paths = []
+    for entry in scope:
+        if os.path.isfile(entry):
+            paths.append(entry)
+            continue
+        for dirpath, _, names in os.walk(entry):
+            if "adr" in dirpath.split(os.sep):  # ADR 是记录，档 2 不改它们
+                continue
+            paths += [os.path.join(dirpath, n) for n in names if n.endswith((".rs", ".md"))]
+    hits = []
+    for path in sorted(paths):
+        text = open(path, encoding="utf-8").read()
+        text = re.sub(r"[「『`\"']场[」』`\"']", "", text)  # 元语言引用不算
+        for number, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith("_Avoid_"):  # 列旧别名的地方，是元语言
+                continue
+            for pattern in patterns:
+                if re.search(pattern, line):
+                    hits.append(f"{path}:{number}: 这里还有「{pattern}」：{line.strip()[:56]}")
+                    break
+    if len(hits) > 15:
+        return hits[:15] + [f"…另有 {len(hits) - 15} 处同类（跑一次上面的脚本就能全列出来）"]
+    return hits
+
+
 def main() -> int:
     list_all = "--list" in sys.argv[1:]
     if list_all:
@@ -481,20 +521,21 @@ def main() -> int:
         + check_adr_headings()
         + check_comments()
         + check_scratch_headings()
+        + check_noun_discipline()
     )
     if problems:
         print("check-language: 不通过\n")
         for problem in problems:
             print(f"  - {problem}")
         print(
-            "\n这五条来自 ADR 0004 与 ADR 0005：散文（注释 / docs / ADR / tracker 标题 / 断言"
-            "消息 / 给人看的错误 / 模型可见与进流的文本）用中文，只有标识符、schema 值与协议"
-            "标记、路径与命令留英文。"
+            "\n这六条来自 ADR 0004、ADR 0005 与 ADR 0022：散文（注释 / docs / ADR / tracker 标题 /"
+            " 断言消息 / 给人看的错误 / 模型可见与进流的文本）用中文，只有标识符、schema 值与"
+            " 协议标记、路径与命令留英文；会话的量词说「个 / 会话」，不说「场」。"
         )
         return 1
     print(
         "check-language: OK（模型可见 / 进流那一侧的两条棘轮未回退、docs / ADR / tracker 的"
-        "标题是中文散文、注释中文行数未回退）"
+        "标题是中文散文、注释中文行数未回退、会话量词没有回退到「场」）"
     )
     return 0
 

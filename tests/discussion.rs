@@ -109,7 +109,7 @@ fn answer(body: &str, conclusion: &str) -> String {
 
 #[test]
 fn a_pair_is_drawn_from_the_pool_without_repeating_a_member() {
-    // 抽取是池子大小与一个种子的纯函数，所以一场讨论可以说清
+    // 抽取是池子大小与一个种子的纯函数，所以一次讨论可以说清
     // 它跑的是哪一对，而测试能钉住这个选择、而不是分布。
     assert_eq!(pick_pair(2, 0), Some((0, 1)));
     assert_eq!(
@@ -117,7 +117,7 @@ fn a_pair_is_drawn_from_the_pool_without_repeating_a_member() {
         Some((0, 1)),
         "两个的池子不论种子如何都自己跟自己讨论"
     );
-    assert_eq!(pick_pair(1, 7), None, "一个成员撑不起一场讨论");
+    assert_eq!(pick_pair(1, 7), None, "一个成员撑不起一次讨论");
     assert_eq!(pick_pair(0, 7), None);
 
     // 三个的池子：每次抽取都是两个不同成员、按池子顺序，
@@ -486,7 +486,7 @@ async fn fixture_with(
 }
 
 /// 同上，只是每个参与者各带一份配置：一个讨论者、另一个、
-/// 合成器。一场讨论共用一个 token 额度（spec §17），所以
+/// 合成器。一次讨论共用一个 token 额度（spec §17），所以
 /// 这些配置只在测试与改派有关的地方不同。
 async fn fixture_with_configs(
     kimi_provider: FakeProvider,
@@ -658,7 +658,7 @@ async fn a_discussion_that_stays_divergent_takes_five_calls_and_ends_exhausted()
     assert_eq!(outcome.rounds, 2);
 
     let events = read_events(&fixture.log_path).unwrap();
-    // 只有结束这场辩论的那一轮带 `RoundEnded`；第二轮的
+    // 只有结束这个会话辩论的那一轮带 `RoundEnded`；第二轮的
     // 边界是合成轮的 `RoundStarted`。
     assert_eq!(
         round_endings(&events),
@@ -838,7 +838,7 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
 async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
     // 额度是流上每个参与者共用的一份
     // （spec §17），所以两个不同的上限是组装错误，
-    // 而不是一场「闸门读谁的数字」的竞赛。
+    // 而不是一个会话「闸门读谁的数字」的竞赛。
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
@@ -1107,7 +1107,7 @@ async fn a_discussion_puts_only_the_synthesis_on_stdout() {
     fixture.harness.discuss("该不该复用事件流？").await.unwrap();
     fixture.harness.shutdown().await;
 
-    // 讨论者的每个回合也都以 `Completed` 收尾，所以「最终产物」在一场讨论里
+    // 讨论者的每个回合也都以 `Completed` 收尾，所以「最终产物」在一次讨论里
     // 不可能指「最后那个完成的回合」：收尾调用才是产物。
     let stdout = fixture.stdout.text();
     assert!(stdout.contains("共识：复用事件流"));
@@ -1442,7 +1442,7 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
 async fn the_synthesizer_is_the_one_call_the_budget_cannot_skip() {
     // 额度为零会在第一次 provider 调用之前就停下，于是没有讨论者
     // 说过话。收尾调用仍然做：降级到合成**之后**就会
-    // 把整场讨论丢掉（spec §17）。
+    // 把整次讨论丢掉（spec §17）。
     let config = budgeted(0);
     let mut fixture = fixture_with_configs(
         FakeProvider::new(vec![]),
@@ -1512,7 +1512,7 @@ async fn routing_a_cheap_synthesizer_moves_neither_debater() {
 }
 
 // ---------------------------------------------------------------------------
-// 在活着的会话上跑一场讨论（`Harness::discuss`，即 `/discuss` 命令）
+// 在活着的会话上跑一次讨论（`Harness::discuss`，即 `/discuss` 命令）
 // ---------------------------------------------------------------------------
 
 /// 一条临时日志上的单 agent 会话，配一个脚本化的 provider —— 一次
@@ -1641,7 +1641,7 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
         .await
         .unwrap();
 
-    // 两侧都得出同一个结论，所以这场讨论只有一轮：轮次的
+    // 两侧都得出同一个结论，所以这次讨论只有一轮：轮次的
     // 切分、流，以及合成器拿到的材料才是这条测试关心的。
     let first = FakeProvider::with_caps(
         vec![Reply::text(&answer("甲的看法", "复用"))],
@@ -1695,7 +1695,7 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
     assert_eq!(
         round_starts_in(&events, RoundMode::Independent),
         vec![1],
-        "这条流上的第一场讨论从一轮开始编号"
+        "这条流上的第一次讨论从一轮开始编号"
     );
     assert_eq!(round_starts_in(&events, RoundMode::Synthesis), vec![2]);
 
@@ -1716,16 +1716,16 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
 
 #[tokio::test]
 async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesizes_only_itself() {
-    // 一个会话里跑两场讨论，正是 `/discuss` 让它成为可能的，所以
+    // 一次里跑两次讨论，正是 `/discuss` 让它成为可能的，所以
     // 轮次号必须在流上保持唯一 —— 而第二个合成器也不许
-    // 被交给第一场讨论的答案去一起合成。
+    // 被交给第一次讨论的答案去一起合成。
     let mut fixture = session_fixture(vec![Reply::text("开场。")]).await;
     fixture.harness().run_turn("第一个问题").await.unwrap();
 
     let (debaters, synthesizer) = fixture.parts(
-        vec![Reply::text(&answer("第一场的甲", "甲结论"))],
-        vec![Reply::text(&answer("第一场的乙", "甲结论"))],
-        vec![Reply::text("第一场的合成")],
+        vec![Reply::text(&answer("第一次的甲", "甲结论"))],
+        vec![Reply::text(&answer("第一次的乙", "甲结论"))],
+        vec![Reply::text("第一次的合成")],
     );
     fixture
         .harness()
@@ -1733,18 +1733,18 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
         .await
         .unwrap();
 
-    // 第二场讨论用全新的 provider 跑，所以它的请求可以
+    // 第二次讨论用全新的 provider 跑，所以它的请求可以
     // 单独读回来。
     let second_debaters = FakeProvider::with_caps(
-        vec![Reply::text(&answer("第二场的甲", "甲结论"))],
+        vec![Reply::text(&answer("第二次的甲", "甲结论"))],
         caps_for("deepseek-flash").unwrap(),
     );
     let second_other = FakeProvider::with_caps(
-        vec![Reply::text(&answer("第二场的乙", "甲结论"))],
+        vec![Reply::text(&answer("第二次的乙", "甲结论"))],
         caps_for("deepseek-flash").unwrap(),
     );
     let second_synthesizer = FakeProvider::with_caps(
-        vec![Reply::text("第二场的合成")],
+        vec![Reply::text("第二次的合成")],
         caps_for("deepseek-flash").unwrap(),
     );
     let (mut debaters, mut synthesizer) = fixture.parts(vec![], vec![], vec![]);
@@ -1762,7 +1762,7 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
     assert_eq!(
         round_starts_in(&events, RoundMode::Independent),
         vec![1, 3],
-        "第二场讨论接着第一场的轮次编号"
+        "第二次讨论接着第一次的轮次编号"
     );
     assert_eq!(
         round_starts_in(&events, RoundMode::Synthesis),
@@ -1770,7 +1770,7 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
         "它的合成也一样"
     );
 
-    // 第二个合成器的提示词只装着第二场讨论。
+    // 第二个合成器的提示词只装着第二次讨论。
     let prompt = second_synthesizer
         .requests()
         .last()
@@ -1783,14 +1783,14 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
             _ => None,
         })
         .expect("一条 user 消息");
-    assert!(prompt.contains("第二场的甲"), "{prompt}");
+    assert!(prompt.contains("第二次的甲"), "{prompt}");
     assert!(prompt.contains("第二个讨论"), "{prompt}");
     assert!(
-        !prompt.contains("第一场的甲") && !prompt.contains("第一个讨论"),
-        "第一场讨论不是第二场合成的材料：{prompt}"
+        !prompt.contains("第一次的甲") && !prompt.contains("第一个讨论"),
+        "第一次讨论不是第二次合成的材料：{prompt}"
     );
     // 而重放出来的提示词就是当时发出去的那一份：整套
-    // 事件流设计所依靠的那条不变量，现在一条流上有两场讨论。
+    // 事件流设计所依靠的那条不变量，现在一条流上有两次讨论。
     let replayed = heng::agent::replay::replay(
         &events,
         &SpeakerId::System,

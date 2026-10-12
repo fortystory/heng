@@ -460,7 +460,7 @@ pub fn compaction_prompt(events: &[Event]) -> String {
     kept.reverse();
 
     let mut prompt = String::from(
-        "下面是一场 coding agent 会话的历史。把它压成一段摘要，供**另一个**会话接着干同一件\
+        "下面是一个会话 coding agent 会话的历史。把它压成一段摘要，供**另一个**会话接着干同一件\
          活时参考。用中文，直接写摘要，不要客套。留住这些东西：已经做到哪一步、为什么这么\
          做、踩过哪些坑、读过改过哪些文件、还有哪些没解决。不要逐条复述历史。\n\n",
     );

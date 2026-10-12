@@ -46,7 +46,7 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
-        // 这一场会话的工具声明：Schema 面按名字查它（票 24 收口补的那一面）。这些测试
+        // 这个会话的工具声明：Schema 面按名字查它（票 24 收口补的那一面）。这些测试
         // 不打开工具详情，于是给一份空的。
         tool_schemas: Default::default(),
         speaker_order: Vec::new(),
@@ -1201,7 +1201,7 @@ fn exit_hint_on_screen(state: &mut TuiState) -> String {
 
 #[test]
 fn ctrl_d_asks_twice_before_it_leaves() {
-    // 多会话之后误触的代价是一次按掉**几场**，所以 `Ctrl-D` 走双击（票 28）：
+    // 多会话之后误触的代价是一次按掉**几个**，所以 `Ctrl-D` 走双击（票 28）：
     // 第一下只举手、提示行换成「再按一次」，第二下才真的发出去。
     let mut state = new_state();
 

@@ -60,7 +60,7 @@ use executor::{ExecutorPort, spawned_executors};
 /// 单 agent 回合看到全部。讨论轮次里的一个回合看到截止到该轮 `RoundStarted`（含）的一切，
 /// 加上它自己更晚的事件 —— 永远看不到同一轮里另一个讨论者的事件（spec §15）。
 ///
-/// 这是**结构性**的切分，不是对时序的指望。两个讨论者同时进行中，所以「两边都还没作答」是一场
+/// 这是**结构性**的切分，不是对时序的指望。两个讨论者同时进行中，所以「两边都还没作答」是一个会话
 /// 快的假 provider 立刻就会输掉的竞态；把流切在一个 `seq` 上，是唯一一种无论两个回合如何
 /// 交错都成立的独立性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,8 +72,8 @@ pub enum TurnScope {
     Round { before_seq: u64 },
     /// 执行者自己的窗口：钉住的注入加上它自己的事件，别的都没有。
     ///
-    /// 执行者不是派发它那场对话的参与者。它靠自己的简报干活，所以派发它的那个会话说了什么、
-    /// 另一个发言者答了什么，都不在它的窗口里 —— 这也是让一场长讨论不至于被回放进每个执行者
+    /// 执行者不是派发它那个会话对话的参与者。它靠自己的简报干活，所以派发它的那个会话说了什么、
+    /// 另一个发言者答了什么，都不在它的窗口里 —— 这也是让一次长讨论不至于被回放进每个执行者
     /// 上下文的原因。简报本身是经流送达的，作为 `ExecutorSpawned`（spec §5、§16）。
     Executor,
 }
@@ -258,7 +258,7 @@ pub(crate) fn spent_tokens(session: &Session) -> u64 {
     carried_spent(session.config().carried_tokens, &session.events())
 }
 
-/// 同上，但调用方拿着的是一批事件而不是一场会话（讨论的那两处走这一条）。
+/// 同上，但调用方拿着的是一批事件而不是一次（讨论的那两处走这一条）。
 pub(crate) fn carried_spent(carried_tokens: u64, events: &[Event]) -> u64 {
     total_usage(events)
         .total_tokens()
@@ -320,7 +320,7 @@ pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> R
     )
 }
 
-/// 记下这场会话**此刻**的五样事实（`.scratch/session-tab/spec.md` §2、票 18）。
+/// 记下这个会话**此刻**的五样事实（`.scratch/session-tab/spec.md` §2、票 18）。
 ///
 /// 每次装载之后补一条完整的快照：`SessionStarted` 那五格给的是**开场那一刻**的值，而
 /// `/model`、`Shift+Tab` 这些会话级手势会把它挪走。**log-only**，模型看不到自己被换过档。
@@ -358,7 +358,7 @@ fn current_facts(session: &Session) -> crate::session::SessionFacts {
     }
 }
 
-/// 记下这场会话的新名字（`.scratch/session-tab/spec.md` §4）。
+/// 记下这个会话的新名字（`.scratch/session-tab/spec.md` §4）。
 ///
 /// 它是**人敲的散文**，所以走 `emit` 的同一条路：打码、落流、推给渲染器。空串（或归一化之后
 /// 为空）就是**撤回** —— 那一条照样要写，否则最后一条手动标题仍然生效。
@@ -454,7 +454,7 @@ pub fn record_context_injection_from(
     )
 }
 
-/// 记下「人在这场会话里运行了一条 `/` 命令」（`.scratch/command-echo/spec.md`）。
+/// 记下「人在这个会话里运行了一条 `/` 命令」（`.scratch/command-echo/spec.md`）。
 ///
 /// `text` 是敲下去的那一条**原文**：命令是手势而不是一句话，所以投影把它当零（模型读到的
 /// 消息一个字节都没变），而转录、复盘与 `--continue` 之后都读得出它。
@@ -1429,18 +1429,18 @@ pub struct Synthesizer {
     pub provider: Box<dyn Provider>,
 }
 
-/// 一场讨论：名册、收尾调用，以及轮次上限。
+/// 一次讨论：名册、收尾调用，以及轮次上限。
 pub struct Discussion {
     debaters: Vec<Debater>,
     synthesizer: Synthesizer,
     max_rounds: u32,
-    /// 这场讨论要写入的那条流上已有的最高轮次。轮次记为 `round_offset + n`，所以本地计数
+    /// 这次讨论要写入的那条流上已有的最高轮次。轮次记为 `round_offset + n`，所以本地计数
     /// `n` 仍然是协议里的那个（「这是第一轮吗？」「碰到上限了吗？」），而流上的数字在会话内
     /// 保持唯一。
     round_offset: u32,
 }
 
-/// 一场讨论是怎么结束的，以及合成器从中得出了什么。
+/// 一次讨论是怎么结束的，以及合成器从中得出了什么。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscussionOutcome {
     /// 辩论阶段为什么停下；没人作答时是 `Error`。
@@ -1457,8 +1457,8 @@ pub struct DiscussionOutcome {
 impl Discussion {
     /// 取一份名册。名册的形状在组装期已经校验过，所以这里不再复查。
     ///
-    /// 这场讨论记录的轮次号从**流上已有的内容之后**开始：一个会话可以装不止一场讨论
-    /// （`/discuss` 就在活着的流上跑），而 `RoundStarted { round }` 得说清自己属于哪一场，
+    /// 这次讨论记录的轮次号从**流上已有的内容之后**开始：一个会话可以装不止一次讨论
+    /// （`/discuss` 就在活着的流上跑），而 `RoundStarted { round }` 得说清自己属于哪个会话，
     /// 否则每一个跨轮次的查询都会把它们混在一起（spec §15、`debate_phase_start`）。
     pub fn new(debaters: Vec<Debater>, synthesizer: Synthesizer, max_rounds: u32) -> Self {
         let round_offset = crate::discussion::last_round(&debaters[0].session.events());
@@ -1474,10 +1474,10 @@ impl Discussion {
         self.debaters[0].session.id()
     }
 
-    /// 代表整场讨论记录的那个会话。
+    /// 代表整次讨论记录的那个会话。
     ///
     /// 讨论者共用一条日志，所以它们任何一个的会话都能追加一个轮次边界、或把流读回来。走一个
-    /// 访问器，让「哪个会话代表这场讨论说话」成为一个在一处做出的决定，而不是在每个调用点
+    /// 访问器，让「哪次代表这次讨论说话」成为一个在一处做出的决定，而不是在每个调用点
     /// 重复的 `debaters[0]`。
     fn recorder(&mut self) -> &mut Session {
         &mut self.debaters[0].session
@@ -1489,7 +1489,7 @@ impl Discussion {
     }
 }
 
-/// 跑一场讨论：一次独立首轮，只在结论冲突时来一次定向的第二轮，然后是合成器那一次调用
+/// 跑一次讨论：一次独立首轮，只在结论冲突时来一次定向的第二轮，然后是合成器那一次调用
 /// （spec §15）。
 ///
 /// 控制流住在这个层里，因为这个层是事件流的唯一写者、也是 provider 的唯一调用者（spec §3）；
@@ -1529,11 +1529,11 @@ pub async fn run_discussion(
     }
 
     let mut rounds: u32 = 0;
-    // 这场讨论的轮次号在流上从哪儿开始（见 `Discussion`）。
+    // 这次讨论的轮次号在流上从哪儿开始（见 `Discussion`）。
     let offset = discussion.round_offset;
     let mut absent: Vec<SpeakerId> = Vec::new();
     // 会话的额度是每个参与者共用的同一个值（spec §17）；组装期会拒绝在它上面不一致的名册，
-    // 所以记录者的那一份代表整场讨论。
+    // 所以记录者的那一份代表整次讨论。
     let budget = discussion.debaters[0].session.config().budget.clone();
     // 同一条流上每个参与者拿到的都是同一个额度口径，所以「别处已经花掉的」取哪一位的都一样
     // （`.scratch/goal-loop/spec.md` §8）。
@@ -1569,7 +1569,7 @@ pub async fn run_discussion(
         } else {
             RoundMode::Targeted
         };
-        // 落进流的是那个会话内唯一的数字；`rounds` 保持这场讨论自己的计数，协议规则正是用
+        // 落进流的是那个会话内唯一的数字；`rounds` 保持这次讨论自己的计数，协议规则正是用
         // 那个计数写的。
         let recorded = offset + rounds;
         let started = record_round_started(discussion.recorder(), render, recorded, mode)?;
@@ -1676,7 +1676,7 @@ pub async fn run_discussion(
         }
     };
 
-    // 一场被取消的讨论根本不会靠近合成器：手势的意思就是停，而收尾调用和其它调用一样是一次
+    // 一次被取消的讨论根本不会靠近合成器：手势的意思就是停，而收尾调用和其它调用一样是一次
     // provider 调用。把辩论阶段以 `Aborted` 而不是 `Error` 收场，正是「用户停下了它」不至于
     // 被记成失败的原因（spec §6）。
     if reason == StopReason::Aborted {
@@ -1697,7 +1697,7 @@ pub async fn run_discussion(
         synthesis_round,
         RoundMode::Synthesis,
     )?;
-    // 材料的作用域限于这次合成所收尾的那个阶段：流上可能已经带着更早一场讨论的轮次。
+    // 材料的作用域限于这次合成所收尾的那个阶段：流上可能已经带着更早一次讨论的轮次。
     let materials = discussion.stream();
     let prompt = crate::discussion::synthesis_prompt(
         question,
@@ -1738,7 +1738,7 @@ pub async fn run_discussion(
     )?;
 
     Ok(DiscussionOutcome {
-        // 停下这场讨论的是手势，不是辩论阶段。
+        // 停下这次讨论的是手势，不是辩论阶段。
         reason: if cancelled_in_synthesis {
             StopReason::Aborted
         } else {

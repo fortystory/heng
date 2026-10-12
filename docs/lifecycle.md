@@ -121,7 +121,7 @@ flowchart TD
     boot[boot：进程被敲下]
     cmd{子命令分派}
     setup[组装：配置 · 凭据 · provider · 工具表 · 沙箱]
-    host[会话宿主：一场一个 task，表里一个前台]
+    host[会话宿主：一个会话一个 task，表里一个前台]
     sess[会话：新开 或 --continue 恢复]
     render{渲染器：TUI 或 plain，二选一}
     loop[主循环：等一行或手势]
@@ -161,8 +161,8 @@ flowchart TD
 就进主循环；循环把每一次输入分派给 `turn`、`disc` 或 `goal`，回来的边都指向循环顶。
 
 **进程生命周期 ≠ 会话生命周期**（`.scratch/session-tab/spec.md` §1）。`host` 那一层就是这条
-分界：一次进程可以装载、切换、关掉多场会话，而**主干**（主循环、渲染器、收尾）只有一条。
-一场会话在内存里的样子是一个 `Harness` 加一个拥有它的 task（`SessionHost` 每行六格：id、cwd、
+分界：一次进程可以装载、切换、关掉多个会话，而**主干**（主循环、渲染器、收尾）只有一条。
+一个会话在内存里的样子是一个 `Harness` 加一个拥有它的 task（`SessionHost` 每行六格：id、cwd、
 只读标志、三态、命令通道、取消信号 + join）；**前台**只是表里的一个指针，切换只改它，
 忙闲不阻挡。所以 `sess` 与 `render` 仍是 `setup` 的产物，而它们**归 `host` 管** —— 图 1 把
 `host` 画在 `setup` 与 `sess` 之间，正是为了说出这件事。三条维护子命令（`probe` / `prune` / `sessions`）**各自退出**，既不组装会话、
@@ -211,7 +211,7 @@ flowchart TD
     resume[补记沙箱状态 · 收尾悬空 tool_call · 重放历史]
     banner[横幅 + 斜杠菜单]
     host[会话宿主：装载 · 切换 · 关闭]
-    loop[主循环：从表里驱动前台那一场]
+    loop[主循环：从表里驱动前台那个会话]
     quit[收尾：广播 Close → 等全部 join → 排空渲染通道 + 续接回执]
     ok[退出 0]
     cc[退出 130]
@@ -247,10 +247,10 @@ flowchart TD
 交互式那条路上组装是**一条直线**：参数 → 配置 → 凭据与打码器 → provider → `SessionConfig` →
 起始权限模式 → 工具表 → `assemble`，之后才惰性探一次沙箱。两条骨架来源（新开 / `--continue`）
 在这里合流，再往下是横幅、**入宿主表**、主循环与三条退出路径。多会话之后 `host` 是这一段的
-分界（`.scratch/session-tab/spec.md` §1）：装载进来的每一场都是「一个 `Harness` 加一个拥有它的
-task」，主循环只驱动**前台**那一场，别的场照跑；收尾时**广播 `Close` 给每一场**、逐场等
+分界（`.scratch/session-tab/spec.md` §1）：装载进来的每一个会话都是「一个 `Harness` 加一个拥有它的
+task」，主循环只驱动**前台**那个会话，别的会话照跑；收尾时**广播 `Close` 给每一个会话**、逐个等
 `JoinHandle` 落地，再排空渲染通道。**后台会话不写收尾事件** —— 卸载只把它从表里移走，盘上
-那场流原样留着，下次装载接着读。
+那个会话流原样留着，下次装载接着读。
 
 三处最容易读错的地方：
 
@@ -468,8 +468,8 @@ flowchart TD
 
 ### 1. 事件流是唯一真相源
 
-- **说什么**：`messages` 每个回合从流上重算，从不存下来 —— 而且**每场会话各算各的**：一次
-  进程里活着几场，就有几条流、几份投影，谁都不读别人的那一份（`.scratch/session-tab/spec.md`
+- **说什么**：`messages` 每个回合从流上重算，从不存下来 —— 而且**每个会话各算各的**：一次
+  进程里活着几个，就有几条流、几份投影，谁都不读别人的那一份（`.scratch/session-tab/spec.md`
   §1）。
 - **图上的边**：图 5 的 `log → proj → trim → req`；`cont → proj` 与 `replay → proj` 是同一件事的
   另外两条入口。
@@ -488,8 +488,8 @@ flowchart TD
 ### 3. 工具表组装后不变
 
 - **说什么**：动态工具与联网工具都在组装期入表，之后再不改动 —— 表是缓存前缀的一部分。
-  多会话之后这条要**按会话读**：表是**那一场装载时**建的一份（票 20 的 `AssemblyKit` 每次现建
-  一张），一场会话跑着的时候它的表不动。
+  多会话之后这条要**按会话读**：表是**那个会话装载时**建的一份（票 20 的 `AssemblyKit` 每次现建
+  一张），一个会话跑着的时候它的表不动。
 - **图上的边**：图 2 的 `mode → tools`（**没有回边**）。
 - **证据**：`src/cli.rs:386-389`、`src/tools/mod.rs:96-125`、`src/tools/registry.rs:88-93`
 - **破坏了会怎样**：运行期往表里加一个工具，每个会话的缓存前缀就作废一次（全量未命中），
@@ -525,7 +525,7 @@ flowchart TD
 - **图上的边**：图 1 的 `loop →|两下 Ctrl-C| tail` 与 `loop →|取消后收尾| aborted`；图 4 里执行者
   继承派发者的取消观察端。
 - **证据**：`src/agent/cancel.rs:8-15`、`src/agent/executor.rs:84-86`、`src/lib.rs:667-670`
-- **破坏了会怎样**：子会话能反过来取消父会话，一次 `Ctrl-C` 就会从执行者波及整场讨论；而手势
+- **破坏了会怎样**：子会话能反过来取消父会话，一次 `Ctrl-C` 就会从执行者波及整次讨论；而手势
   本身不进流，事后没有任何记录能解释这次中断从哪来。
 
 ### 8. 委派深度为一，由工具表强制
@@ -558,7 +558,7 @@ flowchart TD
 - **说什么**：讨论的两位并发写同一条流，独立性靠 `seq` 切窗而不是时序。
 - **图上的边**：图 4 的 `deb → task`、`deb2 → round` 与 `one → deb`。
 - **证据**：`src/events.rs:925-929`、`src/agent.rs:58-79`、`src/agent.rs:1414-1427`
-- **破坏了会怎样**：给讨论者各开一条流，`/undo` 与转录就不再覆盖整场讨论，`seq` 切窗失效，
+- **破坏了会怎样**：给讨论者各开一条流，`/undo` 与转录就不再覆盖整次讨论，`seq` 切窗失效，
   两位发言的交错顺序失去唯一解释。
 
 ### 12. 合成器那一次调用绝不跳过
@@ -580,7 +580,7 @@ flowchart TD
 | `boot` | 进程入口，`main` 只调 `cli::main()` | `src/main.rs:1-3`、`src/cli.rs:78-103` | `fn main` |
 | `cmd` | 子命令分派：`--version` / `--help` / `probe` / `discuss` / `prune` / `sessions`，其余交互式 | `src/cli.rs:105-129` | `fn run` |
 | `setup` | 组装：配置 · 凭据 · provider · 工具表 · 沙箱 | `src/cli.rs:234-411` | `fn interactive` |
-| `host` | 会话宿主：一场一个 task，表里一个前台指针 | `src/cli.rs:423`、`src/session/host.rs:198-330` | `struct SessionHost`、`fn adopt_with` |
+| `host` | 会话宿主：一个会话一个 task，表里一个前台指针 | `src/cli.rs:423`、`src/session/host.rs:198-330` | `struct SessionHost`、`fn adopt_with` |
 | `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:4210`、`src/cli.rs:2676-2720` | `fn choose_session` |
 | `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:304`、`src/render/mod.rs:308` | `fn tui`、`fn plain` |
 | `loop` | 主循环：等一行或手势 | `src/cli.rs:238`、`src/cli.rs:621` | `fn interactive` |
@@ -602,8 +602,8 @@ flowchart TD
 | `cmd -->\|--discuss\| disc` | `src/cli.rs:116` | `discuss` 子命令独立组装 |
 | `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:4126` | 三条各自 `return` 自己的 `ExitCode` |
 | `setup --> host` | `src/cli.rs:423` | 宿主表在组装之前立起来 |
-| `host --> sess` | `src/cli.rs:4210`、`src/cli.rs:531` | `choose_session` 决定开哪一场，装好之后入表 |
-| `sess --> host` | `src/cli.rs:531` | `adopt_with` 把这一场交给它的 task |
+| `host --> sess` | `src/cli.rs:4210`、`src/cli.rs:531` | `choose_session` 决定开哪个会话，装好之后入表 |
+| `sess --> host` | `src/cli.rs:531` | `adopt_with` 把这个会话交给它的 task |
 | `setup --> render` | `src/cli.rs:327-372` | 渲染器在组装前选定并注入 |
 | `sess --> loop` | `src/cli.rs:446-459` | `interactive_loop(...)` 被调 |
 | `render --> loop` | `src/cli.rs:446-459` | 同上；两条入边是图 1 的有意合并 |
@@ -642,8 +642,8 @@ flowchart TD
 | `skel` | 新流：`SessionStarted` + 沙箱状态 + 钉住注入 | `src/lib.rs:391-411` | `fn record_skeleton` |
 | `resume` | 续流：补记沙箱状态 · 收尾悬空 `tool_call` · 重放历史 | `src/lib.rs:351`、`src/agent/history.rs:40-61`、`src/cli.rs:417-419` | `fn start`、`fn recover_pending_calls` |
 | `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:2939` | `fn banner` |
-| `host` | 会话宿主：装载 / 切换 / 关闭，一场一个 task | `src/cli.rs:423`、`src/session/host.rs:256-330`、`src/cli.rs:531` | `struct SessionHost`、`fn adopt_with` |
-| `loop` | 主循环：从宿主表里驱动前台那一场 | `src/cli.rs:238`、`src/cli.rs:621` | `fn interactive` |
+| `host` | 会话宿主：装载 / 切换 / 关闭，一个会话一个 task | `src/cli.rs:423`、`src/session/host.rs:256-330`、`src/cli.rs:531` | `struct SessionHost`、`fn adopt_with` |
+| `loop` | 主循环：从宿主表里驱动前台那个会话 | `src/cli.rs:238`、`src/cli.rs:621` | `fn interactive` |
 | `quit` | 排空渲染通道，然后 stderr 打续接回执 | `src/cli.rs:830-844`、`src/render/mod.rs:408` | `fn finish_session`、`fn shutdown` |
 | `ok` | 退出 0 | `src/cli.rs:3461`、`src/cli.rs:2003-2008` | `fn exit_code_after` |
 | `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:3477`、`src/cli.rs:2074-2082` | `struct ExitRequest` |
@@ -673,7 +673,7 @@ flowchart TD
 | `skel --> banner` | `src/cli.rs:417-429` | 骨架先于横幅 |
 | `resume --> banner` | `src/cli.rs:417-429` | 重放先于横幅 |
 | `banner --> host` | `src/cli.rs:423`、`src/cli.rs:531` | 组装之后入表（`adopt_with`） |
-| `host --> loop` | `src/cli.rs:446-459` | 主循环从表里驱动前台那一场 |
+| `host --> loop` | `src/cli.rs:446-459` | 主循环从表里驱动前台那个会话 |
 | `loop -->\|/quit 或空行\| quit` | `src/cli.rs:3461`、`src/cli.rs:462` | `harness.shutdown()` |
 | `loop -->\|忙碌时两下 Ctrl-C\| cc` | `src/cli.rs:2074-2082` | 先等回合收尾，再兑现 130 |
 | `quit --> ok` | `src/cli.rs:2003-2008` | `finish_session` 原样返回 `code` |

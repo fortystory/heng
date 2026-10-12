@@ -135,7 +135,7 @@ fn a_sound_stream_is_writable() {
 
 #[test]
 fn a_broken_tail_is_still_writable() {
-    // 尾行坏：`EventLog::open` 会把那一条截掉，于是这一场写得了。
+    // 尾行坏：`EventLog::open` 会把那一条截掉，于是这个会话写得了。
     let dir = tempfile::tempdir().unwrap();
     let path = write_log(dir.path(), &[&good_line(1), "这不是一行 JSON"]);
     assert_eq!(health(&path), StreamHealth::Writable);

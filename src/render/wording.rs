@@ -74,7 +74,7 @@ pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -
     line
 }
 
-/// 一场会话怎么再跑起来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
+/// 一个会话怎么再跑起来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
 /// 进程，所以会话 id 才是那个持久的答案。
 ///
 /// `discuss` 与交互式退出共用它：两处都是「终端交还之后，给人一条能直接粘的命令」
@@ -84,9 +84,9 @@ pub fn session_receipt(session_id: &str) -> String {
     format!("会话 {session_id}；接着跑：heng -c {session_id}")
 }
 
-/// `-c <id>` 续上了一场面**别的工作区**的会话：这一趟的工作目录跟着那场会话走了。
+/// `-c <id>` 续上了一个**别的工作区**的会话：这一趟的工作目录跟着那个会话走了。
 pub fn session_followed(dir: &str) -> String {
-    format!("接着跑的是 {dir} 里的那场会话")
+    format!("接着跑的是 {dir} 里的那个会话")
 }
 
 /// 正在讨论的那一对，给只有一个字段能点名它们的前端。
@@ -160,7 +160,7 @@ pub fn question_prompt() -> &'static str {
     "问题> "
 }
 
-/// 整场会话收尾。
+/// 整个会话收尾。
 pub fn session_ended(reason: StopReason) -> String {
     format!("会话结束：{}", stop_reason(reason))
 }
@@ -518,7 +518,7 @@ pub fn detail_schema_face() -> &'static str {
 /// Schema 面拿不到这次调用的声明时怎么写：**一句话说明查不到**。
 ///
 /// 不画空面、不编一份 schema 出来 —— 与这一轮其它降级同一条纪律（拿不到就不假装有）。查不到
-/// 对读的人是同一件事，虽然它有两条来路：重放一场老会话时那个工具已经不在这一场会话的工具表
+/// 对读的人是同一件事，虽然它有两条来路：重放一个老会话时那个工具已经不在这个会话的工具表
 /// 里，以及一次没有配对开始的调用（转录把工具名记成 `?`）。
 pub fn detail_schema_missing(tool: &str) -> String {
     format!("工具表里没有「{tool}」，这次调用的声明查不到")
@@ -1671,18 +1671,18 @@ const TRACE_HINTS: [&str; 10] = [
 /// 键盘空闲时的出口：**只有 `Ctrl-D`**。
 ///
 /// 它曾经写着 `ctrl-c/ctrl-d 退出` —— 那是一条已经不成立的旧语义。多会话之后 `Ctrl-C` 只取消
-/// 眼前那一场当前的动作、**永不退出**（`.scratch/session-tab/spec.md` §1、票 23），所以空闲时
-/// 宣传它就是在骗人：按下去什么也不会发生，循环只会回一句「这一场现在没有在跑的东西」
+/// 眼前那个会话当前的动作、**永不退出**（`.scratch/session-tab/spec.md` §1、票 23），所以空闲时
+/// 宣传它就是在骗人：按下去什么也不会发生，循环只会回一句「这个会话现在没有在跑的东西」
 /// （2026-10-12 维护者报告）。提示一个此刻没有用的键，是提示行绝不能做的那件事。
 pub const EXIT_HINT_IDLE: &str = "ctrl-d 退出";
 
 /// 一次运行进行中时的出口。两个键意思不同，所以这一行是两档里的那一档：**`Ctrl-C` 取消眼前
-/// 那个动作，`Ctrl-D` 退出**（退出要过闸门 —— 别的场还在跑时它会被拒下，并指出在跑的那一场）。
+/// 那个动作，`Ctrl-D` 退出**（退出要过闸门 —— 别的会话还在跑时它会被拒下，并指出在跑的那个会话）。
 pub const EXIT_HINT_BUSY: &str = "ctrl-c 取消 · ctrl-d 退出";
 
 /// 空闲、**已经按下第一下 `Ctrl-D`** 时的出口：再按一次才真的走。
 ///
-/// 多会话之后误触的代价是一次按掉**几场**，所以这一层回来了（票 28）—— 它是渲染器自己的
+/// 多会话之后误触的代价是一次按掉**几个**，所以这一层回来了（票 28）—— 它是渲染器自己的
 /// 确认，循环只看得见第二下。
 pub const EXIT_HINT_IDLE_RAISED: &str = "再按一次 ctrl-d 退出";
 
@@ -1872,7 +1872,7 @@ const HISTORY_FULL_TERMINAL: u16 = 60;
 /// 从这一档提示行起，整句短语值得占那些列。
 const HISTORY_FULL_MIN: u16 = HISTORY_FULL_TERMINAL - 2;
 
-/// 画在重放的历史与这场会话新增的内容之间的那条线。
+/// 画在重放的历史与这个会话新增的内容之间的那条线。
 ///
 /// 它是**渲染层的一条线，不是一条事件**：它从不进日志，所以下一次 `--continue` 会在新的
 /// 接缝上插一条新的，而不是把旧的也重放出来（spec §6）。
@@ -1955,7 +1955,7 @@ fn pair(left: u64, right: u64, style: NumberStyle) -> String {
     format!("{} / {}", compact(left, style), compact(right, style))
 }
 
-/// 这场会话花了多少，对上它的额度 —— 当它有额度时。
+/// 这个会话花了多少，对上它的额度 —— 当它有额度时。
 ///
 /// 没有上限的会话只显示花掉的那部分：`1.2万 / —` 会被读成一个缺失的上限，而不是一个从来
 /// 没设过的上限（spec §8）。
@@ -2049,9 +2049,9 @@ pub enum TitleState {
     Waiting,
     /// 正在重放历史。
     Replaying,
-    /// **后台**有几场在等人答（票 25）。`N` 只算后台，不含当前前台。
+    /// **后台**有几个在等人答（票 25）。`N` 只算后台，不含当前前台。
     WaitingBackground(usize),
-    /// **后台**有几场刚跑完、还没被读（票 25）。
+    /// **后台**有几个刚跑完、还没被读（票 25）。
     FinishedBackground(usize),
 }
 
@@ -2062,8 +2062,8 @@ pub fn title_word(state: TitleState) -> Option<String> {
         TitleState::Running => Some("运行中".to_owned()),
         TitleState::Waiting => Some("等你".to_owned()),
         TitleState::Replaying => Some("重放中".to_owned()),
-        TitleState::WaitingBackground(count) => Some(format!("{count} 场待答")),
-        TitleState::FinishedBackground(count) => Some(format!("{count} 场跑完")),
+        TitleState::WaitingBackground(count) => Some(format!("{count} 个待答")),
+        TitleState::FinishedBackground(count) => Some(format!("{count} 个跑完")),
     }
 }
 
@@ -2281,7 +2281,7 @@ pub const TAB_CHANGES: &str = "改动";
 
 /// 左栏第一签：store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。
 ///
-/// 它排在 `调用量` **之前**：会话页回答的是「我在哪一场」，比这一场的读数更外层。
+/// 它排在 `调用量` **之前**：会话页回答的是「我在哪个会话」，比这个会话的读数更外层。
 pub const TAB_SESSIONS: &str = "会话";
 
 /// 会话页页区的四句。它们住在措辞层，不许散进渲染代码。
@@ -2290,41 +2290,41 @@ pub const SESSIONS_UNREADABLE: &str = "读不出会话列表";
 pub const SESSIONS_NONE: &str = "没有会话";
 pub const SESSIONS_NO_HIT: &str = "没有命中的会话";
 
-/// 退出被闸门拦下（票 23）：还有没收尾的场。
+/// 退出被闸门拦下（票 23）：还有没收尾的会话。
 pub fn exit_blocked(count: usize) -> String {
-    format!("还有 {count} 场没收尾：先在那几场按 ctrl-c 取消（会话页里 ● 与 ? 那几行）")
+    format!("还有 {count} 个会话没收尾：先在那几个会话上按 ctrl-c 取消（会话页里 ● 与 ? 那几行）")
 }
 
-/// `Ctrl-C` 时前台没有可取消的东西（票 23）。`background` 是别的场数。
+/// `Ctrl-C` 时前台没有可取消的东西（票 23）。`background` 是别的会话数。
 pub fn cancel_nothing(background: usize) -> String {
     if background == 0 {
-        "这一场现在没有在跑的东西".to_owned()
+        "这个会话现在没有在跑的东西".to_owned()
     } else {
-        format!("这一场现在没有在跑的东西；另外还有 {background} 场后台会话")
+        format!("这个会话现在没有在跑的东西；另外还有 {background} 个后台会话")
     }
 }
 
-/// 新建一场之后的回执（票 21 的口径：新开一场，旧会话留在列表里）。
+/// 新建一个会话之后的回执（票 21 的口径：新开一个，旧会话留在列表里）。
 pub fn new_session_opened() -> String {
-    "新开一场会话；刚才那场还在会话页里".to_owned()
+    "新开一个会话；刚才那个会话还在会话页里".to_owned()
 }
 
 /// 宿主表空了之后有人还提交了一句（票 21）。
 pub fn no_sessions_left() -> String {
-    "没有会话了：先在会话页按 `新建` 开一场".to_owned()
+    "没有会话了：先在会话页按 `新建` 开一个会话".to_owned()
 }
 
 /// 旧流缺了几样会话事实、回退到了**进程配置默认**（`.scratch/session-tab/spec.md` §2）。
 pub fn facts_filled(names: &[&str]) -> String {
     format!(
-        "这一场是旧格式的流，缺 {}；那几样按进程配置默认补上了",
+        "这个会话是旧格式的流，缺 {}；那几样按进程配置默认补上了",
         names.join("、")
     )
 }
 
 /// 在**只读预览**里按了一次要写流的东西（票 18）。
 pub fn read_only_session() -> String {
-    "这一场是只读预览：它的事件流中间有坏行，写下去会把洞留在那里".to_owned()
+    "这个会话是只读预览：它的事件流中间有坏行，写下去会把洞留在那里".to_owned()
 }
 
 /// 页顶右端的两个入口，以及一行的「流损坏」尾标。
@@ -2332,18 +2332,21 @@ pub const SESSION_NEW: &str = "新建";
 pub const SESSION_CLOSE: &str = "关闭";
 pub const SESSION_BROKEN: &str = "损坏";
 
-/// 页顶左端的读数：`N 场`，有人在跑时补一段 ` · M 场在跑`。
-pub fn session_count(total: usize, running: usize) -> String {
+/// 页顶左端的读数：`已装载 N 个`，有人在跑时补一段 ` · M 个在跑`。
+pub fn session_count(total: usize, running: usize, wide: bool) -> String {
+    // 窄档（左栏 28 列）放不下「已装载」那三个字：同一行右端还有 `新建` 与 `关闭` 两个入口。
+    // 所以窄档只报数，宽档才点明「装载」—— 那正是宿主表的定义（票 09 的宽度复核）。
+    let head = if wide { "已装载 " } else { "" };
     if running == 0 {
-        format!("{total} 场")
+        format!("{head}{total} 个")
     } else {
-        format!("{total} 场 · {running} 场在跑")
+        format!("{head}{total} 个 · {running} 个在跑")
     }
 }
 
-/// 末行那句「还有多少场没露面」。
+/// 末行那句「还有多少个会话没露面」。
 pub fn session_more(missing: usize) -> String {
-    format!("＋{missing} 场")
+    format!("＋{missing} 个会话")
 }
 
 /// 一行右端的相对时间，两档（`.scratch/session-tab/spec.md` §3）。
@@ -2592,7 +2595,7 @@ pub const SEP: &str = " · ";
 /// 候选的名字与状态都是内容。所以它进的是这张符号表，而「哪一列是什么」住在选择器的排版里。
 pub const PICKER_COLUMN: &str = "┆";
 
-/// 选择器表格第三列：这一行就是当前这一场会话在用的。
+/// 选择器表格第三列：这一行就是当前这个会话在用的。
 pub fn picker_status_current() -> &'static str {
     "当前"
 }
@@ -2870,7 +2873,7 @@ impl StatusPart {
 /// 五段、三档角色：标签退后、值靠前、分隔符只是线（§17）。**标签只有 `模型` 与 `上下文`
 /// 两个**：模式的名字与档位自己就是一个值。
 ///
-/// **模型与档位之间没有 [`STATUS_SEPARATOR`]**：它们是同一格的两半 —— 这一场会话由谁答、答多深 ——
+/// **模型与档位之间没有 [`STATUS_SEPARATOR`]**：它们是同一格的两半 —— 这个会话由谁答、答多深 ——
 /// 而一条段与段之间的线会把它们说成两件可以各丢各的事。它们之间用段内的 [`SEP`]。
 ///
 /// 降级顺序是**先丢「模型 + 档位」、再丢模式，最后剩「上下文 + 状态词」**（spec §11）：
@@ -2925,7 +2928,7 @@ pub fn status_row(
     row(&segments[2..])
 }
 
-/// 一场会话跑在其下的 `Mode`，用中文点名。
+/// 一个会话跑在其下的 `Mode`，用中文点名。
 pub fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Readonly => "只读",
@@ -2935,7 +2938,7 @@ pub fn mode_label(mode: Mode) -> &'static str {
     }
 }
 
-/// 启动横幅：这场会话是什么，用中文标签。
+/// 启动横幅：这个会话是什么，用中文标签。
 pub fn banner(session: &str, model: &str, mode: Mode, dir: &str, continued: bool) -> String {
     let tail = if continued { "（已继续）" } else { "" };
     format!(
@@ -2988,7 +2991,7 @@ pub static BUILT_IN_COMMANDS: [Command; 9] = [
     },
     Command {
         name: "discuss",
-        description: "起一场多角色讨论（用本会话的上下文）",
+        description: "起一次多角色讨论（用本会话的上下文）",
     },
     Command {
         name: "goal-new",
@@ -3035,7 +3038,7 @@ pub fn picker_title_model() -> &'static str {
 
 /// 选择器的标题：思考强度那一份。
 ///
-/// 不写「档位」：状态行那一格写的是「档位」，而这里要说明选的是**这一场会话让模型想多深**。
+/// 不写「档位」：状态行那一格写的是「档位」，而这里要说明选的是**这个会话让模型想多深**。
 pub fn picker_title_effort() -> &'static str {
     "思考强度"
 }
@@ -3079,7 +3082,7 @@ pub fn switch_busy() -> &'static str {
 
 /// 讨论会话里点状态行那两格（或用命令）时说的那句（spec §12）。
 ///
-/// `facts.model` 是两个模型的拼法 —— 那是配置事实，不是这一场会话可以中途改的值。
+/// `facts.model` 是两个模型的拼法 —— 那是配置事实，不是这个会话可以中途改的值。
 pub fn switch_not_switchable() -> &'static str {
     "讨论里的两位是配置事实，不在会话中途换"
 }
@@ -3191,7 +3194,7 @@ pub fn goal_reminded(percent: u64) -> String {
 
 /// 翻页那一下的记账（§7）：它必然打掉前缀缓存，所以别让它悄悄发生。
 pub fn goal_rolled_over_new(from: &str) -> String {
-    format!("历史压成摘要：新开一场接着跑（{from} 留在会话页里）")
+    format!("历史压成摘要：新开一个会话接着跑（{from} 留在会话页里）")
 }
 
 pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
@@ -3625,7 +3628,7 @@ pub fn no_sessions() -> &'static str {
     "本桶中没有会话"
 }
 
-/// 一场从未结束的会话在 `ls` 结束那一列上显示的东西。
+/// 一个从未结束的会话在 `ls` 结束那一列上显示的东西。
 pub fn open_session() -> &'static str {
     "未结束"
 }
@@ -3808,7 +3811,7 @@ pub fn help_main() -> String {
          heng prune [--keep N] [--cwd PATH] [--dry-run]\n         \
          heng sessions <ls|show|replay|stats> [options]\n\n  \
          不带子命令时，heng 在当前工作区启动一个交互会话：终端上用 TUI 渲染，否则用 \
-         plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话（`--continue <ID>` 或 `--session <ID>` 续指名的那一场，ID 也可以是它的会话目录）。\
+         plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话（`--continue <ID>` 或 `--session <ID>` 续指名的那个会话，ID 也可以是它的会话目录）。\
          discuss 起一次多角色讨论：两个讨论者各自独立作答，只在结论冲突时开一轮定向第二轮，\
          最后由合成器画出共识 / 分歧 / 未决（见 `heng discuss --help`）。\
          probe 对每个已配置的模型驱动一次真实回合，并在同一会话里再跑一次，然后打印归一化\
@@ -3836,7 +3839,7 @@ pub fn discuss_needs_question() -> &'static str {
 
 /// `/discuss` 自己没带题、*而且*会话里也还没有题的时侯。
 ///
-/// 一个裸 `/discuss` 讨论用户最后问的那件事；在一场他们什么都还没问的会话里，没有东西可
+/// 一个裸 `/discuss` 讨论用户最后问的那件事；在一个他们什么都还没问的会话里，没有东西可
 /// 讨论。
 pub fn discuss_needs_in_session_question() -> &'static str {
     "`/discuss` 没有可讨论的题目：写成 `/discuss 你的问题`，或先在这个会话里问一句，\
@@ -3849,7 +3852,7 @@ pub fn help_interactive() -> String {
      在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
      `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
      输入 / 会弹出补全窗口，列出全部命令与技能。\
-     `/discuss [--debaters A,B] [问题]` 起一场多角色讨论：两个讨论者用**本会话的上下文**\
+     `/discuss [--debaters A,B] [问题]` 起一次多角色讨论：两个讨论者用**本会话的上下文**\
      各自作答，只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决；\
      `--debaters 保守,激进` 指定抽池子里的哪两个（不写就随机抽两个），不带问题就用本会话\
      最后一个问题。讨论的事件写进同一个会话，`sessions show` 能一起复盘。\
@@ -3857,8 +3860,8 @@ pub fn help_interactive() -> String {
      自动四档权限模式之间循环（按严格度排），当前档位显示在状态行。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（全屏外壳）\n  \
-     --continue, -c [ID]  接着跑：不写 ID 就是本工作区最新的会话，写了就续 ID 那一场\n  \
-     --session ID         同上，显式拼写；ID 也可以是那场会话的目录\n  \
+     --continue, -c [ID]  接着跑：不写 ID 就是本工作区最新的会话，写了就续 ID 那个会话\n  \
+     --session ID         同上，显式拼写；ID 也可以是那个会话的目录\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
      --mode MODE        权限模式：readonly / ask / workspace / auto（默认：配置里的 [permissions] mode）\n  \
@@ -3915,7 +3918,7 @@ pub fn help_sessions() -> String {
      replay <id> --speaker X [--round N] [--model ID] [--json]\n      \
      只从事件流重算某一次调用发给 provider 的内容。\n  \
      title <id> <text>\n      \
-     给一场会话改名；空串即撤回，回落自动派生。\n  \
+     给一个会话改名；空串即撤回，回落自动派生。\n  \
      stats <id> [--model ID] [--json]\n      \
      固定的指标集（token、费用、缺席率、编辑匹配层级的降级）。\n\n  \
      标准输出只放结果，诊断走标准错误。"

@@ -353,7 +353,7 @@ pub struct GenerationParams {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// 这一场会话的推理档位。`None` 是**「默认」那一档**（spec §5）：不发这个字段，由厂商
+    /// 这个会话的推理档位。`None` 是**「默认」那一档**（spec §5）：不发这个字段，由厂商
     /// 自己挑 —— 把厂商默认展开成某个具体值会让人以为是自己选的。会话中途可以换（§2），
     /// 换的代价是前缀缓存重来，回执里会说。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1756,7 +1756,7 @@ struct RawNamedDebater {
 /// 一个讨论可以抽到的讨论者：它的**名字**，以及它作答所用的模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Debater {
-    /// 这个参与者在流上的身份。同一场讨论的两个讨论者绝不能共用它：每一次投影都是
+    /// 这个参与者在流上的身份。同一次讨论的两个讨论者绝不能共用它：每一次投影都是
     /// `speaker_id` 的函数，所以一个名字会让每一方把对面的回答当成自己的（spec §5）。
     pub name: String,
     /// 这个讨论者作答所用的模型。
@@ -1796,7 +1796,7 @@ pub const MAX_DEBATER_NAME: usize = 32;
 
 /// 讨论者 `soul` 的最大长度，按字符计。
 ///
-/// 灵魂是一次注入，而注入是钉住的：它是这个讨论者参与的每一场讨论的每一轮的指令，所以它像
+/// 灵魂是一次注入，而注入是钉住的：它是这个讨论者参与的每一次讨论的每一轮的指令，所以它像
 /// 别的钉住文本一样被限长（spec §9、§10），而不是放着让它吃掉窗口。
 pub const MAX_DEBATER_SOUL: usize = 2000;
 
@@ -2235,7 +2235,7 @@ fn resolve_routing(
 
 /// 把 `[discussion]` 解析成讨论从中抽取的池子（spec §15）。
 ///
-/// 是**池子**，不是一对：一场讨论恰好跑两个讨论者，但抽哪两个是逐场讨论决定的 —— 命令行上
+/// 是**池子**，不是一对：一次讨论恰好跑两个讨论者，但抽哪两个是逐次讨论决定的 —— 命令行上
 /// 点名，或者什么都没点名时从池子里随机抽。这里拒绝的是服务不了这件事的池子：成员少于两个、
 /// 模型没配置过、名字当不了身份（空、带空格、过长），以及两个成员共用一个名字。
 ///
@@ -2306,7 +2306,7 @@ fn resolve_discussion(
                 ),
             });
         }
-        // 灵魂在整场讨论里钉住、从不裁剪，所以它和别的钉住文本一样被限长（spec §10）。
+        // 灵魂在整次讨论里钉住、从不裁剪，所以它和别的钉住文本一样被限长（spec §10）。
         if let Some(soul) = &soul {
             if soul.is_empty() {
                 return Err(ConfigError::InvalidDiscussion {
@@ -2328,7 +2328,7 @@ fn resolve_discussion(
         debaters.push(Debater { name, model, soul });
     }
 
-    // 同一场讨论的两个讨论者就是两个参与者，而每一次投影都是 `speaker_id` 的函数
+    // 同一次讨论的两个讨论者就是两个参与者，而每一次投影都是 `speaker_id` 的函数
     // （spec §5）—— 所以池子里的名字必须唯一。这里抓住的情况是同一个模型的两个成员都没给
     // 名字：model id 就是名字，而一个 model id 当不了两个身份。
     for (index, debater) in debaters.iter().enumerate() {
@@ -2517,7 +2517,7 @@ pub enum ConfigError {
 pub struct SessionConfig {
     /// provider 调用所用的模型标识。
     pub model: String,
-    /// 这一场跑在哪个 provider profile 上（`.scratch/session-tab/spec.md` §2 要记的五样之一）。
+    /// 这个会话跑在哪个 provider profile 上（`.scratch/session-tab/spec.md` §2 要记的五样之一）。
     ///
     /// `None` 是测试与无 profile 的组装（`SessionConfig::new`）：那时它只进不了流，不影响别的。
     pub provider: Option<String>,

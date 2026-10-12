@@ -207,7 +207,7 @@ fn synthesizer(events: &[Event], round: Option<u32>) -> Result<Vec<Message>, Rep
     };
 
     // 这次合成记在哪个轮次之下：材料的作用域是它所收尾的那个辩论阶段（一个会话里可以装
-    // 不止一场讨论）。
+    // 不止一次讨论）。
     let EventPayload::RoundStarted {
         round: synthesis_round,
         ..

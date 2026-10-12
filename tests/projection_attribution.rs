@@ -785,7 +785,7 @@ fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
 #[test]
 fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitized() {
     // 讨论者是一个人物：`[discussion] debaters = [{ name = "保守", … }]` 给一方
-    // 起名，而同一场讨论的两方必须在前缀里保持分得开 ——
+    // 起名，而同一次讨论的两方必须在前缀里保持分得开 ——
     // 一个被弄坏的名字会被读成同一个发言者两遍。厂商的字符集
     // 唯一没有文档的地方就是 `name` 这个字段，所以它单独过一道
     // 打码（spec §5）。
