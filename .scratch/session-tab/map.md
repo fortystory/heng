@@ -66,7 +66,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [prototype：左栏「会话」页的形态](issues/06-session-page-shape.md)
 - [x] [grilling：新建会话与卸载边界](issues/07-new-session-and-unload.md)
 - [x] [grilling：前台视图的会话隔离与切换重建](issues/08-front-view-isolation.md)
-- [ ] [文档回改：lifecycle.md 与逐面文档（实现期执行）](issues/09-doc-revision.md)
+- [x] [文档回改：lifecycle.md 与逐面文档（实现期执行）](issues/09-doc-revision.md)
 - [x] [grilling：会话列表的搜索与过滤](issues/10-session-list-search.md)
 - [x] [grilling：后台会话有事时的场外通知](issues/11-offscreen-attention.md)
 - [x] [12: 把 TuiState 的会话投影抽成子结构](issues/12-session-projection-struct.md)

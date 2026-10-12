@@ -6252,7 +6252,7 @@ mod tests {
         .await
         .expect("组装一场 ask 档的会话");
 
-        let (console, _port, mut events) = crate::render::console();
+        let (console, _port, _events) = crate::render::console();
         let goals = GoalSetup {
             dir: Some(goals_dir),
             store,
@@ -6344,7 +6344,7 @@ mod tests {
         .await
         .expect("组装一场 auto 档的会话");
 
-        let (console, _port, mut events) = crate::render::console();
+        let (console, _port, _events) = crate::render::console();
         let goals = GoalSetup {
             dir: Some(goals_dir),
             store,
@@ -6506,7 +6506,7 @@ mod tests {
         .await
         .expect("组装一场接手的会话");
 
-        let (console, _port, mut front_end) = crate::render::console();
+        let (console, _port, _front_end) = crate::render::console();
         let goals = GoalSetup {
             dir: Some(goals_dir),
             store,

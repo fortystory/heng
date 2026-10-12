@@ -210,8 +210,9 @@ flowchart TD
     skel[记 SessionStarted + 沙箱状态 + 钉住注入]
     resume[补记沙箱状态 · 收尾悬空 tool_call · 重放历史]
     banner[横幅 + 斜杠菜单]
-    loop[主循环]
-    quit[收尾：排空渲染通道 + 续接回执]
+    host[会话宿主：装载 · 切换 · 关闭]
+    loop[主循环：从表里驱动前台那一场]
+    quit[收尾：广播 Close → 等全部 join → 排空渲染通道 + 续接回执]
     ok[退出 0]
     cc[退出 130]
     panic[TUI 专属：panic 钩子 / Drop 还原终端，无固定入边]
@@ -235,7 +236,8 @@ flowchart TD
     kind -->|--continue| resume
     skel --> banner
     resume --> banner
-    banner --> loop
+    banner --> host
+    host --> loop
     loop -->|/quit 或空行| quit
     loop -->|忙碌时两下 Ctrl-C| cc
     quit --> ok
@@ -244,7 +246,11 @@ flowchart TD
 **这张图在讲什么。** `main` 只有一句调用；`cli::main` 先查 euid、再建 runtime，然后才碰参数。
 交互式那条路上组装是**一条直线**：参数 → 配置 → 凭据与打码器 → provider → `SessionConfig` →
 起始权限模式 → 工具表 → `assemble`，之后才惰性探一次沙箱。两条骨架来源（新开 / `--continue`）
-在这里合流，再往下是横幅、主循环与三条退出路径。
+在这里合流，再往下是横幅、**入宿主表**、主循环与三条退出路径。多会话之后 `host` 是这一段的
+分界（`.scratch/session-tab/spec.md` §1）：装载进来的每一场都是「一个 `Harness` 加一个拥有它的
+task」，主循环只驱动**前台**那一场，别的场照跑；收尾时**广播 `Close` 给每一场**、逐场等
+`JoinHandle` 落地，再排空渲染通道。**后台会话不写收尾事件** —— 卸载只把它从表里移走，盘上
+那场流原样留着，下次装载接着读。
 
 三处最容易读错的地方：
 
@@ -636,7 +642,8 @@ flowchart TD
 | `skel` | 新流：`SessionStarted` + 沙箱状态 + 钉住注入 | `src/lib.rs:391-411` | `fn record_skeleton` |
 | `resume` | 续流：补记沙箱状态 · 收尾悬空 `tool_call` · 重放历史 | `src/lib.rs:351`、`src/agent/history.rs:40-61`、`src/cli.rs:417-419` | `fn start`、`fn recover_pending_calls` |
 | `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:2934` | `fn banner` |
-| `loop` | 主循环 | `src/cli.rs:238`、`src/cli.rs:619` | `fn interactive` |
+| `host` | 会话宿主：装载 / 切换 / 关闭，一场一个 task | `src/cli.rs:423`、`src/session/host.rs:256-330`、`src/cli.rs:531` | `struct SessionHost`、`fn adopt_with` |
+| `loop` | 主循环：从宿主表里驱动前台那一场 | `src/cli.rs:238`、`src/cli.rs:619` | `fn interactive` |
 | `quit` | 排空渲染通道，然后 stderr 打续接回执 | `src/cli.rs:812-826`、`src/render/mod.rs:408` | `fn finish_session`、`fn shutdown` |
 | `ok` | 退出 0 | `src/cli.rs:3428`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
 | `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:3444`、`src/cli.rs:2054-2062` | `struct ExitRequest` |
@@ -665,7 +672,8 @@ flowchart TD
 | `kind -->\|--continue\| resume` | `src/lib.rs:334-344` | 补沙箱状态 + 收尾悬空调用 + 重放 |
 | `skel --> banner` | `src/cli.rs:417-429` | 骨架先于横幅 |
 | `resume --> banner` | `src/cli.rs:417-429` | 重放先于横幅 |
-| `banner --> loop` | `src/cli.rs:446-459` | 进主循环 |
+| `banner --> host` | `src/cli.rs:423`、`src/cli.rs:531` | 组装之后入表（`adopt_with`） |
+| `host --> loop` | `src/cli.rs:446-459` | 主循环从表里驱动前台那一场 |
 | `loop -->\|/quit 或空行\| quit` | `src/cli.rs:3428`、`src/cli.rs:462` | `harness.shutdown()` |
 | `loop -->\|忙碌时两下 Ctrl-C\| cc` | `src/cli.rs:2054-2062` | 先等回合收尾，再兑现 130 |
 | `quit --> ok` | `src/cli.rs:1983-1988` | `finish_session` 原样返回 `code` |
@@ -797,6 +805,6 @@ flowchart TD
 | `ask --> console` | `src/render/input.rs:286` | `ConsoleAsker` |
 | `uq --> console` | `src/render/input.rs:313` | `ConsoleQuestions`（第三类发起者，不扩展 `Asker`） |
 | `console --> emit` | `src/render/input.rs:168`、`src/cli.rs:1170-1172` | 提示经循环变成 `user` 消息 |
-| `rlog --> tui` | `src/render/mod.rs:230-245` | 一个进程恰好一个渲染器 |
+| `rlog --> tui` | `src/render/mod.rs:230-245` | 渲染器一个，但**写入端按会话身份**（`RenderHandle.session`）；`rlog` 是进程级的一份 |
 | `rlog --> plain` | `src/render/mod.rs:230-245` | 同上 |
 | `rlog --> headless` | `src/render/mod.rs:230-245` | 同上；生产组装点只有 `probe` |

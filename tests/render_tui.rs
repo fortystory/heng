@@ -12,8 +12,8 @@ use heng::events::{
 use heng::permissions::{Answer, PermissionRequest};
 use heng::render::palette;
 use heng::render::{
-    AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent, Key, RenderEvent, SessionFacts,
-    ToolBlock, ToolOutcome, Transcript, TuiState, pane, render_block_uncoloured,
+    AskRequest, Block, ConsoleRequest, FrontEndEvent, Key, RenderEvent, SessionFacts, ToolBlock,
+    ToolOutcome, Transcript, TuiState, pane, render_block_uncoloured,
 };
 use ratatui::style::{Color, Modifier};
 

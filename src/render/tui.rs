@@ -4220,10 +4220,7 @@ impl TuiState {
 
     /// 把目标那一场的轻状态装进来（没有就装一份干净的）。
     fn load_light(&mut self) {
-        let light = self
-            .light
-            .remove(&self.front)
-            .unwrap_or_else(SessionLight::default);
+        let light = self.light.remove(&self.front).unwrap_or_default();
         self.editor = light.editor;
         self.view.conversation.restore_viewport(light.conversation);
         self.view.trace.restore_viewport(light.trace);
@@ -8775,7 +8772,7 @@ fn session_line(
     let (mark, mark_style) = if row.foreground {
         ("▍", Style::default().fg(palette::ACCENT))
     } else {
-        match live.clone().unwrap_or(row.mark.clone()) {
+        match live.unwrap_or(row.mark) {
             SessionMark::Awaiting => ("?", Style::default().fg(palette::WARN)),
             SessionMark::Running => ("●", Style::default().fg(palette::PLAIN)),
             SessionMark::Idle => (" ", row_style),

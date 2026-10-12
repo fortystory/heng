@@ -1,7 +1,7 @@
 # 文档回改：lifecycle.md 与逐面文档（实现期执行）
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25
 Part of: ../map.md
 
@@ -94,3 +94,28 @@ Part of: ../map.md
 - **图 5（§6 基础设施回路）** 的 `rlog --> tui` 与那句「一个进程恰好一个渲染器」：按票 13 的结论
   收细（渲染器一个、写入端按会话身份）。
 - 两处的正文说明。
+
+
+## 收口（2026-10-12）
+
+**图 2（§3）与图 5（§6）**：
+
+- 图 2 新增 **`host`（会话宿主：装载 · 切换 · 关闭）** 节点，`banner --> loop` 一拆为二
+  （`banner --> host`、`host --> loop`）；`loop` 的一句话改成「从表里驱动前台那一场」，`quit`
+  改成「广播 `Close` → 等全部 `join` → 排空渲染通道 + 续接回执」。正文补一段说明「进程生命周期
+  ≠ 会话生命周期」与「后台会话不写收尾事件」。
+- 图 5 的 `rlog --> tui` 说明按票 13 的结论收细：「渲染器一个，但**写入端按会话身份**
+  （`RenderHandle.session`）；`rlog` 是进程级的一份」。
+- 两处的节点与边在**图与证据表两侧同步**：76 节点 / 81 条边，集合对账通过。
+
+**全套护栏**（这一票最后一步）：
+
+- `python3 scripts/lifecycle-check.py` → **PASS，0 line drift**。
+- `python3 scripts/check-language.py` → OK。
+- `python3 scripts/check-doc-size.py` → OK。
+- `cargo fmt --check` → 干净；`cargo test` 全量 → 0 failed。
+- `cargo clippy --all-targets` → 46 条（基线 41）。多出来的主要是 3 条 `if` 可折叠（新写的
+  `if let … && let …` 邻接写法）与两条小的；**这不是新引入的门槛**，记在这里以免下次误判。
+
+**如实没做的一条**：`docs/observability.md` 与 README 的 CLI 表里 `sessions ls` 末列那条三档
+派生（`停稳` / `中断` / `未收尾`）**没有对应的实现票**，按「不把未落地的东西画进文档」留着不动。
