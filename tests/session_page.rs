@@ -185,6 +185,44 @@ fn the_rows_carry_their_marks() {
 }
 
 #[test]
+fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
+    let mut state = fresh();
+    // 启动那一份 listing 说第一行是前台 —— 它只在启动扫过一次，之后不再重来。
+    let mut snapshot = row("01J8ZQ4K7M", "启动那一场", "heng", SessionMark::Idle, 5);
+    snapshot.foreground = true;
+    load(
+        &mut state,
+        vec![
+            snapshot,
+            row("s-other", "刚切过去的一场", "heng", SessionMark::Idle, 1),
+        ],
+        2,
+    );
+
+    // 切到第二场：列表快照不动，换的是渲染侧那个前台（`SwitchSession`）。
+    let mut switched = facts();
+    switched.session_id = "s-other".to_owned();
+    state.request(ConsoleRequest::SwitchSession {
+        facts: switched,
+        events: Vec::new(),
+    });
+
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (_, marked) = find_cell(&frame, 120, 24, "▍");
+    assert!(
+        row_text(&frame, marked, 120).contains("刚切过去的一场"),
+        "`▍` 跟着切换走，不停在启动那一份 listing 上"
+    );
+    for y in 0..24 {
+        let line = row_text(&frame, y, 120);
+        if line.contains("启动那一场") {
+            assert!(!line.contains('▍'), "旧前台不再带 `▍`：{line}");
+        }
+    }
+}
+
+#[test]
 fn the_more_line_counts_what_never_showed() {
     let mut state = fresh();
     load(

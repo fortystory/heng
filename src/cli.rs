@@ -618,10 +618,24 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
     // 宿主表里**装着哪几场**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
     let mut before_hosted: Option<Vec<SessionId>> = None;
+    // 那一行提示**只发一次、跨多轮 `select` 挂着**。
+    //
+    // 每轮重新 `console.prompt()` 会发出一个新的请求、把上一份应答端丢掉，而那 80ms 的
+    // 窗口里的输入会被一份**已经没人等**的 reply 接走：`plain` 前端每个请求都真去读一行，
+    // 于是 `/quit` 稳定无效；TUI 把最新一份 reply 记着，于是它偶发无效
+    // （2026-10-12 用 pty 观测到，`scripts/tui-startup-check.py` 的 `/quit` 那一轮）。
+    // 拿到一行之后才重新武装 —— 那时它确实完成了，留着它再 poll 是未定义行为。
+    type LineFuture<'a> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + 'a>>;
+    let mut prompt: Option<LineFuture<'_>> = None;
     let code = loop {
         console.set_running(false);
+        if prompt.is_none() {
+            prompt = Some(Box::pin(console.prompt()));
+        }
         tokio::select! {
-            line = console.prompt() => {
+            line = prompt.as_mut().expect("上一句刚补上") => {
+                prompt = None;
                 let Some(line) = line else {
                     break ExitCode::SUCCESS;
                 };
@@ -805,6 +819,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             },
         }
     };
+    // **先放掉主循环自己那份渲染写端**。`RenderChannel::shutdown` 的契约是「等每一个写端
+    // 消失」，而循环手里那一个（`render`，给闸门拒绝与取消回执用的）在退出流程里还活着 ——
+    // 渲染任务于是永远等不到「没有写端了」，而循环在 `await` 它：两头顶着，进程退不出去。
+    // 退出卡住之后主循环不再回到 `select`，屏幕上的一切手势（按键、点击会话页）都静默失效 ——
+    // 2026-10-12 维护者报告的那两条症状（`Ctrl-D` 不能退出、点击切会话没反应）是同一个死锁。
+    drop(render);
     // 退出流程（票 23）：**广播 `Close` 给每一场**，等它们全部收工，再等渲染器把缓冲写完。
     // 退出码照旧只有 0 与 130 两种（`quit.code()`）。
     let ids: Vec<SessionId> = host

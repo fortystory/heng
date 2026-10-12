@@ -6858,6 +6858,13 @@ impl TuiState {
                 }
                 self.stash_light();
                 self.front = crate::events::SessionId::new(facts.session_id.clone());
+                // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
+                // 的，而它只在启动推一次 —— 继续拿它画 `▍` 与 `LIVE` 色，标记会一直停在启动
+                // 那一场（2026-10-12 维护者：「切了别的会话，当前会话没变」）。重扫一份
+                // listing 要碰 store（票 03 实测全量解析 155–172ms），不值得为一个标记付。
+                for row in &mut self.sessions.shown {
+                    row.foreground = row.id == self.front;
+                }
                 self.view = View::new(facts);
                 self.load_light();
                 // 上一场攒下的实时事件不带过去。
