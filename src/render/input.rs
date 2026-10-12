@@ -181,6 +181,9 @@ pub enum ConsoleRequest {
     /// 会话页上那三档标题色靠它：当前前台、已在表里（切过去零延迟、`关闭`对它可用）、只在盘上
     /// （切过去要先装载）。`HostCount` 只给两个数，说不出「是哪几个」。
     Hosted { ids: Vec<crate::events::SessionId> },
+    /// **关闭被前台规则拒了**（票 32）：`target` 是那个要关、但正在前台的会话。渲染器据此在
+    /// 提示行上给一段可点的「切到「<相邻会话>」」—— 相邻是谁只有它有那份列表。
+    CloseBlocked { target: crate::events::SessionId },
     /// **退出被闸门拒了**（票 23 的闸门、票 28 的双击）：还有 `count` 个会话没收尾，而 `first` 是
     /// 第一个会话 —— 提示行那句话的可点入口就指它。
     ///
@@ -333,6 +336,11 @@ impl ConsoleHandle {
     /// 说宿主表里此刻装着**哪几个**（票 29）：会话页那三档标题色靠它。
     pub fn hosted(&self, ids: Vec<crate::events::SessionId>) {
         let _ = self.requests.send(ConsoleRequest::Hosted { ids });
+    }
+
+    /// 说关闭被前台规则拒了（票 32）。
+    pub fn close_blocked(&self, target: crate::events::SessionId) {
+        let _ = self.requests.send(ConsoleRequest::CloseBlocked { target });
     }
 
     /// 说退出被闸门拒了，以及第一个会话没收尾的是谁（票 28）。
@@ -616,6 +624,7 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::ReadOnly { .. } => {}
                 // 多会话那几件同理：plain 一个进程只跑一个会话。
                 ConsoleRequest::SessionClosed { .. }
+                | ConsoleRequest::CloseBlocked { .. }
                 | ConsoleRequest::HostCount { .. }
                 | ConsoleRequest::Hosted { .. }
                 | ConsoleRequest::ExitBlocked { .. }

@@ -492,7 +492,7 @@ async fn loading_a_second_session_hosts_it_and_moves_the_foreground() {
 }
 
 #[tokio::test]
-async fn the_close_rules_refuse_only_the_foreground_and_the_busy() {
+async fn the_close_rules_spare_the_last_session_and_refuse_the_rest() {
     use heng::session::close_check;
     use heng::session::host::CloseRefusal;
 
@@ -502,15 +502,16 @@ async fn the_close_rules_refuse_only_the_foreground_and_the_busy() {
     let mut host = SessionHost::new(SessionId::new("s-1"));
     host.adopt(first.harness, workspace.clone()).unwrap();
 
-    // 前台自己：禁止 —— 它是脚下那块地板。
+    // 「只剩一个时前台可关」那条由 `the_last_session_may_close_itself` 专门守着。
+    // 有别的会话在场时，前台自己：禁止 —— 它是脚下那块地板。
+    let (second, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
+    host.adopt(second.harness, workspace.clone()).unwrap();
     assert_eq!(
         close_check(&host, &SessionId::new("s-1")),
         Err(CloseRefusal::Foreground(SessionId::new("s-1")))
     );
 
     // 空闲的非前台：单击即关（不二次确认）。
-    let (second, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
-    host.adopt(second.harness, workspace.clone()).unwrap();
     assert_eq!(close_check(&host, &SessionId::new("s-2")), Ok(()));
 
     // 只读预览：也能关。
@@ -614,4 +615,27 @@ async fn the_exit_gate_refuses_while_anything_is_unfinished() {
     host.get(&SessionId::new("s-2")).unwrap().cancel.cancel();
     wait_for_entry(&mut state, SessionState::Idle).await;
     assert_eq!(exit_gate(&host), ExitGate::Clear, "全部收尾之后能退");
+}
+
+#[tokio::test]
+async fn the_last_session_may_close_itself() {
+    // 票 32：只剩一个会话时没有「先切走」这条出路，而票 07 §5 要「关掉最后一个 → 空宿主」
+    // 走得通 —— 前台那条例外只对**多于一个**会话成立。
+    use heng::session::close_check;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let (only, _) = load_session(dir.path(), "only", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("only"));
+    host.adopt(only.harness, workspace).unwrap();
+
+    assert_eq!(
+        close_check(&host, &SessionId::new("only")),
+        Ok(()),
+        "只剩一个会话时，前台也能关掉自己"
+    );
+    host.close_with(&SessionId::new("only"), SessionCommand::Close)
+        .await
+        .unwrap();
+    assert!(host.is_empty(), "关掉最后一个会话就是空宿主");
 }

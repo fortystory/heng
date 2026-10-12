@@ -2330,6 +2330,30 @@ pub fn read_only_session() -> String {
 /// 页顶右端的两个入口，以及一行的「流损坏」尾标。
 pub const SESSION_NEW: &str = "新建";
 pub const SESSION_CLOSE: &str = "关闭";
+
+/// 页顶那个入口点名要关的**哪一个会话**（票 32）：`关闭「<标题>」`。
+///
+/// 标题由焦点行给，超宽时调用方先截断（与标题列同一套 `fit_title`）。
+pub fn session_close(title: &str) -> String {
+    format!("关闭「{title}」")
+}
+
+/// 关闭被拒时提示行的前半（票 32）：`MUTED`，说明为什么被拒。
+pub fn close_blocked_lead() -> &'static str {
+    "这个会话在前台"
+}
+
+/// 关闭被拒、而渲染侧又算不出相邻会话时的那一句（票 32）：进转录，说明下一步 ——
+/// 总比点下去石沉大海强（列表还没推来、或者目标刚好被过滤掉了）。
+pub fn close_blocked_note() -> &'static str {
+    "这个会话在前台：先在会话页切到别的会话，再关它"
+}
+
+/// 关闭被拒时提示行那一整段**可点**的（票 32）：`ACCENT`，整段一个命中矩形 ——
+/// 点它就把前台切到相邻的那个会话，焦点仍留在要关的那一行上。
+pub fn close_blocked_switch(title: &str) -> String {
+    format!("切到「{title}」")
+}
 pub const SESSION_BROKEN: &str = "损坏";
 
 /// 页顶左端的读数：`已装载 N 个`，有人在跑时补一段 ` · M 个在跑`。

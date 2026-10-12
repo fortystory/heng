@@ -2577,6 +2577,12 @@ pub struct TuiState {
     ///
     /// 与复制/打开链接那两句回执同一个机制与同一段寿命：提示行一次只留一句最新的。
     notice: Option<(std::time::Instant, String)>,
+    /// 会话页上**上一次点击**落在哪一行、什么时候（票 32）。crossterm 没有双击事件，双击只能
+    /// 自己按「同一行 + `GESTURE_WINDOW`」判。
+    last_session_click: Option<(usize, std::time::Instant)>,
+    /// 关闭被前台规则拒了之后那对：要关的 `target` 在前台，可点段会把前台切到 `alternative`
+    /// （票 32）。相邻是谁只有渲染侧算得出 —— 列表顺序在它手里。
+    close_blocked: Option<RefusedClose>,
     /// 轨迹页持有键盘吗。
     ///
     /// 这是仓库里**第四套**「键盘在谁那里」的机制（前三是左栏那个布尔、两页各自的焦点索引、
@@ -3102,6 +3108,22 @@ struct Region {
     action: HitAction,
 }
 
+/// 关闭被前台规则拒了之后，渲染侧算出的那一对（票 32）：要关的 `target` 在前台，可点段会把
+/// 前台切到 `alternative`（列表里的邻居）。
+struct RefusedClose {
+    target: crate::events::SessionId,
+    alternative: crate::events::SessionId,
+}
+
+/// 提示行上那两半（票 32）：前半说明为什么被拒，后半整段可点。
+struct CloseHint {
+    /// 放得下才有前半 —— 放不下时只留可点段。
+    lead: Option<String>,
+    action: String,
+    /// 交给 `hint_row` 的那一整条回执（它排在最前，所以两段就在行首）。
+    receipt: String,
+}
+
 /// 点一下问题被画出来的部件会做什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitAction {
@@ -3132,6 +3154,9 @@ enum HitAction {
     SessionNew,
     /// 点会话页页顶的 `关闭`（作用于焦点行，动作由票 21 接）。
     SessionClose,
+    /// 点提示行上那段「切到「…」」（票 32）：关闭被前台规则拒了之后，把前台切到相邻的那一个，
+    /// 焦点仍留在要关的那一行上。
+    CloseBlockedSwitch,
     /// 显示主列的这一页，跟点它的页签一样（`.scratch/trace-in-main/spec.md` §2）。
     SwitchMainTab(MainTab),
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
@@ -3969,6 +3994,8 @@ impl TuiState {
             sidebar_wanted: true,
             picker: None,
             notice: None,
+            last_session_click: None,
+            close_blocked: None,
             trace_keyboard: true,
             trace_rect: None,
             detail: None,
@@ -4813,7 +4840,15 @@ impl TuiState {
             self.take_sidebar_keyboard(column, row);
         }
         match self.regions.action_at(column, row) {
-            Some(HitAction::SessionRow(line)) => self.sessions_click(line),
+            Some(HitAction::SessionRow(line)) => self.sessions_row_click(line),
+            Some(HitAction::CloseBlockedSwitch) => {
+                if let Some(blocked) = self.close_blocked.take() {
+                    self.sessions.focus = Some(blocked.target);
+                    self.events.push(FrontEndEvent::OpenSession {
+                        id: blocked.alternative,
+                    });
+                }
+            }
             // 页顶那两个入口的动作由票 21 接：这一片只把位置与命中立起来。
             // 页顶那两个入口（票 21）：渲染层只上报，能不能关、怎么新建由循环判。
             Some(HitAction::SessionNew) => {
@@ -6117,8 +6152,8 @@ impl TuiState {
             Key::Esc => self.sessions_escape(),
             Key::Up => self.sessions_move_focus(-1),
             Key::Down => self.sessions_move_focus(1),
-            // 切过去由票 20 接：这一片只把焦点落下来。
-            Key::Enter => {}
+            // `Enter` = 切到焦点行那一个（票 06 的键位表，票 32 落地）。
+            Key::Enter => self.switch_to_focused_session(),
             // 页内 `/`：进过滤。页签条仍只走鼠标 —— 这是**页内**键位。
             Key::Char('/') => self.begin_sessions_filter(),
             Key::Char('r') => {
@@ -6248,20 +6283,118 @@ impl TuiState {
     }
 
     /// 点会话页上的一行：交键盘 + 落焦点（能不能切由票 20 接）。
-    fn sessions_click(&mut self, line: usize) {
+    fn focus_session_row(&mut self, line: usize) {
         self.sidebar_keyboard = true;
         self.release_trace_keyboard();
         let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) else {
             return;
         };
-        let id = id.clone();
+        // **单击只落焦点**（票 32）：切前台改由 `Enter` 与**双击**承担 —— 关闭、改名（`r`）、
+        // 过滤都作用于焦点行，「点谁谁就成前台」会让「选中」与「去谁那儿」分不开（票 20 的
+        // 「单击能切就立刻切」就此推翻）。
         self.sessions.focus = Some(id.clone());
-        // 点当前前台那一行只做前两步（票 20）。
+    }
+
+    /// 会话页一行的点击（票 32）：**同一行**上的第二次点击（≤ `GESTURE_WINDOW`）是「切过去」，
+    /// 否则只是落焦点。
+    ///
+    /// 双击在渲染侧判：crossterm 0.29 的 `MouseEventKind` 没有双击，SGR 协议也不带 click
+    /// count，所以只能按「同一行 + 时间窗」比 —— 与退出手势共用那个 500ms 常量。
+    fn sessions_row_click(&mut self, line: usize) {
+        let now = std::time::Instant::now();
+        let double = self
+            .last_session_click
+            .is_some_and(|(last, at)| last == line && now.duration_since(at) <= GESTURE_WINDOW);
+        self.last_session_click = Some((line, now));
+        if !double {
+            self.focus_session_row(line);
+            return;
+        }
+        // 第二下**不再碰焦点**（票 32 的验收二），切的是**点的那一行**。
+        let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) else {
+            return;
+        };
+        let id = id.clone();
+        if id == self.front {
+            return;
+        }
+        self.events.push(FrontEndEvent::OpenSession { id });
+    }
+
+    /// 把前台切到焦点行那一个（`Enter` 与双击共用）。已经是前台就什么都不做。
+    fn switch_to_focused_session(&mut self) {
+        let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) else {
+            return;
+        };
         if id == self.front {
             return;
         }
         // 能不能切由循环判（cwd 不在、流损坏各回一句），渲染层只上报。
         self.events.push(FrontEndEvent::OpenSession { id });
+    }
+
+    /// 目标行的**邻居**（票 32）：列表里的下一行，没有下一行就上一行 —— 那是唯一可预期的顺序。
+    fn alternative_for(
+        &self,
+        target: &crate::events::SessionId,
+    ) -> Option<crate::events::SessionId> {
+        let at = self
+            .sessions
+            .shown
+            .iter()
+            .position(|row| &row.id == target)?;
+        let next = self.sessions.shown.get(at + 1).or_else(|| {
+            at.checked_sub(1)
+                .and_then(|before| self.sessions.shown.get(before))
+        })?;
+        Some(next.id.clone())
+    }
+
+    /// 关闭被拒时提示行那两段（票 32）：前半固定，后半点名**相邻的那一个会话**。
+    ///
+    /// 标题按**可用的列数**截断，放不下前半就只留可点段 —— 提示行画不全的那一刻，那一段也就
+    /// 点不动了（`hint_region` 不肯给出屏外的矩形），而「可点」正是这条提示的全部意义。
+    fn close_blocked_hint(&self, width: usize, exit_w: usize) -> Option<CloseHint> {
+        let blocked = self.close_blocked.as_ref()?;
+        let alternative = self.shown_row(&blocked.alternative)?;
+        let sep_w = text_columns(wording::SEP);
+        // `切到「」` 那四步的固定开销。
+        let frame = text_columns("切到「」");
+        let lead = wording::close_blocked_lead();
+        let lead_w = text_columns(lead);
+        // **出口永远保住**（提示行那条契约）：回执只能吃出口与分隔符之后剩下的列。
+        let room = width.saturating_sub(exit_w + sep_w);
+        let with_lead = room >= lead_w + sep_w + frame + 2;
+        let budget = if with_lead {
+            room - lead_w - sep_w - frame
+        } else {
+            room.saturating_sub(frame)
+        };
+        let action = wording::close_blocked_switch(&fit_title(&alternative.title, budget));
+        let receipt = if with_lead {
+            format!("{lead}{}{action}", wording::SEP)
+        } else {
+            action.clone()
+        };
+        Some(CloseHint {
+            lead: with_lead.then(|| lead.to_owned()),
+            action,
+            receipt,
+        })
+    }
+
+    /// 提示行最后那一段出口（票 32 用它给回执留预算）。与 [`TuiState::hint_line`] 同一个来源。
+    fn exit_hint(&self) -> &'static str {
+        let raised = self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit);
+        wording::exit_hint(self.busy(), raised)
+    }
+
+    /// 按 id 在**画出来的那些行**里找一行。
+    fn shown_row(
+        &self,
+        id: &crate::events::SessionId,
+    ) -> Option<&crate::session::listing::SessionRow> {
+        self.sessions.shown.iter().find(|row| &row.id == id)
     }
 
     /// 文件页的键位。
@@ -6858,6 +6991,8 @@ impl TuiState {
                 }
                 self.stash_light();
                 self.front = crate::events::SessionId::new(facts.session_id.clone());
+                // 切过去之后那条「先切走」的提示没有意义了（票 32）。
+                self.close_blocked = None;
                 // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
                 // 的，而它只在启动推一次 —— 继续拿它画 `▍` 与 `LIVE` 色，标记会一直停在启动
                 // 那个会话（2026-10-12 维护者：「切了别的会话，当前会话没变」）。重扫一份
@@ -6897,6 +7032,28 @@ impl TuiState {
                 self.sessions.focus = Some(id);
                 self.dirty = true;
             }
+            // 关闭被前台规则拒了（票 32）：提示行给一段可点的，而**切到哪一个**只有渲染侧算得
+            // 出（列表顺序在它手里）。
+            ConsoleRequest::CloseBlocked { target } => {
+                match self.alternative_for(&target) {
+                    Some(alternative) => {
+                        self.close_blocked = Some(RefusedClose {
+                            target,
+                            alternative,
+                        });
+                    }
+                    // 算不出相邻（列表还没推来、或者目标刚好被过滤掉）：至少说一句 —— 否则那一下
+                    // 点下去什么都不发生。
+                    None => {
+                        self.close_blocked = None;
+                        self.notice = Some((
+                            std::time::Instant::now(),
+                            wording::close_blocked_note().to_owned(),
+                        ));
+                    }
+                }
+                self.dirty = true;
+            }
             // 退出被闸门拒了（票 28）：那一把举手随之作废，于是下一次按下仍然只是第一下。
             ConsoleRequest::ExitBlocked { first, .. } => {
                 self.expire_exit_gesture();
@@ -6920,6 +7077,14 @@ impl TuiState {
             }
             // 一个会话被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
             ConsoleRequest::SessionClosed { id, empty } => {
+                // 关掉的正是被拒那一段里的哪一个：提示跟着作废（票 32）。
+                if self
+                    .close_blocked
+                    .as_ref()
+                    .is_some_and(|blocked| blocked.target == id || blocked.alternative == id)
+                {
+                    self.close_blocked = None;
+                }
                 self.light.remove(&id);
                 self.sessions.hosted.remove(&id);
                 self.sessions.host_empty = empty;
@@ -7980,8 +8145,11 @@ impl TuiState {
         // `wording::hint_row` 保住 —— 回执不许把它挤掉。打开的回执排在同一位、更靠前一点：
         // 两者同时新鲜是几乎不可能的事，真撞上了就让更重的那件事说话
         // （`.scratch/clickable-links/spec.md` §4）。
+        // 关闭被拒那句排在**最前**（票 32）：它带着唯一可点的下一步，而别的回执都只是说明。
         let receipt = self
-            .notice_line()
+            .close_blocked_hint(width as usize, text_columns(self.exit_hint()))
+            .map(|hint| hint.receipt)
+            .or_else(|| self.notice_line())
             .or_else(|| self.open_receipt())
             .or_else(|| self.copy_receipt());
         // **主列的两页各有自己的一套提示**（`.scratch/trace-shortcuts/spec.md` §2）：判据是
@@ -8648,7 +8816,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut drawn_rows = 0usize;
     if show_head {
-        lines.push(session_head_line(state, &page, wide));
+        lines.push(session_head_line(state, &page, wide, title_w));
     }
     if let Some(note) = state.sessions.note() {
         lines.push(Line::from(Span::styled(
@@ -8707,7 +8875,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
 }
 
 /// 会话页页顶那一行：左端读数、右端两个入口（都 `ACCENT`、都可点）。
-fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'static> {
+fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool, title_w: u16) -> Line<'static> {
     if state.sessions.filter.is_some() {
         return session_filter_line(state, page);
     }
@@ -8726,7 +8894,13 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
     );
     let left_w = text_columns(&left) as u16;
     let new_w = text_columns(wording::SESSION_NEW) as u16;
-    let close_w = text_columns(wording::SESSION_CLOSE) as u16;
+    // 那个入口**点名**要关的是哪一个（票 32）：`关闭「<标题>」`，标题超宽尾省略。宽窄两档都写
+    // —— 「关的是谁」比按钮本身更值钱，放得下多少由标题的截断宽度定。
+    let close_label = match state.sessions.focused_row() {
+        Some(row) => wording::session_close(&fit_title(&row.title, (title_w / 2) as usize)),
+        None => wording::SESSION_CLOSE.to_owned(),
+    };
+    let close_w = text_columns(&close_label) as u16;
     // 右端两个入口；空宿主时只剩 `新建`（票 21 填 `host_empty`）。
     let close_at = page.width.saturating_sub(close_w);
     let new_at = if state.sessions.host_empty {
@@ -8754,7 +8928,7 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'sta
         spans.push(Span::raw(
             " ".repeat(close_at.saturating_sub(new_at + new_w) as usize),
         ));
-        spans.push(Span::styled(wording::SESSION_CLOSE, accent));
+        spans.push(Span::styled(close_label, accent));
     }
     let _ = wide;
     Line::from(spans)
@@ -10777,13 +10951,66 @@ fn draw_bottom(
             panes.input.y + cursor.row,
         ));
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            state.hint_line(panes.hints.width),
-            Style::default().fg(palette::MUTED),
-        ))),
-        panes.hints,
-    );
+    // 提示行：关闭被拒时那一段是**可点**的（票 32）—— 前半 `MUTED` 说明原因，后半 `ACCENT`、
+    // 整段一个命中矩形；别的回执照旧整行 `MUTED`。
+    let exit_w = text_columns(state.exit_hint());
+    match state.close_blocked_hint(panes.hints.width as usize, exit_w) {
+        Some(hint) => {
+            // 排版仍归 `hint_line`（出口保住、宽度阶梯照走）—— 这里只把行首那两段拆开着色，
+            // 并给可点段一个命中矩形。
+            let line = state.hint_line(panes.hints.width);
+            let offset = hint
+                .lead
+                .as_ref()
+                .map_or(0, |lead| text_columns(lead) + text_columns(wording::SEP));
+            let action_w = text_columns(&hint.action);
+            if let Some(rest) = line.strip_prefix(&hint.receipt) {
+                let mut spans = Vec::new();
+                if let Some(lead) = &hint.lead {
+                    spans.push(Span::styled(
+                        lead.clone(),
+                        Style::default().fg(palette::MUTED),
+                    ));
+                    spans.push(Span::raw(wording::SEP));
+                }
+                spans.push(Span::styled(
+                    hint.action.clone(),
+                    Style::default().fg(palette::ACCENT),
+                ));
+                if !rest.is_empty() {
+                    spans.push(Span::styled(
+                        rest.to_owned(),
+                        Style::default().fg(palette::MUTED),
+                    ));
+                }
+                if let Some(rect) = hint_region(panes.hints, offset, action_w) {
+                    state.regions.cells.push(Region {
+                        rect,
+                        action: HitAction::CloseBlockedSwitch,
+                    });
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), panes.hints);
+            } else {
+                // 回执没排在最前（理论上不该发生）：照原样画，宁可少一层着色。
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(palette::MUTED),
+                    ))),
+                    panes.hints,
+                );
+            }
+        }
+        None => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    state.hint_line(panes.hints.width),
+                    Style::default().fg(palette::MUTED),
+                ))),
+                panes.hints,
+            );
+        }
+    }
     anchor
 }
 

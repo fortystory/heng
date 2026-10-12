@@ -38,6 +38,7 @@ ratatui 初始化失败，所以这个脚本自己回答它。
 `Ctrl-Z` 之后进程必须真的进 stopped 状态、而且那一刻终端已经交还（这条需求最容易做错的
 就是交还与停止的顺序），`SIGCONT` 之后备用屏幕重进、画面重画，最后出口照旧干净。
 """
+import codecs
 import collections
 import fcntl
 import os
@@ -241,6 +242,12 @@ class Screen:
         return ["".join(r).rstrip() for r in self.grid]
 
 
+# 每个 pty 一份**增量** UTF-8 解码器：一次 `read` 可能正好切在一个宽字符中间，逐次独立解码
+# 会把它变成 `\ufffd`，而那一个替换字符会留在仿真屏上（`/quit` 那种逐键重绘的轮次尤其容易
+# 撞上）—— 判定读到屏幕右端那个 `\ufffd`，就报「状态行没画完」。
+_DECODERS = {}
+
+
 def read_once(fd, screen=None, timeout=0.2):
     """从 pty 读一次。
 
@@ -256,7 +263,8 @@ def read_once(fd, screen=None, timeout=0.2):
         return None
     if not data:
         return None
-    text = data.decode("utf-8", "replace")
+    decoder = _DECODERS.setdefault(fd, codecs.getincrementaldecoder("utf-8")("replace"))
+    text = decoder.decode(data)
     if screen is not None:
         screen.feed(text)
     return text

@@ -570,7 +570,8 @@ fn title_colour(state: &mut TuiState, title: &str) -> ratatui::style::Color {
     let first = title.chars().next().expect("标题非空").to_string();
     for y in 0..24u16 {
         let text = row_text(&frame, y, 120);
-        if !text.contains(title) {
+        // 页顶那一行也会点名标题（`关闭「…」`，票 32）—— 要读的是**列表行**那一档色。
+        if !text.contains(title) || text.contains("关闭「") {
             continue;
         }
         for x in 0..120u16 {
@@ -651,5 +652,144 @@ fn the_head_line_keeps_both_entries_in_the_narrow_sidebar() {
     assert!(
         !text.contains("已装载"),
         "窄档只报数，不写「已装载」：{text}"
+    );
+}
+
+/// 票 32：单击只落焦点（切前台改由 `Enter` 与双击承担）。
+#[test]
+fn a_single_click_only_moves_the_focus() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "甲会话", "heng", SessionMark::Idle, 1),
+            row("s-b", "乙会话", "heng", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, line) = find_cell(&frame, 120, 24, "乙会话");
+    click(&mut state, column, line);
+
+    assert_eq!(state.take_events(), Vec::new(), "单击不发切换请求");
+    // 焦点确实落在那一行：`Enter` 切的就是它。
+    state.key(Key::Enter);
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenSession {
+            id: SessionId::new("s-b")
+        }],
+        "`Enter` 切到焦点行"
+    );
+}
+
+/// 票 32：同一行的第二次点击（时间窗内）才切前台。
+#[test]
+fn a_double_click_on_the_same_row_switches() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-a", "甲会话", "heng", SessionMark::Idle, 1),
+            row("s-b", "乙会话", "heng", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, line) = find_cell(&frame, 120, 24, "乙会话");
+
+    click(&mut state, column, line);
+    assert_eq!(state.take_events(), Vec::new(), "第一下只落焦点");
+    click(&mut state, column, line);
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenSession {
+            id: SessionId::new("s-b")
+        }],
+        "第二下切过去"
+    );
+}
+
+/// 票 32：页顶那个入口点名要关的是哪一个。
+#[test]
+fn the_close_button_names_the_focused_session() {
+    let mut state = fresh();
+    let mut front = row("01J8ZQ4K7M", "前台这一个", "heng", SessionMark::Idle, 1);
+    front.foreground = true;
+    load(
+        &mut state,
+        vec![
+            front,
+            row("s-b", "另一个会话", "heng", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, line) = find_cell(&frame, 120, 24, "另一个会话");
+    click(&mut state, column, line);
+
+    let text = screen(120, 24, &mut state);
+    assert!(text.contains("关闭「另一个会话」"), "点名焦点行：{text}");
+}
+
+/// 票 32：窄档也点名（标题按可用宽度截断），两个入口都还在。
+#[test]
+fn the_narrow_head_line_still_names_and_keeps_both_entries() {
+    let mut state = fresh();
+    let mut front = row("01J8ZQ4K7M", "前台这一个", "heng", SessionMark::Idle, 1);
+    front.foreground = true;
+    load(
+        &mut state,
+        vec![
+            front,
+            row("s-b", "另一个会话", "heng", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 80, 24);
+    let frame = buffer(80, 24, &mut state);
+    let (column, line) = find_cell(&frame, 80, 24, "另一个会话");
+    click(&mut state, column, line);
+
+    let text = screen(80, 24, &mut state);
+    assert!(
+        text.contains(wording::SESSION_NEW),
+        "窄档下 `新建` 仍在：{text}"
+    );
+    assert!(text.contains("关闭「"), "窄档也点名：{text}");
+}
+
+/// 票 32：前台被拒时提示行给一段可点的，点它把前台切到相邻的那一个。
+#[test]
+fn a_refused_close_offers_a_clickable_switch() {
+    let mut state = fresh();
+    let mut front = row("01J8ZQ4K7M", "前台这一个", "heng", SessionMark::Idle, 1);
+    front.foreground = true;
+    load(
+        &mut state,
+        vec![
+            front,
+            row("s-b", "另一个会话", "heng", SessionMark::Idle, 2),
+        ],
+        2,
+    );
+    open_sessions(&mut state, 120, 24);
+    // 循环判出「要关的这一个正在前台」，把目标告诉渲染器；相邻是谁由它自己算。
+    state.request(ConsoleRequest::CloseBlocked {
+        target: SessionId::new("01J8ZQ4K7M"),
+    });
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, line) = find_cell(&frame, 120, 24, "切到「另一个会话」");
+    click(&mut state, column, line);
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenSession {
+            id: SessionId::new("s-b")
+        }],
+        "点那段可点的 = 把前台切到相邻的那一个"
     );
 }

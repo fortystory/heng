@@ -179,8 +179,9 @@ pub fn close_check<C: Send + 'static>(
     let entry = host
         .get(id)
         .ok_or_else(|| CloseRefusal::NotHosted(id.clone()))?;
-    // 前台优先：它是脚下那块地板，别的理由都排在它后面。
-    if &host.foreground() == id {
+    // 前台优先：它是脚下那块地板，别的理由都排在它后面。**唯一的例外是只剩它一个**（票 32）：
+    // 那时没有「先切走」这条出路，而票 07 §5 本来就要「关掉最后一个会话 → 空宿主」这条路走得通。
+    if &host.foreground() == id && host.len() > 1 {
         return Err(CloseRefusal::Foreground(id.clone()));
     }
     if *entry.state.borrow() == SessionState::RunningTurn {

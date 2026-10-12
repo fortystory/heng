@@ -2086,7 +2086,15 @@ async fn close_session(
     id: &SessionId,
 ) {
     if let Err(refusal) = crate::session::close_check(host, id) {
-        kit.notice(&host.foreground(), &refusal.to_string());
+        match &refusal {
+            // 前台被拒走**提示行**，并给一段可点的「切到「<相邻会话>」」（票 32）—— 那句话落在
+            // 转录里会滚走，而「切到哪一个」只有渲染侧算得出（列表顺序在它手里）。
+            crate::session::CloseRefusal::Foreground(target) => {
+                console.close_blocked(target.clone());
+            }
+            // 别的拒绝（跑着回合 / 不在表里）照旧进转录：它们是动作层面的说明，没有可点的下一步。
+            _ => kit.notice(&host.foreground(), &refusal.to_string()),
+        }
         return;
     }
     if let Err(error) = host.close_with(id, CliCommand::Close).await {
@@ -2097,9 +2105,9 @@ async fn close_session(
     // 先让渲染器把这个会话忘掉、并把读数与空宿主态更新。
     console.session_closed(id.clone(), empty);
     console.host_count(host.len(), host.running());
-    if empty {
-        kit.notice(id, &render::wording::no_sessions_left());
-    }
+    // 关到最后一个会话**不打 notice**（票 32）：页顶 `已装载 0 个`、页区 `没有会话`、输入区禁用
+    // 已经在说同一件事。
+    let _ = empty;
 }
 
 /// 点会话页上的一行：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
