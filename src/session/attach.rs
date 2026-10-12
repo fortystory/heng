@@ -92,8 +92,8 @@ pub fn health(log_path: &Path) -> StreamHealth {
 ///
 /// `cwd` 是流上记着的那个工作目录（读不出就是 `None`）—— 「工作区还在不在」问的是它，
 /// 不是当前进程的 cwd。
-pub fn check(
-    host: &SessionHost,
+pub fn check<C: Send + 'static>(
+    host: &SessionHost<C>,
     id: &SessionId,
     cwd: Option<&Path>,
     log_path: &Path,

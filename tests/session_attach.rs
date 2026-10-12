@@ -5,7 +5,7 @@ use std::path::Path;
 
 use heng::events::{Event, EventPayload, SCHEMA_VERSION, SessionId, SpeakerId};
 use heng::session::attach::{check, health};
-use heng::session::host::SessionHost;
+use heng::session::host::{SessionCommand, SessionHost};
 use heng::session::{AttachCheck, SessionFacts, StreamHealth};
 
 fn event(seq: u64, payload: EventPayload) -> Event {
@@ -164,7 +164,7 @@ fn a_stream_that_reads_nothing_is_refused() {
 #[test]
 fn the_checks_answer_before_anything_is_loaded() {
     let dir = tempfile::tempdir().unwrap();
-    let host = SessionHost::new(SessionId::new("s-other"));
+    let host = SessionHost::<SessionCommand>::new(SessionId::new("s-other"));
     let id = SessionId::new("s-1");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();

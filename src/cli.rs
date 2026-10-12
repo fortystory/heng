@@ -28,7 +28,7 @@ use crate::events::{
     read_events, total_usage,
 };
 use crate::mcp::{self, McpService};
-use crate::permissions::{Mode, Policy};
+use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Message;
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{BuildError, OpenAiProvider, stderr_warnings};
@@ -418,6 +418,28 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `cwd` 被移进脚手架**之前**，所以这里就把两件事合成一句。
     let path_locks = crate::tools::PathLockTable::new().locks(&cwd);
     let channel = crate::render::RenderChannel::start(renderer, stored.id.clone());
+    let config = std::sync::Arc::new(config);
+    let outside_read = config.outside_read;
+    // 装载另一场要的那批材料（票 20）：同一批配置、同一个渲染端、同一张锁表。
+    let kit = AssemblyKit {
+        config: std::sync::Arc::clone(&config),
+        model: model.clone(),
+        speaker: profile.name.clone(),
+        store: store.clone(),
+        locks: path_locks.clone(),
+        channel: channel.clone(),
+        asker: Some(asker.clone()),
+        questions: questions.clone(),
+        mcp: std::sync::Arc::clone(&mcp),
+        home: home.clone(),
+        mode,
+        goals: GoalSetup {
+            dir: goals_dir.clone(),
+            store: store.clone(),
+            cwd: cwd.clone(),
+            settings: config.goals,
+        },
+    };
     let loaded = match load(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
@@ -426,19 +448,19 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // 工具表在上面、在渲染器之前就建好了，就是这一张（内建的那些加上每一个动态声明的
             // 工具，spec §14）。
             tools,
-            locks: path_locks,
+            locks: path_locks.clone(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
-            policy: Policy::for_mode(mode).with_outside_read(config.outside_read),
-            asker: Some(asker),
-            questions,
+            policy: Policy::for_mode(mode).with_outside_read(outside_read),
+            asker: Some(asker.clone()),
+            questions: questions.clone(),
             hook: None,
-            home,
+            home: home.clone(),
         },
         provider: Box::new(provider),
         speaker: SpeakerId::Debater(profile.name.clone().into()),
         config: session_config,
-        render: channel,
+        render: channel.clone(),
     })
     .await
     {
@@ -539,10 +561,11 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 的身份。
     let render = render_channel.handle(session_id.clone());
     let prompts_shared = std::sync::Arc::new(prompts);
+    let (requests, mut open_requests) = tokio::sync::mpsc::unbounded_channel::<CliRequest>();
     let actor = CliActor {
         // 输入归主循环，渲染端的句柄两边各一份（它克隆很便宜）。
         console: console.clone(),
-        config: std::sync::Arc::new(config),
+        config: std::sync::Arc::clone(&config),
         goals: GoalSetup {
             dir: goals_dir,
             store: store.clone(),
@@ -554,6 +577,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         read_only,
         loop_running: false,
         quit: ExitRequest::default(),
+        requests: requests.clone(),
     };
     let mut host = SessionHost::<CliCommand>::new(session_id.clone());
     if let Err(error) = host.adopt_with(harness, cwd.clone(), read_only, Box::new(actor)) {
@@ -608,6 +632,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                                 .await;
                         }
                     }
+                }
+            }
+            // 会话页上点了别的哪一场：切过去（票 20）。宿主表在主循环手里。
+            request = open_requests.recv() => {
+                if let Some(CliRequest::Open(id)) = request {
+                    open_session(&mut host, &kit, &console, &requests, &id).await;
                 }
             }
             event = events.recv() => match event {
@@ -1615,6 +1645,201 @@ fn switch_to_effort(
     Ok(())
 }
 
+/// 一场会话的循环要**宿主表**替它办的事（票 20）。
+///
+/// 宿主表在主循环手里，而点击发生在会话的 task 里 —— 于是走这条请求通道，别让两边都想拿
+/// 那张表。
+enum CliRequest {
+    /// 切到这一场（不在表里就先装载）。
+    Open(SessionId),
+}
+
+/// 组装一场会话所需的那些**可重复取用**的材料（票 20 的装载路径要它）。
+///
+/// 点一行切到一场还没装载的会话时，要装的是「同一批配置、同一个渲染端、同一张锁表」下的另
+/// 一场。它与第一场那段组装必须保持同一批材料 —— 两处漂开的话，装载出来的会话会与启动那一
+/// 场不一样。
+#[derive(Clone)]
+struct AssemblyKit {
+    config: std::sync::Arc<Config>,
+    /// 启动时那个模型：新装载的会话用它。
+    model: String,
+    /// 发言者名（provider profile 的名字）。
+    speaker: String,
+    store: SessionStore,
+    locks: crate::tools::PathLocks,
+    channel: crate::render::RenderChannel,
+    asker: Option<Arc<dyn Asker>>,
+    questions: Option<Arc<dyn UserQuestions>>,
+    mcp: Arc<McpService>,
+    home: Option<PathBuf>,
+    mode: Mode,
+    goals: GoalSetup,
+}
+
+impl AssemblyKit {
+    /// 按这份材料装一场 —— 走的是 `-c <id>` 那条共用路径（`crate::load`）。
+    async fn load(&self, stored: StoredSession, cwd: PathBuf) -> Result<crate::Loaded, String> {
+        let provider = OpenAiProvider::build(&self.config, &self.model, stderr_warnings())
+            .map_err(|error| error.to_string())?;
+        let session_config = self
+            .config
+            .session_config(&self.model)
+            .map_err(|error| error.to_string())?;
+        let tools = tools::with_mcp(
+            tools::with_web(
+                tools::with_dynamic(&self.config.tools, self.questions.is_some()),
+                web_service(&self.config),
+            ),
+            Arc::clone(&self.mcp),
+        );
+        crate::load(AssemblyParts {
+            provider: Box::new(provider),
+            speaker: SpeakerId::Debater(self.speaker.clone().into()),
+            config: session_config,
+            render: self.channel.clone(),
+            scaffold: SessionScaffold {
+                cwd,
+                log_path: stored.log_path.clone(),
+                session_id: stored.id.clone(),
+                tools,
+                locks: self.locks.clone(),
+                policy: Policy::for_mode(self.mode).with_outside_read(self.config.outside_read),
+                asker: self.asker.clone(),
+                questions: self.questions.clone(),
+                hook: None,
+                home: self.home.clone(),
+            },
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    /// 渲染侧那一份「这一场是什么」的事实 —— 票 19 的 `SwitchSession` 带它过去。
+    ///
+    /// 模型与权限模式从**流上**读（票 18 的会话事实），读不出才落回启动时那套；别的几样是
+    /// 进程配置里定下来的值。
+    fn ui_facts(&self, stored: &StoredSession, events: &[Event]) -> SessionFacts {
+        let stream = crate::session::SessionFacts::current(events);
+        let model = stream.model.clone().unwrap_or_else(|| self.model.clone());
+        let mode = stream
+            .permission_mode
+            .as_deref()
+            .and_then(Mode::parse)
+            .unwrap_or(self.mode);
+        let context_window = caps_for(&model)
+            .map(|caps| crate::context::usable_input(&caps))
+            .unwrap_or(0);
+        let tools = tools::with_mcp(
+            tools::with_web(
+                tools::with_dynamic(&self.config.tools, self.questions.is_some()),
+                web_service(&self.config),
+            ),
+            Arc::clone(&self.mcp),
+        );
+        SessionFacts {
+            switchable: true,
+            session_id: stored.id.as_str().to_owned(),
+            session_dir: stored.dir.display().to_string(),
+            model,
+            context_window,
+            mode,
+            budget_limit: self.config.budget.limit,
+            number_style: self.config.number_style,
+            file_viewer: self.config.file_viewer,
+            diff_viewer: self.config.diff_viewer.clone(),
+            tool_schemas: tool_schemas(&tools),
+            speaker_order: vec![self.speaker.clone()],
+        }
+    }
+
+    /// 提醒一行 —— 走渲染通道（它才是「往屏幕上说一句话」的那一端）。
+    fn notice(&self, id: &SessionId, message: &str) {
+        self.channel
+            .handle(id.clone())
+            .notice(&render::wording::heng(message));
+    }
+}
+
+/// 点会话页上的一行：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
+///
+/// 三条结局：**已在宿主表** —— 零延迟取回（忙闲不阻挡）；**不在** —— 先做能立即判定的检查
+/// （票 18 的 `check`），通过就装载、装完切前台；**cwd 不在或流读不出** —— 各回一句，不切。
+async fn open_session(
+    host: &mut SessionHost<CliCommand>,
+    kit: &AssemblyKit,
+    console: &ConsoleHandle,
+    requests: &tokio::sync::mpsc::UnboundedSender<CliRequest>,
+    id: &SessionId,
+) {
+    let Ok(sessions) = kit.store.list_all() else {
+        kit.notice(id, "读不出会话列表");
+        return;
+    };
+    let Some(stored) = sessions.into_iter().find(|stored| &stored.id == id) else {
+        kit.notice(id, &format!("找不到会话 {}", id.as_str()));
+        return;
+    };
+    let events = read_events(&stored.log_path).unwrap_or_default();
+    let cwd = crate::session::titles::read_prefix(&stored.log_path)
+        .ok()
+        .and_then(|prefix| prefix.cwd)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| stored.dir.clone());
+
+    if !host.contains(id) {
+        // 能不能装，现在就知道（票 18 的 `check`）—— 不必先排一次组装。
+        match crate::session::attach::check(&*host, id, Some(&cwd), &stored.log_path) {
+            crate::session::AttachCheck::Ready => {}
+            // 表里已经有了（竞态的另一半）：照旧切过去。
+            crate::session::AttachCheck::AlreadyHosted(_) => {}
+            crate::session::AttachCheck::MissingCwd(gone) => {
+                kit.notice(id, &format!("{} 已经不在了，这一场搬不走", gone.display()));
+                return;
+            }
+            crate::session::AttachCheck::Unreadable(reason) => {
+                kit.notice(id, &format!("读不出这一场的事件流：{reason}"));
+                return;
+            }
+        }
+        // 装载期间提示行一句（票 20）—— 不新增列表标记态。
+        kit.notice(id, &format!("正在装载会话 {}…", id.as_str()));
+        match kit.load(stored.clone(), cwd).await {
+            Ok(loaded) => {
+                let actor = CliActor {
+                    console: console.clone(),
+                    config: Arc::clone(&kit.config),
+                    goals: kit.goals.clone(),
+                    mcp: Arc::clone(&kit.mcp),
+                    prompts: Arc::new(Vec::new()),
+                    read_only: loaded.read_only,
+                    loop_running: false,
+                    quit: ExitRequest::default(),
+                    requests: requests.clone(),
+                };
+                if let Err(error) = host.adopt_with(
+                    loaded.harness,
+                    stored.dir.clone(),
+                    loaded.read_only,
+                    Box::new(actor),
+                ) {
+                    kit.notice(id, &error.to_string());
+                    return;
+                }
+            }
+            Err(message) => {
+                kit.notice(id, &message);
+                return;
+            }
+        }
+    }
+
+    // 切前台：只改指针，忙闲不阻挡（决策票 04 §2）。
+    host.switch(id);
+    // 再给渲染器一条「换到这一场」：事实 + 事件流快照（票 19）。
+    console.switch_session(kit.ui_facts(&stored, &events), events);
+}
+
 /// 一场会话自己的交互循环。
 ///
 /// 这段代码以前是 `interactive_loop(&mut harness, …)`，由 `interactive` 直接驱动；现在它是
@@ -1631,6 +1856,8 @@ struct CliActor {
     prompts: std::sync::Arc<Vec<McpPromptEntry>>,
     /// 只读预览（票 18）：半读的流装起来只能看 —— 凡写流的一律禁。
     read_only: bool,
+    /// 要宿主表办的事（票 20 的换会话）。
+    requests: tokio::sync::mpsc::UnboundedSender<CliRequest>,
     /// 「已经有一个 loop 在跑」那条边界读的状态（原 `interactive_loop` 的局部量）。
     loop_running: bool,
     /// 退出账本（同上）。
@@ -1715,8 +1942,10 @@ impl CliActor {
                     harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
             }
-            // 换会话由主循环处理（它才持宿主表）。
-            FrontEndEvent::OpenSession { .. } => {}
+            // 换会话：转成一条请求，交给主循环（宿主表在它手里）。
+            FrontEndEvent::OpenSession { id } => {
+                let _ = self.requests.send(CliRequest::Open(id));
+            }
         }
     }
 
@@ -2441,6 +2670,7 @@ fn parse_goal_new_line(args: &str) -> Result<GoalNewLine, ()> {
 }
 
 /// 目标那一族命令要的环境事实：清单目录、会话桶、cwd。
+#[derive(Clone)]
 struct GoalSetup {
     /// 目标清单目录；没有数据根时是 `None`（`/goal-new` 与 `/loop` 都照说）。
     dir: Option<PathBuf>,

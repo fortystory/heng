@@ -1,7 +1,7 @@
 # 20: 点一行切过去（接入）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 17, 18, 19
 Part of: ../map.md
 
@@ -58,3 +58,25 @@ Part of: ../map.md
 
 **这一票剩下**：`open_session`（三条结局：已在表里取回 / 装载后切 / 拒绝）、装载那条路要的
 `AssemblyKit`、以及「切换不因为目标在跑回合而阻挡」的联调测试。
+
+## 实现记录（2026-10-12）
+
+- **`CliRequest::Open(id)` + `ClipActor.requests`**：点击发生在会话的 task 里，而宿主表在主循环
+  手里 —— 于是上报经一条请求通道交给主循环处理（票 17 那条 `FrontEndEvent::OpenSession` 到
+  这里闭合）。
+- **`AssemblyKit`**：装载另一场要的那批**可重复取用**的材料（配置 / 模型 / 发言者名 / store /
+  锁表 / 渲染端 / asker / 问卷 / MCP / home / 模式 / 目标环境），外加 `load`（走票 18 那条共用
+  路径）与 `ui_facts`（拼渲染侧那份会话事实：模型与权限模式从流上读，读不出才落回启动那套）。
+- **`open_session` 三条结局**：已在宿主表 —— 只改指针（零延迟、忙闲不阻挡）；不在 —— 先走
+  `attach::check`（cwd 不在 / 流读不出各回一句提示行），通过则「正在装载…」一句 + `load` +
+  入表 + 切前台；两条路都发一条 `ConsoleRequest::SwitchSession`（票 19 的重建）。
+- 装载起来的那一场用同一个 `requests` 发送端，所以它自己也能再切走。
+- **顺带修掉宿主表的一个真 bug**：`watch::Sender::send` 在**一个接收者都没有**时是失败的 ——
+  而 `SessionHost::new` 把接收端丢掉了，于是「没有 task 订阅时 `switch` 静默无效」。这与
+  `forward_gesture`（按前台指针分派手势）正面冲突。现在表自己保住一个接收端。
+- 测试：`tests/session_host.rs` 新增 1 条（装载第二场 → 入表 → 切前台，旧的留表里），加上既有的
+  11 条宿主接缝与 `tests/session_switch.rs` 5 条注入接缝。
+
+**欠账（写在这里）**：cli 的 `open_session` **逐行路径**没有自动化覆盖 —— 它要真终端与 API key。
+两条接缝由 `session_host.rs`（装载 + 切前台）与 `session_switch.rs`（注入 + 重建）分头覆盖，
+真机走查记在票 09 的清单里。

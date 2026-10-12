@@ -185,6 +185,12 @@ pub struct SessionHost<C = SessionCommand> {
     entries: Vec<HostEntry<C>>,
     /// 全进程一个前台指针。
     foreground: watch::Sender<SessionId>,
+    /// 保住一个接收端。
+    ///
+    /// **`watch::Sender::send` 在一个接收者都没有的时候是失败的**，而前台指针必须在没人订阅的
+    /// 时候也改得动（单会话、以及还没有任何 task 去 `follow` 的那些时刻）。少了这一个，`switch`
+    /// 会静默地什么都不做。
+    _foreground_watch: watch::Receiver<SessionId>,
 }
 
 impl SessionHost<SessionCommand> {
@@ -209,10 +215,11 @@ impl<C: Send + 'static> SessionHost<C> {
     /// 建一张以 `foreground` 为前台的宿主表。表起初是空的 —— 第一场会话由 `adopt`（缺省那一
     /// 型）或 [`adopt_with`](Self::adopt_with) 入表。
     pub fn new(foreground: SessionId) -> Self {
-        let (foreground, _receiver) = watch::channel(foreground);
+        let (foreground, keep) = watch::channel(foreground);
         Self {
             entries: Vec::new(),
             foreground,
+            _foreground_watch: keep,
         }
     }
 

@@ -467,3 +467,23 @@ async fn a_half_read_stream_loads_as_a_read_only_preview() {
         "坏行被跳过，前面那段历史还在"
     );
 }
+
+#[tokio::test]
+async fn loading_a_second_session_hosts_it_and_moves_the_foreground() {
+    // 票 20 装载那条路的机制：不在表里的一场走 `load`（票 18 的共用路径）装起来、入表、
+    // 切前台 —— 而**旧的留在表里不卸载**。
+    let dir = tempfile::tempdir().unwrap();
+    let first = session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let workspace = first.cwd.clone();
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(first.harness, first.cwd).unwrap();
+
+    let (loaded, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
+    host.adopt(loaded.harness, workspace).unwrap();
+    assert_eq!(host.foreground().as_str(), "s-1", "入表本身不改前台");
+
+    host.switch(&SessionId::new("s-2"));
+    assert_eq!(host.foreground().as_str(), "s-2");
+    assert_eq!(host.len(), 2, "旧的留在表里");
+    assert!(host.contains(&SessionId::new("s-1")), "切走的那一场不卸载");
+}
