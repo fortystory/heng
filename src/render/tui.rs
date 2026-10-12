@@ -6217,9 +6217,17 @@ impl TuiState {
     fn sessions_click(&mut self, line: usize) {
         self.sidebar_keyboard = true;
         self.release_trace_keyboard();
-        if let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) {
-            self.sessions.focus = Some(id.clone());
+        let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) else {
+            return;
+        };
+        let id = id.clone();
+        self.sessions.focus = Some(id.clone());
+        // 点当前前台那一行只做前两步（票 20）。
+        if id == self.front {
+            return;
         }
+        // 能不能切由循环判（cwd 不在、流损坏各回一句），渲染层只上报。
+        self.events.push(FrontEndEvent::OpenSession { id });
     }
 
     /// 文件页的键位。

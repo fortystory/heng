@@ -1672,6 +1672,10 @@ impl CliActor {
                         Some(FrontEndEvent::OpenPicker(kind)) => {
                             open_picker(harness, &self.console, &self.config, kind, false).await;
                         }
+                        // 点会话页上的一行：切过去（票 20）。**还没接上** —— 见票面「进度」：
+                        // 这件事要宿主表与「谁读输入」两处配合，而现在的形状里前端事件接收端
+                        // 归这一场的循环。
+                        Some(FrontEndEvent::OpenSession { .. }) => {}
                         // 会话页里按 `r` 改完名：落流的是**循环**（渲染层不写事件流）。
                         Some(FrontEndEvent::SessionTitled { id, title }) => {
                             // 这一片只认得当前这场；多场的那一半由票 20 接。
@@ -2893,6 +2897,8 @@ impl ExitRequest {
             FrontEndEvent::CycleMode => {}
             // 改名也是：它既不退出，也不取消。
             FrontEndEvent::SessionTitled { .. } => {}
+            // 换会话更不是：它由调用点处理（那边才有宿主表）。
+            FrontEndEvent::OpenSession { .. } => {}
             // 切换由调用点自己处理（忙闲判据在那一侧）。
             FrontEndEvent::OpenPicker(_) => {}
         }
