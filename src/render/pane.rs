@@ -59,7 +59,45 @@ pub struct Pane {
     pushed: usize,
 }
 
+/// 一个窗格现在的**视口意图**。
+///
+/// 切走一场会话时把它收起来、切回来时原样装回去 —— 这就是「切换不丢阅读位置」
+/// （`.scratch/session-tab/spec.md` §6）。它按**来源行**记位置，不按显示行：折行随宽度变，
+/// 而来源行在「同一份流、同一个宽度」下是稳定的。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Viewport {
+    /// 视口顶端那一个显示行。
+    pub top: usize,
+    /// 视口顶端所在的那条来源行。
+    pub top_source: usize,
+    /// 视口是不是跟着底部走。
+    pub follow: bool,
+    /// 读者是不是把它停在一行上看着。
+    pub holding: bool,
+}
+
 impl Pane {
+    /// 此刻的视口意图。
+    pub fn viewport(&self) -> Viewport {
+        Viewport {
+            top: self.top,
+            top_source: self.top_source,
+            follow: self.follow,
+            holding: self.holding,
+        }
+    }
+
+    /// 把一份视口意图装回去。
+    ///
+    /// 只装**意图**：折行缓存与那一帧的行数都是下一次 `view()` 的事 —— 它会按 `top_source`
+    /// 在新宽度下重新定位。
+    pub fn restore_viewport(&mut self, viewport: Viewport) {
+        self.top = viewport.top;
+        self.top_source = viewport.top_source;
+        self.follow = viewport.follow;
+        self.holding = viewport.holding;
+    }
+
     pub fn new() -> Self {
         Self {
             lines: VecDeque::new(),

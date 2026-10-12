@@ -76,7 +76,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [16: 会话标题：`SessionTitled`、前缀派生与规格涨版](issues/16-session-title.md)
 - [x] [17: 左栏第五签「会话」：列出历史会话（只读）](issues/17-session-page-list.md)
 - [ ] [18: 装载路径：切入历史会话](issues/18-attach-path.md)
-- [ ] [19: 切换重建：`SwitchSession` 与 `seq` 补齐](issues/19-switch-rebuild.md)
+- [x] [19: 切换重建：`SwitchSession` 与 `seq` 补齐](issues/19-switch-rebuild.md)
 - [ ] [20: 点一行切过去（接入）](issues/20-click-to-switch.md)
 - [ ] [21: 新建、关闭与空宿主](issues/21-new-session-and-close.md)
 - [ ] [22: 后台三态与待答挂住](issues/22-background-states-and-awaiting.md)

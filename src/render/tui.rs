@@ -2522,6 +2522,9 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 每场会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
+    /// （`.scratch/session-tab/spec.md` §6）。
+    light: std::collections::HashMap<crate::events::SessionId, SessionLight>,
     /// 会话页那一页自己的状态：它是**第一签**，也是唯一一页由外部推数据进来的
     /// （`.scratch/session-tab/spec.md` §3）。
     sessions: SessionsPage,
@@ -3897,6 +3900,12 @@ struct TraceSearch {
 struct Replay {
     /// 整条流，按 `seq` 顺序，与组装留下它时一模一样。
     events: Vec<Event>,
+    /// 收尾时插不插那条「以下是历史」的分隔行。
+    ///
+    /// 启动那次重放插（历史与这次运行之间有一条看得见的接缝，`.scratch/tui-history-replay/spec.md`
+    /// §6）；**切换会话时不插**（`.scratch/session-tab/spec.md` §6）—— 切过去看到的是一整场
+    /// 会话，不是「历史 + 本段」。
+    divider: bool,
     /// 快照里最大的那个 `seq`，记作 `S`。收尾时只放出 `seq > S` 的实时事件 —— 快照已经
     /// 持有 `seq <= S` 的那些，再放一遍就是把同一条画第二次（`.scratch/session-tab/spec.md` §6）。
     max_seq: u64,
@@ -3936,6 +3945,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             tab: Tab::Usage,
+            light: std::collections::HashMap::new(),
             sessions: SessionsPage::default(),
             files_page: FilesPage::default(),
             // 进 TUI 就取一次数：打开就有东西看（§4）。
@@ -4172,6 +4182,50 @@ impl TuiState {
         }
     }
 
+    /// 把当前这一场的轻状态收进表里（切换的第一步）。
+    ///
+    /// 收的是**整份**：草稿、两个窗格的视口意图、浮层（详情 / 文件查看器 / 选择器 / `/` 菜单 /
+    /// 轨迹搜索与折叠）。用 `mem::take` 而不是 clone：这些东西马上就要被换掉。
+    fn stash_light(&mut self) {
+        let light = SessionLight {
+            editor: std::mem::take(&mut self.editor),
+            conversation: self.view.conversation.viewport(),
+            trace: self.view.trace.viewport(),
+            detail: self.detail.take(),
+            file_viewer: self.file_viewer.take(),
+            picker: self.picker.take(),
+            slash: std::mem::take(&mut self.slash),
+            trace_search: self.view.trace_search.take(),
+            folded: std::mem::take(&mut self.view.folded),
+            fold_before_all: self.view.fold_before_all.take(),
+            fold_handles: std::mem::take(&mut self.view.fold_handles),
+            trace_index: std::mem::take(&mut self.view.trace_index),
+            trace_selection: self.view.trace_selection.take(),
+        };
+        self.light.insert(self.front.clone(), light);
+    }
+
+    /// 把目标那一场的轻状态装进来（没有就装一份干净的）。
+    fn load_light(&mut self) {
+        let light = self
+            .light
+            .remove(&self.front)
+            .unwrap_or_else(SessionLight::default);
+        self.editor = light.editor;
+        self.view.conversation.restore_viewport(light.conversation);
+        self.view.trace.restore_viewport(light.trace);
+        self.detail = light.detail;
+        self.file_viewer = light.file_viewer;
+        self.picker = light.picker;
+        self.slash = light.slash;
+        self.view.trace_search = light.trace_search;
+        self.view.folded = light.folded;
+        self.view.fold_before_all = light.fold_before_all;
+        self.view.fold_handles = light.fold_handles;
+        self.view.trace_index = light.trace_index;
+        self.view.trace_selection = light.trace_selection;
+    }
+
     /// 喂进一个渲染事件，并回答它画了多少条转录来源行。
     ///
     /// 这个计数就是历史重放批次预算的量度：一帧的成本由它铺下去的文字定界，而不是只按它
@@ -4385,7 +4439,7 @@ impl TuiState {
     /// 骨架不会拿到一条通向虚无的接缝。它是渲染层的一行，不是事件，所以它永不进事件流，
     /// 而下一次 `--continue` 会插入新的一条、而不是重放旧的那条。
     fn finish_replay(&mut self, replay: Replay) {
-        if replay.lines > 0 {
+        if replay.divider && replay.lines > 0 {
             self.apply(RenderEvent::notice(
                 self.front.clone(),
                 wording::history_divider(),
@@ -6745,6 +6799,32 @@ impl TuiState {
                 }
                 self.picker = Some(Picker::new(request));
             }
+            // 换到另一场会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**，而会话级的
+            // 轻状态先收走当前那份、再装入目标那份。
+            ConsoleRequest::SwitchSession { facts, events } => {
+                // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一场**，不能泄到这一场来。
+                if let Some(old) = self.replay.take() {
+                    self.finish_replay(old);
+                }
+                self.stash_light();
+                self.front = crate::events::SessionId::new(facts.session_id.clone());
+                self.view = View::new(facts);
+                self.load_light();
+                // 上一场攒下的实时事件不带过去。
+                self.live_buffer.clear();
+                if !events.is_empty() {
+                    let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
+                    self.replay = Some(Replay {
+                        events,
+                        max_seq,
+                        next: 0,
+                        lines: 0,
+                        // 切过去看到的是一整场会话，不是「历史 + 本段」。
+                        divider: false,
+                    });
+                }
+                self.dirty = true;
+            }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
             ConsoleRequest::Sessions { listing } => {
                 let focus = self.sessions.focus.clone();
@@ -6783,6 +6863,7 @@ impl TuiState {
                         max_seq,
                         next: 0,
                         lines: 0,
+                        divider: true,
                     });
                 }
             }
@@ -9211,6 +9292,40 @@ impl Picker {
 ///
 /// 与 [`Panel`]、[`TodoPanel`] 同一族，也与 [`DetailView`] 共用同一条纪律：状态由画它的那一处
 /// 顺手记下（「记住读的人真看到了什么」），只有真画出来的行才回应指针与键盘。
+/// 一场会话在渲染器里的**轻状态**：与投影无关、却跟会话走的那几样
+/// （`.scratch/session-tab/spec.md` §6）。
+///
+/// 切换 = 先收走当前那份、再装入目标那份。**页签选择、主列页、`Ctrl-O` 意愿与会话页的过滤态
+/// 不在这里** —— 它们是进程级的（同一份左栏、同一块屏幕）。
+#[derive(Default)]
+struct SessionLight {
+    /// 草稿与它的光标。
+    editor: Input,
+    /// 对话视图的视口意图。
+    conversation: crate::render::pane::Viewport,
+    /// 轨迹视图的视口意图。
+    trace: crate::render::pane::Viewport,
+    /// 打开的详情覆盖层。
+    detail: Option<DetailView>,
+    /// 打开的文件查看器。
+    file_viewer: Option<FileViewerPane>,
+    /// 开着的选择器。
+    picker: Option<Picker>,
+    /// `/` 菜单的高亮与它属于哪个 token。
+    slash: MenuSelection,
+    /// 轨迹页的过滤。
+    trace_search: Option<TraceSearch>,
+    /// 折起来的那些块，以及全折之前那一份存根。
+    folded: std::collections::HashSet<BlockId>,
+    fold_before_all: Option<std::collections::HashSet<BlockId>>,
+    /// 哪几行是折叠把手。
+    fold_handles: std::collections::HashSet<BlockId>,
+    /// 轨迹页的索引。
+    trace_index: TraceIndex,
+    /// 选中的那一块。
+    trace_selection: Option<BlockId>,
+}
+
 /// 会话页自己的状态（`.scratch/session-tab/spec.md` §3）。
 ///
 /// 与 `files_page` / `changes` 同一族：一页的状态收在一个值里，只活在进程内。页面**常驻**，

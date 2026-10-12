@@ -1,7 +1,7 @@
 # 19: 切换重建：`SwitchSession` 与 `seq` 补齐
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 12, 14
 Part of: ../map.md
 
@@ -20,3 +20,25 @@ Part of: ../map.md
 - [ ] 在飞的旧重建先收尾再开新的
 - [ ] 重建**必须走 `apply`**（`links` / `thinking_*` / `colors` / 命中索引 / `painted` / `block_at` / `timeline` / `panel` / `todo` / `turn_*` 都是它的副作用）
 - [ ] 测试（`ConsoleRequest` 注入接缝，照 `tests/history_replay.rs`）：连切两场后帧里只有第二场的内容；切换期间注入的实时事件在收尾时补上且不重复；轻状态换入换出（草稿与滚动位置切回还在）
+
+## 实现记录
+
+- **`ConsoleRequest::SwitchSession { facts, events }`**（+ `ConsoleHandle::switch_session`）：带的是
+  那一场的**会话事实**与它的事件流**快照**。plain 前端忽略它（一个进程只跑一场）。
+- **切换 = 四步**：在飞的旧重建先收尾（它缓冲的实时事件属于上一场）→ `stash_light()` 把当前
+  轻状态收进表 → `self.view = View::new(facts)`（投影**整块换**，配色由 `View::new` 自己算）→
+  `load_light()` 装入目标那一份 → 清 `live_buffer` → 若快照非空就开一条 `Replay`
+  （`divider: false`）。
+- **会话级轻状态表** `HashMap<SessionId, SessionLight>`：草稿（整份 `Input`）、两个窗格的
+  **视口意图**（`pane::Viewport { top, top_source, follow, holding }`，`Pane` 多了
+  `viewport()` / `restore_viewport()`）、详情覆盖层、文件查看器、选择器、`/` 菜单高亮、轨迹搜索、
+  折叠两件套、轨迹索引与选中块。页签选择、主列页、`Ctrl-O` 意愿与会话页过滤态**不在**表里
+  （进程级）。
+- **`Replay` 多一个 `divider: bool`**：启动那次插「以下是历史」那条接缝，**切换不插** —— 切过去
+  看到的是一整场会话，不是「历史 + 本段」。其余照旧（逐批预算、收尾 `to_bottom`、只 apply
+  `seq > S`）。
+- **`TuiOptions.reopened` 保留**，票面原写「门闩被吸收」：这里的落地是「启动与切换**共用**同一套
+  `Replay` 机制」（切换只是 `divider: false` 的那个特例），而门闩本身管的仍是「启动时先收快照、
+  在此之前一个渲染事件都不许画」—— 快照走 `ConsoleRequest` 是异步到达的，所以那道闩不能去掉。
+- 新增 `tests/session_switch.rs` 5 条：连切两场后只剩第二场的内容、切换不插接缝、草稿换入换出、
+  切换期间到达的实时事件在收尾时补上且不重复、上一场的实时事件不泄过来。

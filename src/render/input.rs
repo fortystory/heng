@@ -158,6 +158,14 @@ pub enum ConsoleRequest {
         /// 新的发言者名册（spec §4）：名字是 provider profile 的名字，换厂商就换名。
         speakers: Vec<String>,
     },
+    /// 换到另一场会话（`.scratch/session-tab/spec.md` §6）。
+    ///
+    /// 带的是那一场的**会话事实**与它的事件流**快照**：渲染器的投影整块换，然后按这份快照
+    /// 重建。切换与启动那次重放共用同一套机制 —— 差别只在收尾不插「以下是历史」那条分隔行。
+    SwitchSession {
+        facts: super::tui::SessionFacts,
+        events: Vec<Event>,
+    },
     /// 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
     ///
     /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事（它会阻塞 TUI），
@@ -244,6 +252,13 @@ impl ConsoleHandle {
     ///
     /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
     /// 是会话的技能，所以菜单读起来的顺序就是循环会尝试它们的顺序。
+    /// 换到另一场会话：把这一场的事实与事件流快照推过去，渲染器据此整块换成它。
+    pub fn switch_session(&self, facts: super::tui::SessionFacts, events: Vec<Event>) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::SwitchSession { facts, events });
+    }
+
     /// 推一份会话页要的列表。与 [`catalog`](Self::catalog) 一样发完就完。
     pub fn sessions(&self, listing: crate::session::listing::SessionListing) {
         let _ = self.requests.send(ConsoleRequest::Sessions { listing });
@@ -484,6 +499,8 @@ pub fn spawn_plain_console_with(
                 }
                 // 会话页只在 TUI 左栏；plain 前端连那一页都没有。
                 ConsoleRequest::Sessions { .. } => {}
+                // 换会话也是 TUI 左栏的事：plain 前端一个进程只跑一场。
+                ConsoleRequest::SwitchSession { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);
