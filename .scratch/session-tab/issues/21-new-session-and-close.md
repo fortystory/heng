@@ -1,7 +1,7 @@
 # 21: 新建、关闭与空宿主
 
 Type: implement
-Status: in-progress
+Status: done
 Blocked by: 20
 Part of: ../map.md
 
@@ -44,3 +44,22 @@ Part of: ../map.md
 `harness.compact_and_rollover(&stored)`（`src/cli.rs` 的 `run_goal_loop` 里）—— 那是「换掉这一
 场」的老语义。改成「新建一场」不只换指针：翻页要把**额度**带过去（`carry_usage`）、还要在新
 会话里**重新认领目标**（`select_goal`）并重摆清单。这值得单独一轮，所以这一票停在 in-progress。
+
+## 收口（2026-10-12）：阈值 rollover
+
+翻页从「换掉这一场」改成「新建一场、旧的留在宿主表里」，与 `/clear`、页签 `新建` 合成同一个
+动作的三个入口：
+
+- **`CliRequest::Rollover { carry_tokens, goal, summary }`**：旧会话那一趟的收尾只做**压缩**
+  （`harness.compact()`，不再 `compact_and_rollover`）与**结算无进展**，然后把这三样交接出去，
+  自己收工 —— 接着跑的是新的那一场。
+- **`CliCommand::Rollover`**：新会话接住 —— `carry_usage(carry_tokens)`（额度不随翻页重置，
+  §8）、`inject_context(Compaction, summary)`、`select_goal(goal)`，然后走 `resume_goal`
+  接着跑目标循环（清单与提醒由循环自己摆）。
+- **无进展（§9）在旧会话结算**：连续 N 次翻页零条目完成就停下报告，不再开新会话。
+- `run_goal_loop` 多一个 `requests` 参数；`clear_session` 删掉（`/clear` 早就改走请求了）。
+
+**欠账**：跨会话的**无进展账不交接** —— 新会话从零开始数。要把那本账带过去，得给
+`run_goal_loop` 一个初始 streak 参数，而那件事与「目标循环的账该不该跨会话延续」这个更大的
+问题绑在一起（`.scratch/goal-loop/spec.md` §9 只说了「连续 N 次翻页」，没说跨不跨会话）。
+票面留在这里，不装作已经做了。

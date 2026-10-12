@@ -3154,6 +3154,10 @@ pub fn goal_reminded(percent: u64) -> String {
 }
 
 /// 翻页那一下的记账（§7）：它必然打掉前缀缓存，所以别让它悄悄发生。
+pub fn goal_rolled_over_new(from: &str) -> String {
+    format!("历史压成摘要：新开一场接着跑（{from} 留在会话页里）")
+}
+
 pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
     let what = if compacted {
         "历史压成摘要"

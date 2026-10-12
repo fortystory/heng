@@ -654,7 +654,28 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                         .get(&host.foreground())
                         .map(|entry| entry.cwd.clone())
                         .unwrap_or_else(|| cwd.clone());
-                    open_new(&mut host, &kit, &console, &requests, &cwd, &front).await;
+                    open_new(&mut host, &kit, &console, &requests, &cwd, &front, None).await;
+                }
+                Some(CliRequest::Rollover {
+                    carry_tokens,
+                    goal,
+                    summary,
+                }) => {
+                    // 翻页（票 21）：同 cwd 新建一场，并把额度、目标与摘要交接过去。
+                    let cwd = host
+                        .get(&host.foreground())
+                        .map(|entry| entry.cwd.clone())
+                        .unwrap_or_else(|| cwd.clone());
+                    open_new(
+                        &mut host,
+                        &kit,
+                        &console,
+                        &requests,
+                        &cwd,
+                        &front,
+                        Some((carry_tokens, goal, summary)),
+                    )
+                    .await;
                 }
                 Some(CliRequest::Close(id)) => {
                     close_session(&mut host, &kit, &console, &id).await;
@@ -1673,8 +1694,16 @@ fn switch_to_effort(
 enum CliRequest {
     /// 切到这一场（不在表里就先装载）。
     Open(SessionId),
-    /// 同 cwd 再加载一场空会话，并切过去（票 21）。`/clear` 与阈值 rollover 走的是同一条。
+    /// 同 cwd 再加载一场空会话，并切过去（票 21）。`/clear` 走的是这一条。
     New,
+    /// **阈值翻页**（票 21 的最后一条）：新建一场，并把这一趟的额度、目标与压缩摘要交接过去。
+    ///
+    /// 它与 `New` 的差别只有「交接什么」：翻页是同一个目标在新会话里接着跑，`/clear` 是清场。
+    Rollover {
+        carry_tokens: u64,
+        goal: String,
+        summary: Option<String>,
+    },
     /// 把这一场从宿主表里卸下来（盘上留着）。
     Close(SessionId),
 }
@@ -1827,7 +1856,9 @@ async fn open_new(
     requests: &tokio::sync::mpsc::UnboundedSender<CliRequest>,
     cwd: &Path,
     inherit: &crate::session::FrontFacts,
+    rollover: Option<(u64, String, Option<String>)>,
 ) {
+    let is_rollover = rollover.is_some();
     let Ok(stored) = kit.store.create(cwd) else {
         kit.notice(&inherit.id, "开不了新会话：会话目录建不出来");
         return;
@@ -1858,11 +1889,28 @@ async fn open_new(
                 return;
             }
             host.switch(&stored.id);
+            // **翻页交接**（票 21）：新会话接过这一趟的额度、目标与压缩摘要，然后接着跑。
+            // `/clear` 不带这个载荷 —— 它是清场。
+            if let Some((carry_tokens, goal, summary)) = rollover
+                && let Some(entry) = host.get(&stored.id)
+            {
+                let _ = entry
+                    .cmd
+                    .send(CliCommand::Rollover {
+                        carry_tokens,
+                        goal,
+                        summary,
+                    })
+                    .await;
+            }
             let events = read_events(&stored.log_path).unwrap_or_default();
             console.switch_session(kit.ui_facts(&stored, &events), events);
             console.host_count(host.len());
-            // 回执口径：新开一场，旧会话留在列表里（票 21）。
-            kit.notice(&stored.id, &render::wording::new_session_opened());
+            // 回执口径：新开一场，旧会话留在列表里（票 21）。翻页有它自己那一句（在旧会话里
+            // 就说了），所以这里不重复。
+            if !is_rollover {
+                kit.notice(&stored.id, &render::wording::new_session_opened());
+            }
         }
         Err(message) => kit.notice(&inherit.id, &message),
     }
@@ -2013,6 +2061,12 @@ enum CliCommand {
     Gesture { event: FrontEndEvent, running: bool },
     /// 接着推进上次没收尾的目标（`--continue` 那一路，§10）。
     ResumeGoal,
+    /// 翻页交接（票 21）：接住上一趟的额度、目标与压缩摘要，然后接着跑。
+    Rollover {
+        carry_tokens: u64,
+        goal: String,
+        summary: Option<String>,
+    },
     /// 结束这一场。
     Close,
 }
@@ -2044,6 +2098,28 @@ impl crate::session::SessionActor<CliCommand> for CliActor {
             }
             CliCommand::ResumeGoal => {
                 self.resume_goal(harness, inbox).await;
+                true
+            }
+            CliCommand::Rollover {
+                carry_tokens,
+                goal,
+                summary,
+            } => {
+                // 额度不随翻页重置（§8）：把到现在为止属于这个目标的用量填给新会话。
+                harness.carry_usage(carry_tokens);
+                if let Some(summary) = &summary
+                    && let Err(error) =
+                        harness.inject_context(crate::events::ContextSource::Compaction, summary)
+                {
+                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+                }
+                match harness.select_goal(&goal) {
+                    Err(error) => {
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)))
+                    }
+                    // 认领好了就接着跑那一趟目标 —— 清单与提醒由循环自己摆。
+                    Ok(()) => self.resume_goal(harness, inbox).await,
+                }
                 true
             }
             CliCommand::Close => false,
@@ -2113,6 +2189,7 @@ impl CliActor {
                     harness,
                     &self.console,
                     inbox,
+                    &self.requests,
                     &self.goals,
                     &name,
                     &mut self.loop_running,
@@ -2246,6 +2323,7 @@ impl CliActor {
                             harness,
                             &self.console,
                             inbox,
+                            &self.requests,
                             &self.goals,
                             &name,
                             &mut self.loop_running,
@@ -2827,6 +2905,7 @@ async fn run_goal_loop(
     harness: &mut Harness,
     console: &ConsoleHandle,
     inbox: &mut tokio::sync::mpsc::Receiver<CliCommand>,
+    requests: &tokio::sync::mpsc::UnboundedSender<CliRequest>,
     goals: &GoalSetup,
     name: &str,
     running: &mut bool,
@@ -3009,45 +3088,18 @@ async fn run_goal_loop(
                 harness.notice(&render::wording::goal_reminded(percent));
             }
             crate::goals::ThresholdStep::Compact => {
-                // 压缩与翻页是一个动作，总是成对发生（§7）。开一个新会话 —— 旧的留在磁盘上。
+                // 压缩与翻页是一个动作（§7）。压缩照做 —— 它是**这一趟**的收尾；而**翻页**从
+                // 「换掉这一场」变成「新建一场、旧的留在宿主表里」（票 21）。
                 let from = harness.session_id().as_str().to_owned();
-                let stored = match goals.store.create(&goals.cwd) {
-                    Ok(stored) => stored,
+                let summary = match harness.compact().await {
+                    Ok(summary) => summary,
                     Err(error) => {
                         *running = false;
-                        return Err(format!("开不了新会话：{error}"));
+                        return Err(render::wording::error_report(&error));
                     }
                 };
-                if let Err(error) = harness.compact_and_rollover(&stored).await {
-                    *running = false;
-                    return Err(render::wording::error_report(&error));
-                }
-                // 额度不随翻页重置（§8）：把到现在为止属于这个目标的用量一起填给新会话（新会话
-                // 自己还是空的，所以那些就是「别处」）。
-                let current = harness.session_id().as_str().to_owned();
-                harness.carry_usage(goal_usage(goals, name, &current));
-                // 新会话要重新认领这个目标 —— 否则进度派生看不见它；清单也重新摆一次，那是它
-                // 照做的定义本身。
-                if let Err(error) = harness.select_goal(name) {
-                    *running = false;
-                    return Err(render::wording::error_report(&error));
-                }
-                if let Err(error) =
-                    harness.inject_context(crate::events::ContextSource::Goal, &manifest.render())
-                {
-                    *running = false;
-                    return Err(render::wording::error_report(&error));
-                }
-                // 新窗口：过线时还会再提醒一次 —— 那是**新会话**的提醒，正确。
-                reminded = false;
-                harness.notice(&render::wording::goal_rolled_over(
-                    &from,
-                    stored.id.as_str(),
-                    true,
-                ));
-
-                // 无进展（§9）：**连续 N 次翻页零条目完成**就停下报告。中途完成任意一条就归零，
-                // 所以这里比的是「这次翻页前后完成数有没有涨」。
+                // 无进展（§9）先在**这一趟**结算：连续 N 次翻页零条目完成就停下报告，不再开新
+                // 会话。跨会话的那本账**不交接** —— 新会话从零开始数（票面记着这一条）。
                 let after = goal_progress(goals, name, manifest);
                 let streak = no_progress.after_rollover(after.completed());
                 if no_progress.reached(goals.settings.no_progress_rollovers) {
@@ -3061,6 +3113,20 @@ async fn run_goal_loop(
                         goals,
                     );
                 }
+                // 交接给新会话的是这三样：额度（§8：不随翻页重置）、目标名、压缩摘要。新会话由
+                // 主循环装起来 —— 那一边才有它的 `Harness`，所以这三样随一条命令过去。
+                let carry_tokens = goal_usage(goals, name, &from);
+                harness.notice(&render::wording::heng(
+                    &render::wording::goal_rolled_over_new(&from),
+                ));
+                let _ = requests.send(CliRequest::Rollover {
+                    carry_tokens,
+                    goal: name.to_owned(),
+                    summary,
+                });
+                // 这一趟到这里收工：接着跑的是**新的那一场**。
+                *running = false;
+                return Ok(());
             }
         }
     }
@@ -3136,26 +3202,6 @@ fn goal_streams(goals: &GoalSetup, name: &str) -> Vec<Vec<Event>> {
         }
     }
     streams
-}
-
-/// `/clear`：结束当前会话、开一个新的（`.scratch/goal-loop/spec.md` §12）。
-///
-/// 它调的就是翻页那条机制（[`Harness::rollover`]），差别只有一处：**不带压缩、不带摘要注入**
-/// —— 人是主动清场，没有「要带过去的历史」这回事。旧会话留在磁盘上，`--continue` 打开的是
-/// 最新的那一场。
-///
-/// 手势本身不进事件流：这件事没有流上的痕迹，审计看的是**会话边界**（新会话的第一条
-/// `SessionStarted`）。
-fn clear_session(harness: &mut Harness, goals: &GoalSetup) -> String {
-    let from = harness.session_id().as_str().to_owned();
-    let stored = match goals.store.create(&goals.cwd) {
-        Ok(stored) => stored,
-        Err(error) => return format!("开不了新会话：{error}"),
-    };
-    if let Err(error) = harness.rollover(&stored) {
-        return render::wording::error_report(&error);
-    }
-    render::wording::cleared(&from, stored.id.as_str())
 }
 
 /// 输入区禁言的那只闩（`.scratch/goal-loop/spec.md` §5）。
@@ -4719,8 +4765,8 @@ fn print_sessions_help(out: &mut dyn Write) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliCommand, ConsoleHandle, ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after,
-        finish_session, records_itself, retarget_to, submission, undo_receipt,
+        CliCommand, CliRequest, ConsoleHandle, ExitRequest, McpPromptEntry, Mode, Submission,
+        exit_code_after, finish_session, records_itself, retarget_to, submission, undo_receipt,
     };
     use crate::agent::{CancelSignal, UndoOutcome};
     use crate::config::{Config, ReasoningEffort};
@@ -6023,6 +6069,7 @@ mod tests {
     #[tokio::test]
     async fn an_ask_mode_session_refuses_a_goal_loop_before_writing_anything() {
         let (_cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<CliCommand>(8);
+        let (requests, _requests_rx) = tokio::sync::mpsc::unbounded_channel::<CliRequest>();
         // 票 06 的 e2e：`ask` 档下 `/loop` 拒绝，而**流上没有** `GoalSelected` —— 拒绝发生在写
         // 任何事件之前。走的是**组装入口 + 假 provider**，也就是 spec 说的那条接缝。
         use super::{GoalSetup, run_goal_loop};
@@ -6087,6 +6134,7 @@ mod tests {
             &mut harness,
             &console,
             &mut cmd_rx,
+            &requests,
             &goals,
             "sandbox",
             &mut running,
@@ -6112,6 +6160,7 @@ mod tests {
     #[tokio::test]
     async fn an_auto_mode_session_starts_the_loop_and_lands_its_ownership_on_the_stream() {
         let (_cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<CliCommand>(8);
+        let (requests, _requests_rx) = tokio::sync::mpsc::unbounded_channel::<CliRequest>();
         // 另一半 e2e：档位够了就真的启动 —— 归属落流、清单注入，然后跑一个回合。provider 这里
         // 每一次都失败，而 `provider_retries = 0` 让循环当场停下（不睡那两次重试），于是这条
         // 用例既证明「能启动」，也把「provider 失败 → 停下 + 收尾事件」走了一遍。
@@ -6180,6 +6229,7 @@ mod tests {
             &mut harness,
             &console,
             &mut cmd_rx,
+            &requests,
             &goals,
             "sandbox",
             &mut running,
@@ -6217,6 +6267,7 @@ mod tests {
     #[tokio::test]
     async fn the_budget_report_names_only_the_entries_that_are_still_open() {
         let (_cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<CliCommand>(8);
+        let (requests, _requests_rx) = tokio::sync::mpsc::unbounded_channel::<CliRequest>();
         // 报告里点名的必须是**这一刻**没完成的那几条。进度由 `stop_goal_loop` 自己派生，所以
         // 这里钉的是它算对了：预造一条「已经认领目标、且已把 01 标完成」的流，再让额度为 0 ——
         // 循环在第一个回合开头就撞顶，报告不许再把 01 列成「还卡着」（它第一次真机跑出来时正是
@@ -6337,6 +6388,7 @@ mod tests {
             &mut harness,
             &console,
             &mut cmd_rx,
+            &requests,
             &goals,
             "sandbox",
             &mut running,
