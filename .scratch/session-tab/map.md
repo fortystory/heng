@@ -3,7 +3,7 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-10-12，四轮 grilling / 16 问）。本图只做**规划**，不产实现代码。
-Status: **图已收口**（10 张设计票 resolved；实现票 `12`–`33` 全部 done；`34` 于 2026-10-12 由架构访谈新开、`ready-for-agent`）。
+Status: **图已收口**（10 张设计票 resolved；实现票 `12`–`34` 全部 done）。
 Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for-agent`，实现交给 `/to-tickets` 切票。
 
 ## 目的地
@@ -91,10 +91,10 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [31: 切换前台后，会话页的前台标记跟着走](issues/31-foreground-mark-follows-the-switch.md)
 - [x] [32: 关闭的交互：让「要关哪一个会话」在点之前就看得见](issues/32-close-interaction.md)
 - [x] [33: 装载的 cwd 只有一个来源](issues/33-attach-cwd-single-source.md)
-- [ ] [34: 装载收成一个动作](issues/34-attach-one-action.md)
+- [x] [34: 装载收成一个动作](issues/34-attach-one-action.md)
 
 共 **34** 张子票：**10 张设计票**（01–08、10、11，全部 `resolved`）+ **24 张实现票**（`09` 与
-12–33 全部 `done`；34 于 2026-10-12 由架构访谈新开、`ready-for-agent`，它的阻塞项 33 已 done）。
+12–34 全部 `done`；33、34 是 2026-10-12 架构访谈新开的装载收尾）。
 设计票的依赖边：`02 ← 03`、`05 ← 04`、`06 ← 02, 04`、`07 ← 04`、`08 ← 04`；其余票的边写在每张票
 自己的 `Blocked by:` 里。**决策 frontier = 空**（唯一那张 grilling 票已转成实现票）。
 

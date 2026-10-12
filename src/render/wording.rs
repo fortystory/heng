@@ -94,6 +94,26 @@ pub fn session_cwd_missing() -> String {
     "这条会话没记下工作目录，装不起来".to_owned()
 }
 
+/// 装载一条盘上的会话时，它记着的那个工作区已经不在了（票 34）。
+pub fn session_cwd_gone(dir: &str) -> String {
+    format!("{dir} 已经不在了，这个会话搬不走")
+}
+
+/// 装载一条盘上的会话时，它的事件流读不出（票 34）。
+pub fn session_stream_unreadable(reason: &str) -> String {
+    format!("读不出这个会话的事件流：{reason}")
+}
+
+/// 装载一条盘上的会话期间的那一句（票 20）—— 不新增列表标记态。
+pub fn session_loading(id: &str) -> String {
+    format!("正在装载会话 {id}…")
+}
+
+/// 新建一个会话时，会话目录建不出来（票 34）。
+pub fn new_session_failed() -> String {
+    "开不了新会话：会话目录建不出来".to_owned()
+}
+
 /// 正在讨论的那一对，给只有一个字段能点名它们的前端。
 pub fn discussion_pair(first: &str, second: &str) -> String {
     format!("{first} × {second}")
