@@ -89,6 +89,11 @@ pub fn session_followed(dir: &str) -> String {
     format!("接着跑的是 {dir} 里的那个会话")
 }
 
+/// 装载一条盘上的会话时，流里没记下它的工作区 —— 装不起来（票 33）。
+pub fn session_cwd_missing() -> String {
+    "这条会话没记下工作目录，装不起来".to_owned()
+}
+
 /// 正在讨论的那一对，给只有一个字段能点名它们的前端。
 pub fn discussion_pair(first: &str, second: &str) -> String {
     format!("{first} × {second}")

@@ -2110,6 +2110,16 @@ async fn close_session(
     let _ = empty;
 }
 
+/// 一条会话的工作区：**流上**记着的那个（`SessionStarted.cwd`），读不出就是 `None`。
+///
+/// 装载与入表都只问这一处 —— `StoredSession.dir` 是**会话目录**（`src/session/store.rs:64`），
+/// 从不是工作目录；拿它顶上会让「新建 / 翻页继承 cwd」那一格记错（票 33）。
+fn attach_cwd(events: &[Event]) -> Option<PathBuf> {
+    crate::session::store::started_cwd(events)
+        .filter(|cwd| !cwd.trim().is_empty())
+        .map(PathBuf::from)
+}
+
 /// 点会话页上的一行：切过去（`.scratch/session-tab/spec.md` §3、票 20）。
 ///
 /// 三条结局：**已在宿主表** —— 零延迟取回（忙闲不阻挡）；**不在** —— 先做能立即判定的检查
@@ -2130,15 +2140,13 @@ async fn open_session(
         return;
     };
     let events = read_events(&stored.log_path).unwrap_or_default();
-    let cwd = crate::session::titles::read_prefix(&stored.log_path)
-        .ok()
-        .and_then(|prefix| prefix.cwd)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| stored.dir.clone());
+    // 工作区的**唯一来源**是流上记着的那个（票 33）；读不出就是拒装，
+    // 绝不退回 `stored.dir` —— 那是会话目录，不是工作目录。
+    let cwd = attach_cwd(&events);
 
     if !host.contains(id) {
         // 能不能装，现在就知道（票 18 的 `check`）—— 不必先排一次组装。
-        match crate::session::attach::check(&*host, id, Some(&cwd), &stored.log_path) {
+        match crate::session::attach::check(&*host, id, cwd.as_deref(), &stored.log_path) {
             crate::session::AttachCheck::Ready => {}
             // 表里已经有了（竞态的另一半）：照旧切过去。
             crate::session::AttachCheck::AlreadyHosted(_) => {}
@@ -2154,11 +2162,16 @@ async fn open_session(
                 return;
             }
         }
+        // 流里没记下工作区：装不起来（上面那三档都放行时才是这一句）。
+        let Some(cwd) = cwd else {
+            kit.notice(id, &render::wording::session_cwd_missing());
+            return;
+        };
         // 装载期间提示行一句（票 20）—— 不新增列表标记态。
         kit.notice(id, &format!("正在装载会话 {}…", id.as_str()));
         let asker = kit.session_asker(&stored.id);
         match kit
-            .load(stored.clone(), cwd, None, Arc::clone(&asker))
+            .load(stored.clone(), cwd.clone(), None, Arc::clone(&asker))
             .await
         {
             Ok(loaded) => {
@@ -2173,12 +2186,9 @@ async fn open_session(
                     quit: ExitRequest::default(),
                     requests: requests.clone(),
                 };
-                if let Err(error) = host.adopt_with(
-                    loaded.harness,
-                    stored.dir.clone(),
-                    loaded.read_only,
-                    Box::new(actor),
-                ) {
+                if let Err(error) =
+                    host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))
+                {
                     kit.notice(id, &error.to_string());
                     return;
                 }
@@ -6728,5 +6738,48 @@ mod tests {
             read("/loop sandbox\n"),
             Submission::Loop("sandbox".to_owned())
         );
+    }
+
+    /// 装载问的是**流上**记着的那个工作区，不是会话目录（票 33）。
+    #[test]
+    fn attaching_asks_the_stream_for_the_workspace() {
+        let events = vec![crate::events::Event::new(
+            1,
+            SpeakerId::System,
+            crate::events::EventPayload::SessionStarted {
+                session_id: SessionId::new("s-1"),
+                cwd: "/workspace".to_owned(),
+                schema_version: crate::events::SCHEMA_VERSION,
+                model: None,
+                provider: None,
+                effort: None,
+                permission_mode: None,
+                sandbox_mode: None,
+            },
+        )];
+        assert_eq!(
+            super::attach_cwd(&events),
+            Some(PathBuf::from("/workspace"))
+        );
+    }
+
+    /// 空串不算「记住了工作区」：拒装，而不是拿一个空路径去问它在不在（票 33）。
+    #[test]
+    fn an_empty_recorded_workspace_is_no_workspace() {
+        let events = vec![crate::events::Event::new(
+            1,
+            SpeakerId::System,
+            crate::events::EventPayload::SessionStarted {
+                session_id: SessionId::new("s-1"),
+                cwd: String::new(),
+                schema_version: crate::events::SCHEMA_VERSION,
+                model: None,
+                provider: None,
+                effort: None,
+                permission_mode: None,
+                sandbox_mode: None,
+            },
+        )];
+        assert_eq!(super::attach_cwd(&events), None);
     }
 }
