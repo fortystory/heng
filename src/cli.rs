@@ -1638,8 +1638,15 @@ async fn interactive_loop(
                 prompt,
                 inline,
             } => {
-                match run_mcp_prompt(console, menu.service, menu.prompts, server, prompt, &inline)
-                    .await
+                match run_mcp_prompt(
+                    console,
+                    menu.service,
+                    menu.prompts,
+                    &server,
+                    &prompt,
+                    &inline,
+                )
+                .await
                 {
                     Ok(Some(text)) => {
                         if let Err(error) =
@@ -1660,7 +1667,7 @@ async fn interactive_loop(
                 let names = harness.skill_names();
                 harness.notice(&format!(
                     "heng: {}",
-                    render::wording::unknown_command(line, &names)
+                    render::wording::unknown_command(&line, &names)
                 ));
             }
             // `/<skill> [task]` 是用户侧的技能调用（spec §9）：`disable-model-invocation: true`
@@ -1669,16 +1676,16 @@ async fn interactive_loop(
             // 后面（`.scratch/ui-trim/spec.md` §2）。
             Submission::Skill { name, task, bare } => {
                 if bare {
-                    harness.notice(&format!("heng: {}", render::wording::skill_started(name)));
+                    harness.notice(&format!("heng: {}", render::wording::skill_started(&name)));
                     if let Err(error) =
-                        run_one_turn(harness, events, TurnStart::Skill(name), &mut quit).await
+                        run_one_turn(harness, events, TurnStart::Skill(&name), &mut quit).await
                     {
                         harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                     }
-                } else if let Err(error) = harness.load_skill(name) {
+                } else if let Err(error) = harness.load_skill(&name) {
                     harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 } else {
-                    harness.notice(&format!("heng: {}", render::wording::skill_loaded(name)));
+                    harness.notice(&format!("heng: {}", render::wording::skill_loaded(&name)));
                     if let Err(error) =
                         run_one_turn(harness, events, TurnStart::Prompt(&task), &mut quit).await
                     {
@@ -1776,7 +1783,7 @@ async fn interactive_loop(
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
                 if let Err(error) =
-                    run_one_turn(harness, events, TurnStart::Prompt(text), &mut quit).await
+                    run_one_turn(harness, events, TurnStart::Prompt(&text), &mut quit).await
                 {
                     harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
@@ -1799,7 +1806,7 @@ async fn interactive_loop(
 /// 「我刚才敲了什么」。
 ///
 /// 空行与退出不记：前者什么都不是，后者在人离开的那一刻写下一个动作没有意义。
-fn records_itself(submission: &Submission<'_>) -> bool {
+fn records_itself(submission: &Submission) -> bool {
     match submission {
         Submission::Ignore | Submission::Quit | Submission::Prompt(_) => false,
         // 技能是唯一一个「名字本身就是这句话的一部分」的记号，所以光秃秃的一条另记；
@@ -1846,7 +1853,7 @@ fn byte_offset(text: &str, at: usize) -> usize {
 
 /// 一次提交在要什么（spec §12）。
 #[derive(Debug, PartialEq, Eq)]
-enum Submission<'a> {
+enum Submission {
     /// 没有要发的东西：一个空行，或者去掉空白后是空的一行。循环不再起一个回合，直接再问一次 —— 在
     /// 空输入上按回车是空行，绝不是输入结束（spec §6）。
     Ignore,
@@ -1854,7 +1861,7 @@ enum Submission<'a> {
     Undo,
     /// 第一行以 `/` 开头、却什么都没点名，而且后面只有空行：一个错字，也是唯一会被告诉用户的那种
     /// 情况。
-    Unknown(&'a str),
+    Unknown(String),
     /// `/<skill>` 以及跟在它后面的任务。
     ///
     /// `task` 是**整条原文**，技能名留在里面：`/research 帮我查 X` 发出去的就是这一条，于是
@@ -1865,15 +1872,15 @@ enum Submission<'a> {
     /// **就是**指令，不再多发一条 user 消息。技能是唯一一个「名字本身就是这句话的一部分」
     /// 的记号，所以内建命令与 MCP 模板的参数仍取记号旁边的字。
     Skill {
-        name: &'a str,
+        name: String,
         task: String,
         bare: bool,
     },
     /// `/<server>:<模板>`：一次 MCP 提示词模板调用（票 17）。发起者是**人**：它走 `/` 菜单，
     /// 不进工具表。`inline` 是命令行上给的位置参数，缺的那些由循环用问卷补齐。
     McpPrompt {
-        server: &'a str,
-        prompt: &'a str,
+        server: String,
+        prompt: String,
         inline: String,
     },
     /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
@@ -1896,7 +1903,7 @@ enum Submission<'a> {
     /// 上下文继续用」—— 旧会话留在磁盘上，进程不重启，渲染器与终端留着。
     Clear,
     /// 整条提交，含换行，作为一条 prompt。
-    Prompt(&'a str),
+    Prompt(String),
 }
 
 /// 读一次提交。
@@ -1918,11 +1925,11 @@ enum Submission<'a> {
 /// 合。
 ///
 /// 开头的斜杠一律剥掉（`//undo` 读作 `undo`）。任务结尾的空白行丢掉；其余按原样保留。
-fn submission<'a>(
-    text: &'a str,
+fn submission(
+    text: &str,
     has_skill: impl Fn(&str) -> bool,
     prompts: &[McpPromptEntry],
-) -> Submission<'a> {
+) -> Submission {
     if text.trim().is_empty() {
         return Submission::Ignore;
     }
@@ -1942,9 +1949,9 @@ fn submission<'a>(
         // 一个命令记号都没有：整条还是普通消息。唯一的例外是占满整行的一个不认识的名字 ——
         // 那是错字，一直会被告诉用户。
         if text.trim_start().starts_with('/') && !text.trim().contains('\n') {
-            return Submission::Unknown(text.trim());
+            return Submission::Unknown(text.trim().to_owned());
         }
-        return Submission::Prompt(text);
+        return Submission::Prompt(text.to_owned());
     };
 
     let name = command_name(text, &token);
@@ -1983,22 +1990,22 @@ fn submission<'a>(
             if let Some((server, prompt)) = name.split_once(':') {
                 if prompts.iter().any(|entry| entry.name == name) {
                     return Submission::McpPrompt {
-                        server,
-                        prompt,
+                        server: server.to_owned(),
+                        prompt: prompt.to_owned(),
                         inline: task,
                     };
                 }
             }
             if has_skill(name) {
                 Submission::Skill {
-                    name,
+                    name: name.to_owned(),
                     task: text.trim_end().to_owned(),
                     bare: only_token,
                 }
             } else {
                 // 一个内建命令带着记号之外的字：整条仍是一条普通消息，用户写下的东西一个字
                 // 都不会被丢掉。
-                Submission::Prompt(text)
+                Submission::Prompt(text.to_owned())
             }
         }
     }
@@ -4557,7 +4564,7 @@ mod tests {
         )]
     }
 
-    fn read(text: &str) -> Submission<'_> {
+    fn read(text: &str) -> Submission {
         let prompts = prompts();
         submission(text, has_skill, &prompts)
     }
@@ -4790,11 +4797,11 @@ mod tests {
         assert_eq!(read("/exit"), Submission::Quit);
         assert_eq!(read("/undo"), Submission::Undo);
         assert_eq!(read("  /quit  "), Submission::Quit, "与从前一样去掉空白");
-        assert_eq!(read("/nope"), Submission::Unknown("/nope"));
+        assert_eq!(read("/nope"), Submission::Unknown("/nope".to_owned()));
         assert_eq!(
             read("/ask-matt 帮我看一下"),
             Submission::Skill {
-                name: "ask-matt",
+                name: "ask-matt".to_owned(),
                 task: "/ask-matt 帮我看一下".to_owned(),
                 bare: false,
             },
@@ -4803,13 +4810,13 @@ mod tests {
         assert_eq!(
             read("/ask-matt"),
             Submission::Skill {
-                name: "ask-matt",
+                name: "ask-matt".to_owned(),
                 task: "/ask-matt".to_owned(),
                 bare: true,
             },
             "光秃秃的技能名只加载正文"
         );
-        assert_eq!(read("hello"), Submission::Prompt("hello"));
+        assert_eq!(read("hello"), Submission::Prompt("hello".to_owned()));
     }
 
     #[test]
@@ -4817,7 +4824,7 @@ mod tests {
         assert_eq!(
             read("/ask-matt\n第一行\n第二行"),
             Submission::Skill {
-                name: "ask-matt",
+                name: "ask-matt".to_owned(),
                 task: "/ask-matt\n第一行\n第二行".to_owned(),
                 bare: false,
             }
@@ -4826,7 +4833,7 @@ mod tests {
         assert_eq!(
             read("/ask-matt 第一行\n第二行"),
             Submission::Skill {
-                name: "ask-matt",
+                name: "ask-matt".to_owned(),
                 task: "/ask-matt 第一行\n第二行".to_owned(),
                 bare: false,
             }
@@ -4841,7 +4848,7 @@ mod tests {
         assert_eq!(
             read("请用 /ask-matt 帮我看一下"),
             Submission::Skill {
-                name: "ask-matt",
+                name: "ask-matt".to_owned(),
                 task: "请用 /ask-matt 帮我看一下".to_owned(),
                 bare: false,
             }
@@ -4854,12 +4861,15 @@ mod tests {
         // 「未知命令」。
         assert_eq!(
             read("/usr/bin/env cargo test\n第二行"),
-            Submission::Prompt("/usr/bin/env cargo test\n第二行")
+            Submission::Prompt("/usr/bin/env cargo test\n第二行".to_owned())
         );
         // 只占一行时它仍然是个错字，而且是会告诉用户的那一种。
-        assert_eq!(read("/usr/bin/env"), Submission::Unknown("/usr/bin/env"));
+        assert_eq!(
+            read("/usr/bin/env"),
+            Submission::Unknown("/usr/bin/env".to_owned())
+        );
         // 它后面的空行仍然算「后面什么都没有」。
-        assert_eq!(read("/nope\n   "), Submission::Unknown("/nope"));
+        assert_eq!(read("/nope\n   "), Submission::Unknown("/nope".to_owned()));
     }
 
     #[test]
@@ -4868,7 +4878,7 @@ mod tests {
         // 头的行」那一套规则读 —— `/undo` 没点名任何技能，所以它是一条 prompt。
         assert_eq!(
             read("/undo\n把 X 改成 Y"),
-            Submission::Prompt("/undo\n把 X 改成 Y")
+            Submission::Prompt("/undo\n把 X 改成 Y".to_owned())
         );
         assert_eq!(read("/undo"), Submission::Undo);
         assert_eq!(read("/undo  "), Submission::Undo, "结尾的空白没关系");
@@ -4879,12 +4889,12 @@ mod tests {
         // 内建命令要求记号的原文就是 `/<名字>`，所以 `//undo` 不再是 `Undo` —— 旧路径把它当
         // 错字，而 `Undo` 有回滚副作用，不该由多出来的一个斜杠换来。技能那一侧不受影响：
         // 名字本来就是剥掉斜杠之后才比的。
-        assert_eq!(read("//undo"), Submission::Prompt("//undo"));
-        assert_eq!(read("//clear"), Submission::Prompt("//clear"));
+        assert_eq!(read("//undo"), Submission::Prompt("//undo".to_owned()));
+        assert_eq!(read("//clear"), Submission::Prompt("//clear".to_owned()));
         assert_eq!(
             read("//review"),
             Submission::Skill {
-                name: "review",
+                name: "review".to_owned(),
                 task: "//review".to_owned(),
                 bare: true,
             },
@@ -4927,9 +4937,12 @@ mod tests {
         // （spec §5，「明确不做」那一条）。
         assert_eq!(
             read("请把 /clear 加到文档里"),
-            Submission::Prompt("请把 /clear 加到文档里")
+            Submission::Prompt("请把 /clear 加到文档里".to_owned())
         );
-        assert_eq!(read("请看 /undo"), Submission::Prompt("请看 /undo"));
+        assert_eq!(
+            read("请看 /undo"),
+            Submission::Prompt("请看 /undo".to_owned())
+        );
         // 单独一行仍旧是它自己（不变）。
         assert_eq!(read("/clear"), Submission::Clear);
         assert_eq!(read("/undo"), Submission::Undo);
@@ -4940,11 +4953,11 @@ mod tests {
         // 草稿里找不到命令记号时整条仍当普通消息（不变）。
         assert_eq!(
             read("看 /tmp/x 这个文件"),
-            Submission::Prompt("看 /tmp/x 这个文件")
+            Submission::Prompt("看 /tmp/x 这个文件".to_owned())
         );
         assert_eq!(
             read("第一行\n/loopish 目标"),
-            Submission::Prompt("第一行\n/loopish 目标")
+            Submission::Prompt("第一行\n/loopish 目标".to_owned())
         );
     }
 
@@ -4953,8 +4966,8 @@ mod tests {
         // 在它们所控制的那个模式退场之前，`plan` 与 `endplan` 都是内建命令
         // （`.scratch/todo-and-modes`）。现在没有东西去解析它们了，答案是未知命令那段文本 —— 那段
         // 文本会点名真正存在的内建命令。
-        assert_eq!(read("/plan"), Submission::Unknown("/plan"));
-        assert_eq!(read("/endplan"), Submission::Unknown("/endplan"));
+        assert_eq!(read("/plan"), Submission::Unknown("/plan".to_owned()));
+        assert_eq!(read("/endplan"), Submission::Unknown("/endplan".to_owned()));
     }
 
     #[test]
@@ -5192,7 +5205,7 @@ mod tests {
         assert_eq!(
             read("/review\n   \n"),
             Submission::Skill {
-                name: "review",
+                name: "review".to_owned(),
                 task: "/review".to_owned(),
                 bare: true,
             }
@@ -5202,11 +5215,11 @@ mod tests {
     #[test]
     fn anything_else_is_the_whole_message() {
         let text = "第一行\n第二行\n第三行";
-        assert_eq!(read(text), Submission::Prompt(text));
+        assert_eq!(read(text), Submission::Prompt(text.to_owned()));
         // 按原样保留：这条消息就是用户打下的东西，不是修剪过的版本。
         assert_eq!(
             read("  第一行\n第二行  "),
-            Submission::Prompt("  第一行\n第二行  ")
+            Submission::Prompt("  第一行\n第二行  ".to_owned())
         );
     }
 
@@ -5228,7 +5241,10 @@ mod tests {
         assert_eq!(read("/discuss"), Submission::Discuss(String::new()));
         assert_eq!(read("  /discuss   "), Submission::Discuss(String::new()));
         // 只有那个名字才是命令：一个叫 `discussion` 的技能就只是个技能。
-        assert_eq!(read("/discussion x"), Submission::Unknown("/discussion x"));
+        assert_eq!(
+            read("/discussion x"),
+            Submission::Unknown("/discussion x".to_owned())
+        );
     }
 
     // --- 讨论抽取的池子（spec §15） ------------------------------------------
@@ -5450,7 +5466,7 @@ mod tests {
         // 退役的空格形状是未知命令，与 `/plan` 一样的读法：命令名就是命令名。
         assert_eq!(
             read("/goal new sandbox .scratch/sandbox"),
-            Submission::Unknown("/goal new sandbox .scratch/sandbox")
+            Submission::Unknown("/goal new sandbox .scratch/sandbox".to_owned())
         );
     }
 
@@ -5463,7 +5479,7 @@ mod tests {
         // 内建命令要么是整条提交，要么什么都不算：它后面的一行绝不能被丢在地上。
         assert_eq!(
             read("/clear\n再写点什么"),
-            Submission::Prompt("/clear\n再写点什么")
+            Submission::Prompt("/clear\n再写点什么".to_owned())
         );
     }
 
@@ -5892,7 +5908,7 @@ mod tests {
         );
 
         // 一个真不存在的名字仍然是未知命令。
-        assert!(matches!(read("/nope"), Submission::Unknown("/nope")));
+        assert_eq!(read("/nope"), Submission::Unknown("/nope".to_owned()));
     }
 
     // --- `/loop <名字>`（`.scratch/goal-loop/spec.md` §4） ---------------------
