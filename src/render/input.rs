@@ -176,6 +176,9 @@ pub enum ConsoleRequest {
     },
     /// 宿主表现在有几场、其中几场在跑（票 21 的 `N 场`、票 22 的 `M 场在跑`）。
     HostCount { sessions: usize, running: usize },
+    /// 提示行那句话有**可点入口**（票 23 的退出闸门）：把会话页交到前台、焦点落在这一行上 ——
+    /// 点它（或按 Enter）就切过去。
+    Attention { id: crate::events::SessionId },
     /// 一场会话的忙闲（票 22）。
     SessionState {
         id: crate::events::SessionId,
@@ -304,6 +307,11 @@ impl ConsoleHandle {
         let _ = self
             .requests
             .send(ConsoleRequest::HostCount { sessions, running });
+    }
+
+    /// 说「去会话页看这一场」。
+    pub fn attention(&self, id: crate::events::SessionId) {
+        let _ = self.requests.send(ConsoleRequest::Attention { id });
     }
 
     /// 说一场会话现在忙不忙。
@@ -569,7 +577,8 @@ pub fn spawn_plain_console_with(
                 // 多会话那两件同理：plain 一个进程只跑一场。
                 ConsoleRequest::SessionClosed { .. }
                 | ConsoleRequest::HostCount { .. }
-                | ConsoleRequest::SessionState { .. } => {}
+                | ConsoleRequest::SessionState { .. }
+                | ConsoleRequest::Attention { .. } => {}
                 ConsoleRequest::Ask(ask) => {
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);

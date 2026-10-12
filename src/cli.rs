@@ -713,9 +713,34 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             },
             event = events.recv() => match event {
                 Some(FrontEndEvent::Quit) => {
-                    quit.apply(&FrontEndEvent::Quit, &signal);
-                    forward_gesture(&host, FrontEndEvent::Quit);
-                    break quit.code();
+                    // **退出闸门**（票 23）：还有没收尾的场就拒绝，并把可点入口指向第一场 ——
+                    // 不自动取消、不代用户做决定。
+                    match crate::session::exit_gate(&host) {
+                        crate::session::ExitGate::Clear => {
+                            quit.apply(&FrontEndEvent::Quit, &signal);
+                            break quit.code();
+                        }
+                        crate::session::ExitGate::Running { count, first } => {
+                            render.notice(&render::wording::heng(
+                                &render::wording::exit_blocked(count),
+                            ));
+                            console.attention(first);
+                        }
+                    }
+                }
+                Some(FrontEndEvent::Cancel) => {
+                    // `Ctrl-C` **只取消前台当前的动作，永不退出**（票 23）。它不再记进退出账本。
+                    forward_gesture(&host, FrontEndEvent::Cancel);
+                    // 前台没有可取消的东西时说一句；后台还有场时顺带说那句。
+                    let idle_foreground = host
+                        .get(&host.foreground())
+                        .is_none_or(|entry| *entry.state.borrow() == crate::session::host::SessionState::Idle);
+                    if idle_foreground {
+                        let background = host.len().saturating_sub(1);
+                        render.notice(&render::wording::heng(
+                            &render::wording::cancel_nothing(background),
+                        ));
+                    }
                 }
                 Some(FrontEndEvent::OpenSession { .. }) => {
                     // 票 20：切前台。装载与切换的落地见那一票的「进度」。
@@ -728,8 +753,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             },
         }
     };
-    let foreground = host.foreground();
-    let _ = host.close_with(&foreground, CliCommand::Close).await;
+    // 退出流程（票 23）：**广播 `Close` 给每一场**，等它们全部收工，再等渲染器把缓冲写完。
+    // 退出码照旧只有 0 与 130 两种（`quit.code()`）。
+    let ids: Vec<SessionId> = host
+        .entries()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    for id in &ids {
+        let _ = host.close_with(id, CliCommand::Close).await;
+    }
     render_channel.shutdown().await;
     // 终端交还之后那一行（`.scratch/exit-gesture/spec.md` §5）：stdout 只承载最终产物，
     // 所以回执走 stderr；TUI 与 `--plain` 共用这一处收尾。启动不打它（横幅已经有 id），

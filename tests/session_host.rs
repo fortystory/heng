@@ -563,3 +563,52 @@ async fn closing_the_last_session_empties_the_host_and_a_new_one_comes_back() {
     assert_eq!(host.len(), 1, "新建之后表里又有一场");
     assert_eq!(host.foreground().as_str(), "s-2");
 }
+
+#[tokio::test]
+async fn the_exit_gate_refuses_while_anything_is_unfinished() {
+    use heng::session::{ExitGate, exit_gate};
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let (first, _) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(first.harness, workspace.clone()).unwrap();
+
+    // 一场都不忙：可以退。
+    assert_eq!(exit_gate(&host), ExitGate::Clear);
+
+    // 后台那一场跑起来：闸门拦下，并指向它。
+    let opened = Arc::new(Notify::new());
+    let (busy, _) = load_session(
+        dir.path(),
+        "s-2",
+        vec![Reply::Stall(
+            opened,
+            vec![StreamEvent::TextDelta("半句话".to_owned())],
+        )],
+    )
+    .await;
+    host.adopt(busy.harness, workspace).unwrap();
+    host.get(&SessionId::new("s-2"))
+        .unwrap()
+        .cmd
+        .send(turn("跑起来"))
+        .await
+        .unwrap();
+    let mut state = host.get(&SessionId::new("s-2")).unwrap().state.clone();
+    wait_for_entry(&mut state, SessionState::RunningTurn).await;
+
+    assert_eq!(
+        exit_gate(&host),
+        ExitGate::Running {
+            count: 1,
+            first: SessionId::new("s-2"),
+        },
+        "拦下并指向在跑的那一场"
+    );
+
+    // 取消之后放行。
+    host.get(&SessionId::new("s-2")).unwrap().cancel.cancel();
+    wait_for_entry(&mut state, SessionState::Idle).await;
+    assert_eq!(exit_gate(&host), ExitGate::Clear, "全部收尾之后能退");
+}

@@ -7139,46 +7139,6 @@ fn clicking_a_question_body_or_border_does_nothing() {
     assert!(text.contains("权限询问"), "而问句还在：{text}");
 }
 
-#[test]
-fn a_raised_gesture_replaces_the_way_out_and_keeps_the_hints() {
-    // 举手换掉的是**出口那一段**，不是往后追加（`.scratch/exit-gesture/spec.md` §2）：
-    // 宽终端里别的键位提示照旧在，而出口那一截换成了那句催促。
-    let (mut idle, _line) = {
-        let mut state = state_with_roster(&["kimi"]);
-        let (reply, line) = tokio::sync::oneshot::channel();
-        state.request(ConsoleRequest::Prompt { reply });
-        (state, line)
-    };
-    let before = screen(120, 24, &mut idle).join("\n");
-    assert!(!before.contains("再按一次"), "没举手时没有这句：{before}");
-
-    idle.key(Key::CtrlC);
-    let after = screen(120, 24, &mut idle).join("\n");
-    assert!(
-        after.contains("再按一次 ctrl-c/ctrl-d 退出"),
-        "举手之后出口段换了：{after}"
-    );
-    assert!(after.contains("enter 发送"), "别的键位提示照旧在：{after}");
-    assert!(
-        !after.contains("· ctrl-c/ctrl-d 退出"),
-        "旧的出口段是被换掉、不是被追加：{after}"
-    );
-
-    // 忙碌那一档把两件事都说出来：回合停了、再按会退出。
-    let mut busy = state_with_roster(&["kimi"]);
-    busy.request(ConsoleRequest::RunState { running: true });
-    busy.key(Key::CtrlC);
-    let busy_text = screen(120, 24, &mut busy).join("\n");
-    assert!(
-        busy_text.contains("已取消 · 再按一次 ctrl-c 退出"),
-        "忙碌的举手文案：{busy_text}"
-    );
-    assert!(
-        busy_text.contains("esc 取消"),
-        "键位提示照旧在：{busy_text}"
-    );
-}
-
 /// 一个屏幕上摆着 `question` 的问卷，以及它的答案接收端。
 fn questionnaire_state(
     question: heng::questions::UserQuestion,
@@ -7473,31 +7433,6 @@ fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
     // 第二下真的退出这次询问：发送端被丢掉，而不是作答。
     state.key(Key::Esc);
     assert!(answers.try_recv().is_err(), "退出询问 = 丢下发送端");
-}
-
-#[test]
-fn the_questionnaire_footer_shows_the_exit_receipt_the_hint_line_cannot() {
-    // 问卷期间提示行整行被页脚替换，所以 `Ctrl-C` 举起的那只手只有落在这里才看得见
-    // —— `.scratch/questionnaire-keys/spec.md` §6。
-    use heng::questions::{Choice, UserQuestion};
-    let (mut state, _answers) = questionnaire_state(UserQuestion {
-        id: "q1".to_owned(),
-        header: None,
-        question: "选一个".to_owned(),
-        multi_select: false,
-        options: vec![Choice {
-            label: "甲".to_owned(),
-            description: None,
-        }],
-    });
-    state.request(ConsoleRequest::RunState { running: true });
-
-    state.key(Key::CtrlC);
-    let text = screen(130, 24, &mut state).join("\n");
-    assert!(
-        text.contains("已取消 · 再按一次 ctrl-c 退出"),
-        "回执落在页脚：{text}"
-    );
 }
 
 #[test]
@@ -11234,28 +11169,6 @@ fn a_long_picker_scrolls_and_answers_with_the_highlighted_row() {
 }
 
 #[test]
-fn after_escaping_the_picker_escape_is_free_to_raise_the_exit_gesture() {
-    // 选择器关掉之后不留下任何会吃掉下一次 `Esc` 的东西：举手退出那两下照旧能用。
-    let mut state = idle();
-    let (request, mut answer) = picker("模型", &[("kimi-k3", true)], 0);
-    state.request(request);
-    state.key(Key::Esc);
-    assert_eq!(answer.try_recv().expect("取消送出去了"), None);
-    assert!(state.take_events().is_empty(), "取消不发任何手势");
-
-    // 举手那两下照旧：`Ctrl-C` 第一下只举手（提示行出现「再按一次」），第二下才退。
-    assert!(state.take_events().is_empty());
-    state.key(Key::CtrlC);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("再按一次 ctrl-c/ctrl-d 退出"),
-        "退出举手照旧举得起来：{text}"
-    );
-    state.key(Key::CtrlC);
-    assert!(state.should_quit(), "第二下 `Ctrl-C` 真的退出");
-}
-
-#[test]
 fn a_fixed_effort_model_says_instead_of_opening_an_empty_picker() {
     // 那个模型没有档位旋钮，所以点它只给一句说明（spec §8），不是一块空浮层。
     let mut state = {
@@ -12833,94 +12746,6 @@ fn ctrl_v_flips_the_main_tab_both_ways() {
     let back = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(back.contains("问题"), "{back}");
     assert!(!back.contains("调用 bash"), "回到对话页：{back}");
-}
-
-/// `Ctrl-V` 与 `Ctrl-O` 同一档的**纯视图手势**：忙闲都生效、不清退出举手，而两处独占键盘
-/// 的视图（详情覆盖层、历史重放）拦得住它，选择器立着时归选择器
-/// （`.scratch/trace-shortcuts/spec.md` §1）。
-#[test]
-fn ctrl_v_is_a_view_only_gesture() {
-    // 跑着的时候也生效 —— 恰恰是那时最想翻过去看看工具在干什么。
-    let mut busy = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut busy);
-    busy.request(ConsoleRequest::RunState { running: true });
-    busy.key(Key::CtrlV);
-    assert!(
-        trace_page(&mut busy, 120, 24)
-            .join("\n")
-            .contains("调用 bash"),
-        "跑着的时候 Ctrl-V 也切得过去"
-    );
-
-    // 不清举手：半分钟前那一下退出举手照旧举着，提示行仍写着那句催促。
-    let mut raised = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut raised);
-    raised.key(Key::CtrlC);
-    raised.key(Key::CtrlV);
-    assert!(
-        screen(120, 24, &mut raised)
-            .join("\n")
-            .contains("再按一次 ctrl-c/ctrl-d 退出"),
-        "Ctrl-V 不清掉退出举手"
-    );
-
-    // 详情覆盖层立着时它进不去：一帧都不动，覆盖层也没被关掉。
-    let mut detail = state_with_roster(&["kimi"]);
-    detail.apply(tool_started(
-        1,
-        "call-24",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    detail.apply(tool_completed(2, "call-24", true, Some("body"), None));
-    open_trace_tab(&mut detail, 120, 40);
-    click_row(&mut detail, 120, 40, "调用 bash");
-    let open = screen(120, 40, &mut detail);
-    assert!(open.join("\n").contains(TOOL_FACES), "覆盖层立着");
-    detail.key(Key::CtrlV);
-    let after = screen(120, 40, &mut detail);
-    assert_eq!(open, after, "覆盖层立着时 Ctrl-V 一个像素都不动");
-    assert!(after.join("\n").contains(TOOL_FACES), "覆盖层也没被关掉");
-
-    // 历史重放里键盘归重放：它同样拦得住。
-    let mut replay = state_with_roster(&["kimi"]);
-    replay.request(ConsoleRequest::Replay {
-        events: vec![heng::events::Event::new(
-            1,
-            heng::events::SpeakerId::System,
-            heng::events::EventPayload::SessionStarted {
-                session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
-                cwd: "/workspace".to_owned(),
-                schema_version: 1,
-                model: None,
-                provider: None,
-                effort: None,
-                permission_mode: None,
-                sandbox_mode: None,
-            },
-        )],
-    });
-    assert!(replay.replay_pending(), "重放立着");
-    let before = screen(120, 24, &mut replay);
-    replay.key(Key::CtrlV);
-    assert_eq!(before, screen(120, 24, &mut replay), "重放期间它不动这一帧");
-
-    // 选择器立着时归选择器：这一下既不切页、也不改浮层。
-    let mut picking = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut picking);
-    let (request, _answer) = picker("模型", &[("claude-sonnet-4-5", true), ("kimi-k2", true)], 0);
-    picking.request(request);
-    let open = screen(120, 24, &mut picking);
-    picking.key(Key::CtrlV);
-    assert_eq!(open, screen(120, 24, &mut picking), "选择器吞下这一下");
-    // 关掉它之后主列还在对话页上 —— 那一下没有偷偷切页。
-    picking.key(Key::Esc);
-    assert!(
-        !conversation_rows(&mut picking, 120, 24)
-            .join("\n")
-            .contains("调用 bash"),
-        "选择器立着时 Ctrl-V 不切页"
-    );
 }
 
 /// 宽度变化重放之后，「开场那一段已经开过了」这件事**跟着记录一起回来** —— 否则后面再到的

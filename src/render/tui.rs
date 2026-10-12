@@ -4063,40 +4063,26 @@ impl TuiState {
         self.dirty = true;
     }
 
-    /// `Ctrl-C` / `Ctrl-D` 共用的那一把手势（`.scratch/exit-gesture/spec.md` §1）。
+    /// `Ctrl-C` 与 `Ctrl-D` 的两条路（`.scratch/session-tab/spec.md` §1、票 23）。
     ///
-    /// 空闲时两键完全对等：第一下举手（什么也不做），窗口内第二下退出，混按也算第二下。
-    /// 忙碌时只有 `Ctrl-C` 参与：第一下取消当前回合**并且**举手，第二下退出 —— 那一条由
-    /// CLI 走有序收尾并以 130 收尾（票 03）；`Ctrl-D` 维持忽略，而且**不清**举手，因为它是
-    /// 「被忽略」，不是「别的键」。
+    /// * **`Ctrl-C` 只取消前台当前的动作，永不退出**。「第二下变退出」那条旧语义
+    ///   （`.scratch/exit-gesture/spec.md` §1）在有多场会话之后不成立了 —— 它会把别的场一起
+    ///   按下去。没有可取消的东西时由循环回一句（它才知道后台有几场）。
+    /// * **`Ctrl-D` 是退出请求**：过不过闸门由循环判（票 23 的退出闸门）—— 渲染层不知道有几场
+    ///   在跑，也不该替它决定。
     fn exit_key(&mut self, key: Key) {
-        let now = std::time::Instant::now();
-        // 只认**退出**那一把：举着「退出这次询问」时按 `Ctrl-C` 不作数，走下面第一下的路
-        // —— 两把手势互斥（`.scratch/questionnaire-keys/spec.md` §5）。
-        let raised = self.raised_gesture(now) == Some(Gesture::Exit);
-        // `Ctrl-D` 在忙碌、**或任何问题立着**时什么都不做（票 01）：它是「被忽略」，不是
-        // 「别的键」，所以它也不清掉已经举起的那把手。
-        if key == Key::CtrlD && (self.busy() || self.pending.is_some()) {
-            return;
-        }
-        if raised {
-            // 第二下：按**这一把手的出身**走（spec §3）—— 空闲里举的手不会因为回合中途开跑
-            // 就变成 130，忙碌里举的手也不会因为回合已经收尾就变成 0。
-            if self.exit_gesture_busy {
+        match key {
+            Key::CtrlC => self.events.push(FrontEndEvent::Cancel),
+            Key::CtrlD => {
+                // 任何问题立着时它是「被忽略」，不是「别的键」（`.scratch/questionnaire-keys/
+                // spec.md` §5）：那一把手的语义归问卷。
+                if self.pending.is_some() {
+                    return;
+                }
                 self.events.push(FrontEndEvent::Quit);
-            } else {
-                self.quit = true;
             }
-            return;
+            _ => {}
         }
-        // 第一下：举手。忙碌时这一下同时是取消当前回合，而这一把的出身就是「忙碌」——
-        // 取消可能马上就落地，第二下到达时 `busy()` 已经为假，但那次退出仍然是「忙碌中被打断
-        // 而退」，得走 130 那条路（spec §3）。
-        if self.busy() {
-            self.events.push(FrontEndEvent::Cancel);
-        }
-        self.raise_gesture_at(now, Gesture::Exit);
-        self.exit_gesture_busy = self.busy();
     }
 
     /// 算一次标题，与上一版比对；变了就记下新的并返回它，没变答 `None`。
@@ -6850,6 +6836,13 @@ impl TuiState {
                         divider: false,
                     });
                 }
+                self.dirty = true;
+            }
+            // 提示行那句话的可点入口（票 23）：把会话页交到前台、焦点落在这一行上。
+            ConsoleRequest::Attention { id } => {
+                self.tab = Tab::Sessions;
+                self.sidebar_keyboard = true;
+                self.sessions.focus = Some(id);
                 self.dirty = true;
             }
             // 一场会话的忙闲（票 22）。

@@ -29,8 +29,8 @@ pub use facts::SessionFacts;
 pub mod asker;
 pub use asker::SessionAsker;
 pub use host::{
-    CloseRefusal, FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost, SessionState,
-    SessionTurn, TurnActor, close_check,
+    CloseRefusal, ExitGate, FrontFacts, HostEntry, SessionActor, SessionCommand, SessionHost,
+    SessionState, SessionTurn, TurnActor, close_check, exit_gate,
 };
 pub use ledger::DayLedger;
 pub use listing::{SessionListing, SessionMark, SessionRow, sessions};

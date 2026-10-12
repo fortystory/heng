@@ -189,6 +189,40 @@ pub fn close_check<C: Send + 'static>(
     Ok(())
 }
 
+/// 退出闸门（`.scratch/session-tab/spec.md` §1、票 23）。
+///
+/// 多会话之后「有人要退出」不再等价于「关掉这一场」：别的场可能还在跑。**只要有一场不在空闲
+/// 就拒绝**，并指出在跑集合的第一场 —— 提示行那个可点入口指的就是它。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitGate {
+    /// 可以退：一场没收尾的都没有。
+    Clear,
+    /// 还有没收尾的：拒绝，并给出**第一场**（可点入口指它）。
+    ///
+    /// `count` 数的是**全部**没收尾的场（含后台那些），不只是可见的几行。
+    Running { count: usize, first: SessionId },
+}
+
+/// 现在能不能退出。
+///
+/// 「在跑」在这里读作**不在空闲** —— 包括 `AwaitingHuman`：那一场有一个动作挂在等人答，
+/// 杀掉它等于替人做了决定（票 23 说「不自动取消、不代用户做决定」）。
+pub fn exit_gate<C: Send + 'static>(host: &SessionHost<C>) -> ExitGate {
+    let unfinished: Vec<SessionId> = host
+        .entries()
+        .iter()
+        .filter(|entry| *entry.state.borrow() != SessionState::Idle)
+        .map(|entry| entry.id.clone())
+        .collect();
+    match unfinished.first() {
+        Some(first) => ExitGate::Running {
+            count: unfinished.len(),
+            first: first.clone(),
+        },
+        None => ExitGate::Clear,
+    }
+}
+
 /// 宿主表拒绝一次操作的理由。
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {

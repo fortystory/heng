@@ -80,7 +80,7 @@ Spec: [`spec.md`](spec.md) —— 2026-10-12 由本图折成，已打 `ready-for
 - [x] [20: 点一行切过去（接入）](issues/20-click-to-switch.md)
 - [x] [21: 新建、关闭与空宿主](issues/21-new-session-and-close.md)
 - [x] [22: 后台三态与待答挂住](issues/22-background-states-and-awaiting.md)
-- [ ] [23: 退出闸门与 `Ctrl-C` / `Ctrl-D` 语义](issues/23-exit-gate-and-ctrl-c.md)
+- [x] [23: 退出闸门与 `Ctrl-C` / `Ctrl-D` 语义](issues/23-exit-gate-and-ctrl-c.md)
 - [x] [24: 列表过滤](issues/24-session-list-filter.md)
 - [ ] [25: 场外通知：终端标题的状态段](issues/25-terminal-title-attention.md)
 
