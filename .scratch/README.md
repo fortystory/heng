@@ -71,3 +71,5 @@
 | [`session-tab/`](session-tab/spec.md) | map + spec | **左栏「会话」页签**：列出 store 里跑过的会话（标题自动派生、可改名落 log-only 事件），点一条即切过去；切走不卸载、后台继续跑（同进程多 `Harness` + 宿主表）；worktree 建删不做 | spec + 24 票（`12`–`34` 全部落地，含 `26`–`32` 七张收尾与 33–34 两张装载收尾） |
 | [`tool-coverage/`](tool-coverage/map.md) | map + spec | **内置工具按用量扩编**：`grep` 的上下文参数（`after` / `before`，上限改成「列出的行」合计）、`bash` 的 `workdir` 改必填 + 结果首行回显 `cwd:`、一条 `git` 工具（`op` 读侧 `ReadOnly` / 写侧 `Exclusive`）、一条只读文件枚举 `glob`；判据是 bash 调用数与段数下降，脚本与基线在 [`research/`](tool-coverage/research/01-shape-inventory.md)；逐面文档是 [`docs/grep.md`](../docs/grep.md) · [`docs/bash.md`](../docs/bash.md) · [`docs/git.md`](../docs/git.md) · [`docs/glob.md`](../docs/glob.md) | 7 resolved + 5 done |
 | [`skills-builtin/`](skills-builtin/seed.md) | seed | matt 技能内置进 heng（触发更硬）+ `.scratch/` 搬去数据库或单独项目；未访谈 | — |
+| [`cli-modules/`](cli-modules/spec.md) | spec | **`cli.rs` 拆成 module**：一条子命令一个文件（7026 行 → 8 个文件），行为一个字不动 | —（没有拆票，spec 自己落地） |
+| [`architecture-deepening/`](architecture-deepening/seed.md) | seed | 2026-10-12 架构回顾剩下的候选池：截断收回 `width`、左栏四页、键盘归属、`headless` 的第三个 adapter、`View` 的 seam、措辞层分家、宿主表投影…… | — |

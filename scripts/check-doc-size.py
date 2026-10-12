@@ -388,13 +388,16 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-12 新增 `skills-builtin` 种子行时再跟一次**：同一类显式动作，`.scratch/README.md`
 #   13,784 / 73 → **13,889 / 74**（种子索引行也随 feature 增长）；字符侧靠把这一行压短收在
 #   13,900 内，未动字符棘轮。行数棘轮 73 → **74**。
+# **2026-10-12 新增 `cli-modules` 与 `architecture-deepening` 两行索引时再跟一次**：同一类显式动作，
+#   `.scratch/README.md` 13,875 / 74 → **14,146 / 76**（一条 spec、一条种子）；字符棘轮
+#   13,900 → **14,200**、行数棘轮 74 → **76**。
 ENTRY_BUDGET = {
     # 2026-10-12：补 ADR 0022（会话量词从「场」换成「会话」）的索引入口，README 实测
     # 19,901 —— 一次显式上调：19,800 → 19,950（终点 18,500 不变）。
     "README.md": {"chars": 19950, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 13900,
-        "lines": 74,
+        "chars": 14200,
+        "lines": 76,
         "target_chars": 13500,
         "target_lines": 100,
     },
