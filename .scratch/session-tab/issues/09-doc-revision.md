@@ -1,7 +1,7 @@
 # 文档回改：lifecycle.md 与逐面文档（实现期执行）
 
 Type: implement
-Status: ready-for-agent
+Status: in-progress
 Blocked by: 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25
 Part of: ../map.md
 
@@ -58,3 +58,24 @@ Part of: ../map.md
 「会话页那一页」与空宿主态两条；新增 `docs/observability.md` 与 CLI 表一节（`sessions ls` 末列
 三档派生、`/clear` 文案口径、`clear_while_looping` 闸门取消）。`CONTEXT.md` 的**空宿主**词条
 票 07 已直接写入，回改时只需核对格式与链接。
+
+
+## 进度（2026-10-12）
+
+**机械回改已落地：`python3 scripts/lifecycle-check.py` 现在 PASS 且 `0 line drift`。**
+
+- 证据表里 **39 处行号漂移**逐条更新（多会话改造让 `src/cli.rs`、`src/lib.rs`、`src/render/*`
+  的行号整体后移）；范围形式的条目（如 `241-255`）按原长度平移，写成 `新起点-新终点`。
+- **两个改名符号**跟着改：`fn interactive_loop`（票 15 把整段循环搬进 `CliActor`、票 20 又把
+  输入搬回主循环）→ `fn interactive`；`fn drain_renderer`（票 13 把渲染端升成进程级的
+  `RenderChannel`）→ `fn shutdown`，落点也从 `src/lib.rs:1257` 挪到 `src/render/mod.rs:408`。
+- 节点数与边数没动（74 / 78），图与证据表的集合对账照旧。
+
+**还没做（这一票的内容回改）**：
+
+- `docs/lifecycle.md` 的 §2 那句「一次进程只走一条主干」、图 2 的 `sess` / `loop` / `tail`、
+  图 5 的 `rlog --> tui` 与「一个进程恰好一个渲染器」、§7 第 1 与第 3 条 —— 都要按**同进程多会话
+  宿主**重述（术语用决策票 04 定的**会话宿主**）。
+- `docs/render.md`（第五签 / 会话页那页 / 空宿主 / 过滤）、`CONTEXT.md`（页签四→五、新词条）、
+  `docs/observability.md` 与 CLI 表（`sessions ls` 末列三档、`/clear` 口径）、
+  `docs/tui-manual-checklist.md` 的四条走查。
