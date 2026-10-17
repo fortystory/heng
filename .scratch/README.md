@@ -1,6 +1,6 @@
 # `.scratch/`：feature 索引
 
-本仓库的 issue tracker 就是这里的 markdown：一个 feature 一个目录，三种形态 **spec.md**（构建计划）/ **map.md**（wayfinder 的决策图）/ **seed.md**（种子材料，还没变成 spec）；票在 `issues/NN-<slug>.md` 一票一个文件，抬头的 `Status:` 记状态（`ready-for-agent` → `done` / `ready-for-walkthrough`；决策票 `claimed` → `resolved`），约定见 [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md)。**需求池**：下表里形态为 `seed`、且没写「已移交」或「已折成 spec」的那些行，就是还能推进的意向（按表格数，不在这里记会漂的数字）；想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
+本仓库的 issue tracker 就是这里的 markdown：一个 feature 一个目录，三种形态 **spec.md**（构建计划）/ **map.md**（决策图）/ **seed.md**（种子材料）；票在 `issues/NN-<slug>.md` 一票一个，抬头 `Status:` 记状态（`ready-for-agent` → `done` / `ready-for-walkthrough`；决策票 `claimed` → `resolved`），约定见 [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md)。**需求池**：下表形态为 `seed` 且没写「已移交」「已折成 spec」的行就是还能推进的意向；推进哪条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
 | [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 35/35 done |
@@ -30,17 +30,17 @@
 | [`sidebar-toggle/`](sidebar-toggle/spec.md) | spec | 左栏开关：`Ctrl-O` 收起与叫回 —— 意愿与宽度档**相乘**（< 80 列叫不回来）、意愿只活在进程内、提示行最末加一条 `ctrl-o 左栏`；推翻 `tui-sidebar` spec §2 与 `CONTEXT.md` 左栏词条里「去留只由宽度决定」那半句（2026-10-02，一次十问的 grilling，不建图） | 2 done + 1 ready-for-walkthrough（票 03 剩 ㉖ 的真机走查） |
 | [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 —— **已落成 [`mcp-support` 票 19](mcp-support/issues/19-mcp-catalog-in-context.md)（done）**：注入那条记录点得开、`DetailKind::Context` 通吃所有来源，本目录不会再有 spec | — |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
+| [`agent-teams/`](agent-teams/seed.md) | seed | 同目录的会话互相通信：信箱、共享任务板、团队成员怎么被看见（`task` 派出的执行者今天只共用同一份流） | — |
+| [`session-panes/`](session-panes/spec.md) | map + spec | **多会话平铺与右侧栏**：顶部页签条 + 最多四个会话并排 + 右栏（轨迹是它的第一页）+ herdr 里默认关左栏 —— 2026-10-17 十二张决策票走完并折成 spec | 12/12 resolved + 16 implement |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示（票 11 裁决：**另开一张图**） | — |
 | [`interjection-flow/`](interjection-flow/seed.md) | seed | 运行中插入对话：排队等到边界，或立刻打断 | — |
 | [`mcp-support/`](mcp-support/map.md) | map + spec | 接入 MCP：现行规范全集（tool / resource / prompt / elicitation + MRTR），**不扩工具表** —— 用四个元工具 `mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read`；连接层取 `rmcp`，server 进程过沙箱 + 环境白名单，信任按能力逐台声明。逐面文档在 [`docs/mcp.md`](../docs/mcp.md)。 | 9 resolved + 10 done |
-| [`context-compaction/`](context-compaction/seed.md) | seed | 压缩上下文：溢出前折成摘要继续跑 —— **已移交 [`goal-loop`](goal-loop/seed.md)，并在那里落地**（`src/lib.rs` 的 `compact()` 产出 `HistoryReason::Compaction`） | — |
+| [`context-compaction/`](context-compaction/seed.md) · [`clear-command/`](clear-command/seed.md) · [`loop-and-goals/`](loop-and-goals/seed.md) | seed | 三条都已移交 [`goal-loop`](goal-loop/seed.md) 并在那里落地：压缩上下文（`src/lib.rs` 的 `compact()`）、`/clear`（改意为「结束当前会话、开一个新的」）、`/loop` 与跨轮目标 | — |
 | [`rag-vector-store/`](rag-vector-store/seed.md) | seed | RAG / 向量检索：按语义检索仓库或外部资料 | — |
 | [`background-services/`](background-services/seed.md) | seed | 后台服务进程与定时任务 | — |
 | [`web-search-tool/`](web-search-tool/spec.md) | spec | 两个内建联网工具 `web_search` / `web_fetch`，结构照 DSH 的 `ctx.web` 三层（工具 / 服务 / 后端）：搜索后端取 DeepSeek 的 Anthropic 兼容端点 + 原生服务器工具（零新密钥），抓取自己发 HTTP 并自带 SSRF 防护，结果带不可信标记与 URL 引用。逐面文档在 [`docs/web.md`](../docs/web.md)。 | 5 done + 1 ready-for-walkthrough |
 | [`bash-workdir/`](bash-workdir/spec.md) | spec | `bash` 的第四个参数 `workdir`：一条命令可以站在**工作区之内**的另一个目录跑（相对按工作区解析、按解析后位置判界），沙箱边界与兄弟工具的路径基准一处不动；先例调研见 [`research/`](bash-workdir/research/01-cwd-parameter-precedent.md) | 2/2 done |
 | [`grep-tool/`](grep-tool/spec.md) | spec | `grep` 工具：只读、只扫工作区（`Effect::ReadOnly`，四档全放行），输出 `path:line:文本`；可选的 `glob` 只缩小文件范围、不放宽忽略规则；命中超过 500 条时先收一刀并在末尾如实写清省掉多少，token 溢出仍走统一的截断与指针；实现取自带 ripgrep 拆出的库（`ignore` + `grep-searcher` + `grep-regex`）—— 2026-10-02 由 seed 折成 spec、同日拆出 4 张实现票，**2026-10-03 四张全部落地**，逐面文档是 [`docs/grep.md`](../docs/grep.md) | 4/4 done |
-| [`clear-command/`](clear-command/seed.md) | seed | `/clear` 命令：清上下文继续用 —— **已移交 [`goal-loop`](goal-loop/seed.md)**，意向也改成了「结束当前会话、开一个新的」 | — |
-| [`loop-and-goals/`](loop-and-goals/seed.md) | seed | `/loop` 持续工作与跨轮目标 / 计划 —— **已移交 [`goal-loop`](goal-loop/seed.md)** | — |
 | [`image-input/`](image-input/seed.md) | seed | 把图片交给模型（输入侧 / 真图显示 / 只当引用）：粘贴 / 路径 / 拖拽；10-06 追加选图弹窗（预览 + 文件树）与直接粘贴图片（自己读剪贴板） | — |
 | [`git-worktree/`](git-worktree/seed.md) | seed | git worktree：会话级或执行者级的隔离工作区（Codex 有 `--worktree` 与 `/worktree`）；会牵动会话桶、权限档与沙箱的「工作区」定义 | — |
 | [`lifecycle-diagram/`](lifecycle-diagram/map.md) | map + spec | **衡（heng）运行时生命周期图**（wayfinder 决策图）：把「进程启动 → 一次 turn → 委派 → 退出」画成 mermaid 放进 [`docs/lifecycle.md`](../docs/lifecycle.md) —— 一张鸟瞰 + 四张分层详图，配「节点/边 → `文件:行号`」证据表与 `scripts/lifecycle-check.py` 弱校验；全 mermaid 是本仓库第一种，留了 [ADR 0011](../docs/adr/0011-diagrams-in-mermaid.md)。 | 5 resolved + 9 done |
