@@ -31,7 +31,7 @@
 | [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 —— **已落成 [`mcp-support` 票 19](mcp-support/issues/19-mcp-catalog-in-context.md)（done）**：注入那条记录点得开、`DetailKind::Context` 通吃所有来源，本目录不会再有 spec | — |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
 | [`agent-teams/`](agent-teams/seed.md) | seed | 同目录的会话互相通信：信箱、共享任务板、团队成员怎么被看见（`task` 派出的执行者今天只共用同一份流） | — |
-| [`session-panes/`](session-panes/spec.md) | map + spec | **多会话平铺与右侧栏**：顶部页签条 + 最多四个会话并排 + 右栏（轨迹是它的第一页）+ herdr 里默认关左栏 —— 2026-10-17 十二张决策票走完并折成 spec，同日十六张实现票全部 done | 12/12 resolved + 16/16 done |
+| [`session-panes/`](session-panes/spec.md) | map + spec | **多会话平铺与右侧栏**：顶部页签条 + 最多四会话并排 + 右栏（轨迹第一页）+ herdr 默认关左栏 —— 2026-10-17 十二张决策票折成 spec、十六张实现票全部落地 | 12/12 + 16/16 done |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示（票 11 裁决：**另开一张图**） | — |
 | [`interjection-flow/`](interjection-flow/seed.md) | seed | 运行中插入对话：排队等到边界，或立刻打断 | — |
 | [`mcp-support/`](mcp-support/map.md) | map + spec | 接入 MCP：现行规范全集（tool / resource / prompt / elicitation + MRTR），**不扩工具表** —— 用四个元工具 `mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read`；连接层取 `rmcp`，server 进程过沙箱 + 环境白名单，信任按能力逐台声明。逐面文档在 [`docs/mcp.md`](../docs/mcp.md)。 | 9 resolved + 10 done |
