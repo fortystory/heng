@@ -67,8 +67,9 @@ const TAB_ROWS: u16 = 3;
 const TAB_RULE_ROWS: u16 = 1;
 
 /// 转录在右缘永远留着的那几列：滚动条的列与回合条的列。画不画都留着，这样文字不会因为
-/// 转录长高了而重新折行（spec §1）。
-const TRAILING_COLUMNS: u16 = 2;
+/// 转录长高了而重新折行（spec §1）。右栏那一侧也留同样的两列（票 04 的轴宽口径），所以它
+/// 是公开的。
+pub const TRAILING_COLUMNS: u16 = 2;
 
 /// 轨迹页行首那个时间戳占的列：`HH:MM:SS` 八列加它后面那个空格
 /// （`.scratch/trace-in-main/spec.md` §5）。
@@ -91,6 +92,24 @@ const SIDEBAR_WIDE_FROM: u16 = 120;
 
 /// 低于这个宽度，左栏整栏隐藏，主列拿走一切。
 const SIDEBAR_NARROW_FROM: u16 = 80;
+
+/// 右栏的两个内容宽度（票 13；与左栏同一种三档制：40 / 28 / 隐藏）。
+///
+/// 宽度**不受左栏意愿影响**：右栏的开与关是它自己的一位意愿（票 14 的 `Ctrl-V`），而这里是
+/// 宽度档的可行性。两者相乘。
+pub const RAIL_WIDE: u16 = 40;
+const RAIL_NARROW: u16 = 28;
+
+/// 低于这个整屏宽，右栏整栏隐藏 —— 与左栏窄档的下界同一个数（票 04 的「窄屏右栏先让位」）。
+const RAIL_HIDDEN_BELOW: u16 = 80;
+
+/// 从这个整屏宽起右栏用 40 档；再窄一档就是 28（票 13 的让位算法）。
+const RAIL_WIDE_FROM: u16 = 122;
+
+/// 标签态一个 pane 的宽度下限（票 08 第 13 条）：主列不比它窄，落不下就收右栏。
+///
+/// 平铺态另有一条 32 的下限（票 17），由那一边的几何自己判 —— 这个常数只管「标签态主列」。
+pub const MIN_MAIN_WIDTH: u16 = MIN_WIDTH;
 
 /// 左栏顶上留的那一行空行：身份（标记或文字身份）从它下面一行才开始
 /// （2026-10-01 真机反馈 —— 紧贴屏幕顶上太挤）。
@@ -183,6 +202,19 @@ pub struct Regions {
     pub screen: Rect,
     /// 主列：分隔线右侧的一切。问题覆盖层与 `/` 菜单在它里面定位。
     pub main: Rect,
+    /// 右栏（票 13）：一条与主列同高的列，轨迹住在它里面。右栏不在时是 `None`。
+    ///
+    /// 它与左栏**同时存在**（冻结项 6），窄屏时右栏先让位 —— 让位判据在
+    /// [`right_rail_tier`]，这里只装结果。
+    pub right_rail: Option<Rect>,
+    /// 右栏与主列之间那一列的分隔线。
+    pub right_divide: Option<u16>,
+    /// 右栏里轨迹的正文区：右栏内容区减去顶部那条横带之后剩下的一切。
+    pub right_trace: Option<Rect>,
+    /// 右栏顶上那条时间轴横带（票 13 起只画 Compact 一档）。
+    pub right_band: Option<Rect>,
+    /// 右栏这一帧的横带退成了哪一档（右栏里只可能是 Compact 或 Empty）。
+    pub right_band_kind: BandKind,
     /// 主列页签条的标签行：`对话 ┆ 轨迹`（`.scratch/trace-in-main/spec.md` §1）。它上下各一条
     /// 虚线，转录从它下面一行起 —— 与左栏那条页签条同一种画法，只是跨的是主列。
     pub main_tabs: Rect,
@@ -440,8 +472,8 @@ impl Regions {
 ///
 /// 2026-10-08 之前它还有一个 `input_text_width` 兄弟，从它这里再减掉提示符那两列；提示符退场
 /// 之后两者相同，于是只留这一个（`.scratch/ui-trim/spec.md`）。
-pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
-    main_width(area.width, sidebar_wanted)
+pub fn content_width(area: Rect, sidebar_wanted: bool, right_wanted: bool) -> u16 {
+    main_width(area.width, sidebar_wanted, right_wanted)
 }
 
 /// 排出一帧的版面。`draft_rows` 是输入的草稿折成的行数，`sidebar_wanted` 是用户想不想看见
@@ -456,8 +488,8 @@ pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
 /// 下那份余地足够让输入区拿满三行，同时转录还留三行 —— 不再是「两行输入区、一行转录」。
 ///
 /// 问卷占着底部时走 [`plan_questionnaire`]：只有那条上限不同，其余一字不差。
-pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
-    plan_with(area, draft_rows, sidebar_wanted, false)
+pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool, right_wanted: bool) -> Regions {
+    plan_with(area, draft_rows, sidebar_wanted, right_wanted, false)
 }
 
 /// 排出一帧的版面，而底部那块由**问卷**占着（spec §19）。
@@ -465,13 +497,27 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
 /// 与 [`plan`] 只差底部长高的上限：问卷不是草稿，它长高是为了把题面与选项一起放下来，所以
 /// 它换一条更宽的上限（[`questionnaire_input_rows`]），其余每一个矩形、每一条降级阶梯与
 /// [`plan`] 完全同源 —— 同名同义的两处算术正是两半会漂移的由来。
-pub fn plan_questionnaire(area: Rect, rows: u16, sidebar_wanted: bool) -> Regions {
-    plan_with(area, rows, sidebar_wanted, true)
+pub fn plan_questionnaire(
+    area: Rect,
+    rows: u16,
+    sidebar_wanted: bool,
+    right_wanted: bool,
+) -> Regions {
+    plan_with(area, rows, sidebar_wanted, right_wanted, true)
 }
 
-fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -> Regions {
+fn plan_with(
+    area: Rect,
+    rows: u16,
+    sidebar_wanted: bool,
+    right_wanted: bool,
+    questionnaire: bool,
+) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width, sidebar_wanted);
+    // 右栏与左栏同时存在（冻结项 6）；它的宽度档与「想不想看见」相乘，判据在
+    // [`right_rail_tier`]。它的让位只影响主列宽，左栏档一个字不动。
+    let rail_tier = right_rail_tier(area.width, sidebar_wanted).filter(|_| right_wanted);
     // 左栏顶上让出一行空行，底下**不再让给提示行** —— 提示行回到了主列里，左栏因此恢复全高
     // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16）。于是 120×24 下
     // 页区从 14 行回到 15 行：页高的公式不变，变的只是剩余高度。
@@ -489,7 +535,7 @@ fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -
     let trace_band = band_kind(
         area.height,
         input_rows,
-        trace_axis_width(main_width(area.width, sidebar_wanted)),
+        trace_axis_width(main_width(area.width, sidebar_wanted, right_wanted)),
     );
     let trace_rows = area
         .height
@@ -501,7 +547,7 @@ fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -
     let main = Rect::new(
         main_x,
         area.y,
-        main_width(area.width, sidebar_wanted),
+        main_width(area.width, sidebar_wanted, right_wanted),
         area.height,
     );
 
@@ -543,10 +589,43 @@ fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -
         1,
         transcript_rows,
     );
+    // 右栏（票 13）：与主列同高的一列，轨迹住在它里面。分隔线落在主列右缘那一列上 ——
+    // 与左栏那条同一种画法，方向相反。
+    let right_divide = rail_tier.map(|_| main.right());
+    let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, area.y, tier, area.height));
+    // 右栏里的时间轴：轴宽照票 04 的口径（右栏宽 − 2 列滚动条与指示器 − 九列时刻 − 五列
+    // 泳道标签）。40 档 24 格、28 档 12 格，两档都落在 Compact（票 08 第 10 条：右栏只画
+    // 这一档）。右栏**不做** Full / Sparse —— 那两档要的轴宽在 40 列里根本不存在。
+    let right_band_kind = right_rail.map_or(BandKind::Empty, |rail| {
+        let axis = rail
+            .width
+            .saturating_sub(TRAILING_COLUMNS + STAMP_COLUMNS + timeline::LABEL_COLUMNS);
+        match BandKind::of_axis(axis) {
+            BandKind::Full | BandKind::Sparse => BandKind::Compact,
+            kind => kind,
+        }
+    });
+    let right_band = right_rail.and_then(|rail| {
+        (right_band_kind.rows() > 0)
+            .then(|| Rect::new(rail.x, rail.y, rail.width, right_band_kind.rows()))
+    });
+    let right_trace = right_rail.map(|rail| {
+        Rect::new(
+            rail.x,
+            rail.y + right_band_kind.rows(),
+            rail.width,
+            rail.height.saturating_sub(right_band_kind.rows()),
+        )
+    });
 
     Regions {
         screen: area,
         main,
+        right_rail,
+        right_divide,
+        right_trace,
+        right_band,
+        right_band_kind,
         main_tabs,
         transcript,
         band,
@@ -629,13 +708,39 @@ fn sidebar_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
     }
 }
 
-/// 主列拿到的那些列：整屏减去左栏（它画出来时连同分隔线那一列）。
+/// 主列拿到的那些列：整屏减去左栏与右栏（它们画出来时连同各自分隔线那一列）。
 ///
-/// 外框已经不占列了（spec §1），所以这里只剩左栏这一笔账。意愿为假时左栏那两笔一起让回来，
-/// 主列因此拿到整屏宽（`.scratch/sidebar-toggle/spec.md` §2）。
-fn main_width(width: u16, sidebar_wanted: bool) -> u16 {
+/// 外框已经不占列了（spec §1），所以这里只剩两条侧栏的账。意愿为假时那两笔一起让回来，
+/// 主列因此拿到整屏宽（`.scratch/sidebar-toggle/spec.md` §2、票 13）。
+fn main_width(width: u16, sidebar_wanted: bool, right_wanted: bool) -> u16 {
     let sidebar = sidebar_tier(width, sidebar_wanted).map_or(0, |tier| tier + 1);
-    width.saturating_sub(sidebar)
+    let rail = right_rail_tier(width, sidebar_wanted)
+        .filter(|_| right_wanted)
+        .map_or(0, |tier| tier + 1);
+    width.saturating_sub(sidebar + rail)
+}
+
+/// 右栏这一帧的内容宽度，没得画时是 `None`。
+///
+/// 与左栏同一种三档制，但**档位按整屏宽定**（票 13 的决定 5）：≥ 122 列是 40 档，否则
+/// 28 档；能不能真的画出来再看主列还够不够宽 —— 右栏先让位。
+///
+/// 于是同一块屏在两档之间只有一条线（122），不会因为左栏收起来就把右栏从 28 跳到 40：
+/// 120 列两侧栏同开 → 右栏 28、主列 50；94 列左栏收起（herdr 常态）→ 右栏 28、主列 65。
+/// 左栏在 28 档时 < 98 列右栏隐藏（97 列的主列只剩 39，跌破 [`MIN_MAIN_WIDTH`]）；左栏
+/// 收起时右栏能活到 80 列。
+fn right_rail_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
+    if width < RAIL_HIDDEN_BELOW {
+        return None;
+    }
+    let tier = if width >= RAIL_WIDE_FROM {
+        RAIL_WIDE
+    } else {
+        RAIL_NARROW
+    };
+    let main_room =
+        width.saturating_sub(sidebar_tier(width, sidebar_wanted).map_or(0, |tier| tier + 1));
+    (main_room >= tier + 1 + MIN_MAIN_WIDTH).then_some(tier)
 }
 
 /// 给定左栏自己的内容高度，它的身份以及页区拿几行。

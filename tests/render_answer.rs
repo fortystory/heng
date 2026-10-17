@@ -253,7 +253,7 @@ fn the_answer_is_a_bubble_against_the_right_edge_like_any_user_turn() {
     let main = {
         use heng::render::layout::plan;
         use ratatui::layout::Rect;
-        plan(Rect::new(0, 0, 120, 24), 1, true).main
+        plan(Rect::new(0, 0, 120, 24), 1, true, false).main
     };
     assert!(
         left >= main.x + main.width / 3,

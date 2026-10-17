@@ -620,8 +620,8 @@ fn hiding_the_sidebar_widens_what_the_editor_wraps_against() {
     // 意愿必须走进「喂给编辑器多少列」，否则收起左栏后转录变宽了、
     // 输入区还按旧宽度折行（`.scratch/sidebar-toggle/spec.md` §2）。
     let area = ratatui::layout::Rect::new(0, 0, 120, 24);
-    let shown = heng::render::layout::content_width(area, true);
-    let hidden = heng::render::layout::content_width(area, false);
+    let shown = heng::render::layout::content_width(area, true, false);
+    let hidden = heng::render::layout::content_width(area, false, false);
     assert!(hidden > shown, "收起后主列更宽：{shown} → {hidden}");
     assert_eq!(hidden, 120, "没有左栏时主列就是整屏");
 
@@ -629,12 +629,12 @@ fn hiding_the_sidebar_widens_what_the_editor_wraps_against() {
     // 而显示左栏时它是 `79 − 2`。
     use heng::render::layout;
     assert_eq!(
-        layout::plan(area, 3, false).transcript_text().width,
+        layout::plan(area, 3, false, false).transcript_text().width,
         118,
         "收起后转录正文宽 = w − 2"
     );
     assert_eq!(
-        layout::plan(area, 3, true).transcript_text().width,
+        layout::plan(area, 3, true, false).transcript_text().width,
         77,
         "显示时转录正文宽 = 主列 79 − 2"
     );
@@ -947,7 +947,7 @@ fn the_hint_row_sits_under_the_input_and_inside_the_main_column() {
     // 几何层：它就是输入区那一块的正下方，同列同宽。
     use heng::render::layout::plan;
     use ratatui::layout::Rect;
-    let regions = plan(Rect::new(0, 0, 120, 24), 3, true);
+    let regions = plan(Rect::new(0, 0, 120, 24), 3, true, false);
     assert_eq!(regions.hints.x, regions.input.x, "同列");
     assert_eq!(regions.hints.width, regions.input.width, "同宽");
     assert_eq!(regions.hints.y, regions.input.bottom() + 1, "就在它正下方");
@@ -1273,7 +1273,7 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
         let sidebar_right = {
             use heng::render::layout::plan;
             use ratatui::layout::Rect;
-            plan(Rect::new(0, 0, width, height), 1, true)
+            plan(Rect::new(0, 0, width, height), 1, true, false)
                 .sidebar
                 .map_or(0, |sidebar| sidebar.right())
         };
@@ -1675,7 +1675,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
             kind == SidebarKind::Text,
             "{height} 行的文字身份：{text}"
         );
-        let regions = plan(Rect::new(0, 0, 120, height), 1, true);
+        let regions = plan(Rect::new(0, 0, 120, height), 1, true, false);
         assert_eq!(regions.sidebar_kind, kind, "{height} 行的身份档");
         assert_eq!(
             regions.sidebar_page.expect("左栏在").height,
@@ -1711,7 +1711,7 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
         (80, 10, SidebarKind::Text, 5),                   // 9 − 1 − 3
     ];
     for (width, height, kind, page_rows) in cases {
-        let regions = plan(Rect::new(0, 0, width, height), 1, true);
+        let regions = plan(Rect::new(0, 0, width, height), 1, true, false);
         assert_eq!(regions.sidebar_kind, kind, "{width}x{height} 的身份");
         let page = regions.sidebar_page.expect("左栏在");
         assert_eq!(page.height, page_rows, "{width}x{height} 的页区：{page:?}");
@@ -5290,7 +5290,7 @@ fn the_menu_spans_the_whole_conversation_column() {
         let frame = buffer(columns, 24, &mut state);
 
         // 那一帧自己的输入区 —— 菜单要对齐的是**这一次**排版算出来的那个矩形，不是记住的常数。
-        let regions = plan(Rect::new(0, 0, columns, 24), 1, true);
+        let regions = plan(Rect::new(0, 0, columns, 24), 1, true, false);
         let (x, _, width, _) = menu_frame(&frame, columns, 24, "/undo").expect("菜单在屏幕上");
         assert_eq!(
             x, regions.input.x,
@@ -6172,7 +6172,7 @@ fn a_hidden_cursor_still_marks_the_input_area_not_the_status_row() {
     let (width, height) = (120u16, 24u16);
     let mut probe = PhysicalCursor::new(width, height);
     let mut state = state();
-    let input = plan(Rect::new(0, 0, width, height), 1, true).input;
+    let input = plan(Rect::new(0, 0, width, height), 1, true, false).input;
     for frame in 0..16 {
         if frame > 0 {
             state.tick();
@@ -6578,119 +6578,6 @@ fn a_failed_call_grows_one_row_with_the_first_line_of_its_error() {
 }
 
 #[test]
-fn a_healthy_call_row_gains_the_duration_and_nothing_else() {
-    // 常规成功行除了耗时一个字也不加（`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md`
-    // 第 6 条）：账本还得是一份好扫的流。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "cargo test"}),
-    ));
-    state.apply(tool_completed_after(
-        2,
-        "call-1",
-        true,
-        Some("line one\nline two"),
-        None,
-        1_500,
-    ));
-    open_trace_tab(&mut state, 120, 40);
-
-    let page = trace_page(&mut state, 120, 40);
-    let call = page
-        .iter()
-        .find(|row| row.contains("调用 bash"))
-        .expect("调用行");
-    // 时刻那一格由事件信封给（测试里是「现在」），所以只钉它行尾那一段。
-    assert!(
-        call.trim_end()
-            .ends_with("[kimi] ▸ 调用 bash 运行 cargo test · 1.5 s"),
-        "行尾只有耗时那一段：{call:?}"
-    );
-    assert!(
-        !page
-            .iter()
-            .any(|row| row.contains("无输出") || row.contains("已截断")),
-        "成功的行不补结果摘要：{page:#?}"
-    );
-}
-
-#[test]
-fn the_duration_sits_right_before_the_usage_tail() {
-    // ADR 0016 把行尾定成用量的家，而耗时是后来者（票 17 第 1、2 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "cargo test"}),
-    ));
-    state.apply(tool_completed_after(
-        3,
-        "call-1",
-        true,
-        Some("out"),
-        None,
-        1_500,
-    ));
-    state.apply(usage(4, 19_502, 1_880, 0, 0));
-    open_trace_tab(&mut state, 120, 40);
-
-    let page = trace_page(&mut state, 120, 40);
-    let call = page
-        .iter()
-        .find(|row| row.contains("调用 bash"))
-        .expect("调用行");
-    assert!(
-        call.contains("· 1.5 s in=19502 out=1880"),
-        "耗时排在那条用量尾巴前面：{call:?}"
-    );
-}
-
-#[test]
-fn a_row_too_narrow_for_the_duration_keeps_the_usage_and_drops_it() {
-    // 放不下时丢的是耗时那一段，用量尾巴完整保留（票 17 第 2 条）。同一个调用在宽终端上
-    // 两段都在，窄下来之后先走的是耗时。
-    let command = "cargo test --offline --workspace --all-features --no-fail-fast --quiet";
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": command}),
-    ));
-    state.apply(tool_completed_after(
-        3,
-        "call-1",
-        true,
-        Some("out"),
-        None,
-        1_500,
-    ));
-    state.apply(usage(4, 19_502, 1_880, 0, 0));
-    open_trace_tab(&mut state, 200, 40);
-
-    let wide = trace_page(&mut state, 200, 40).join("\n");
-    assert!(
-        wide.contains("· 1.5 s in=19502 out=1880"),
-        "宽得下时两段都在：{wide}"
-    );
-
-    let narrow = trace_page(&mut state, 80, 40).join("\n");
-    // 窄到这一行自己都折行时，尾巴也会被窗格折开 —— 那是窗格既有的折行，不是这一段算术
-    // 丢的。这条断言钉的是：**先走的是耗时那一段**，用量还在。
-    assert!(narrow.contains("in=19"), "用量尾巴留着：{narrow}");
-    assert!(
-        !narrow.contains("1.5 s"),
-        "放不下时丢的是耗时那一段，而且不留 0 也不留占位符：{narrow}"
-    );
-}
-
-#[test]
 fn an_empty_or_truncated_result_says_so_in_one_phrase() {
     // 结果摘要只在异常时给一句（票 17 第 6 条）。
     let mut state = state_with_roster(&["kimi"]);
@@ -7075,7 +6962,7 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
 fn input_corner(width: u16, height: u16) -> (u16, u16) {
     use heng::render::layout::plan;
     use ratatui::layout::Rect;
-    let regions = plan(Rect::new(0, 0, width, height), 1, true);
+    let regions = plan(Rect::new(0, 0, width, height), 1, true, false);
     (regions.input.x, regions.input.y)
 }
 
@@ -8804,11 +8691,19 @@ fn trace_page_with_blanks(state: &mut TuiState, width: u16, height: u16) -> Vec<
 
 /// 轨迹页的账本从哪一行起。
 ///
-/// 横带那几行的前九列是空的，而账本每一条源行都以 `HH:MM:SS ` 起排（票 12 的时间戳列）：
-/// 于是「哪一行开始是账本」从屏幕上读得出来，测试不必再推一遍排版的宽度阶梯。
+/// 横带那几行不属于账本。票 13 之后账本的行有三种开头：宽档的 `HH:MM:SS `、窄档没有
+/// 时刻的成员行（带 `[名字]`），以及**不带时刻的组头**（`回合 N` / `轮次 N`）。取第一个
+/// 满足其中一种的行 —— 于是组头那一行也在账本里（旧形状里它自己带时刻，天然被这个判据
+/// 收进来）。
 fn ledger_top(rows: &[String]) -> usize {
     (TRANSCRIPT_TOP..rows.len())
-        .find(|index| rows[*index].chars().nth(2) == Some(':'))
+        .find(|index| {
+            let row = &rows[*index];
+            row.chars().nth(2) == Some(':')
+                || row.contains('[')
+                || row.contains("回合 ")
+                || row.contains("轮次 ")
+        })
         .unwrap_or(TRANSCRIPT_TOP)
 }
 
@@ -9354,7 +9249,7 @@ fn copying_a_bubble_takes_only_the_text() {
 fn transcript_area() -> ratatui::layout::Rect {
     use heng::render::layout::plan;
     use ratatui::layout::Rect;
-    plan(Rect::new(0, 0, 120, 24), 3, true).transcript_text()
+    plan(Rect::new(0, 0, 120, 24), 3, true, false).transcript_text()
 }
 
 /// 例外二：注入、用户、助手三类前缀各一色（票 10 验证 2）。
@@ -9500,25 +9395,6 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
 // 轨迹页用分隔线分开轮次（`.scratch/trace-tab/spec.md` §3；票 12 的 2026-10-05 修订）
 // ---------------------------------------------------------------------------
 
-/// 轨迹页里含 `needle` 的那一行，以及它上面最近的那条分隔线的行
-/// （`.scratch/trace-in-main/spec.md` §3）。
-fn rule_before(state: &mut TuiState, needle: &str) -> Option<(u16, u16)> {
-    let frame = buffer(120, 24, state);
-    // 取**最后一条**含 `needle` 的行：贴底跟随的时候，靠下的那一条最可能还在屏幕上。
-    let row = (TRANSCRIPT_TOP as u16..24).rev().find(|y| {
-        cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120).contains(needle)
-    })?;
-    // 组的界是**组头那一行** —— 它是一条带文字的虚线（`.scratch/trace-ledger/spec.md` §5），
-    // 所以判据是「含虚线且写着 `回合` / `轮次`」，不是「整行都是虚线」。
-    let rule = (TRANSCRIPT_TOP as u16..row).rev().find(|y| {
-        // 只看正文那一段：最右那两列是滚动条与回合条的位置，滑块会盖在线上
-        // （`.scratch/tui-visual-language/issues/07` 决定 2）。
-        let line = cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120);
-        (line.contains("回合 ") || line.contains("轮次 ")) && line.contains('┄')
-    })?;
-    Some((row, rule))
-}
-
 /// 轨迹页里两个单位之间画一条横向虚线 —— 那条线就是轮次的边界，没有底色
 /// （票 12 的 2026-10-05 修订）。
 #[test]
@@ -9530,12 +9406,11 @@ fn the_trace_page_opens_each_turn_with_a_header() {
     open_trace_tab(&mut state, 120, 40);
     let page = trace_page(&mut state, 120, 40);
 
-    // 每个回合一条组头。**并进**单位之间那条虚线，所以它占的那一行就是边界那一行、零额外行数
-    // （`.scratch/trace-ledger/spec.md` §5）。
+    // 每个回合一条组头。票 13 起它**独占一行、不带虚线**（右栏里的短写形状）。
     let headers: Vec<usize> = page
         .iter()
         .enumerate()
-        .filter(|(_, row)| (row.contains("回合 ") || row.contains("轮次 ")) && row.contains('┄'))
+        .filter(|(_, row)| row.contains("回合 ") || row.contains("轮次 "))
         .map(|(index, _)| index)
         .collect();
     assert_eq!(headers.len(), 3, "三个回合三条组头：{page:#?}");
@@ -9578,7 +9453,7 @@ fn a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping() {
     }
     open_trace_tab(&mut state, 120, 40);
 
-    // 宽档：尾部那几项先走，直方图最前面那一项留着。
+    // 宽档（120 列 → 主列 79）：组头的字段全放得下，而且它只占一行。
     let wide = trace_page(&mut state, 120, 40);
     let header = wide
         .iter()
@@ -9586,12 +9461,12 @@ fn a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping() {
         .expect("组头在屏幕上");
     assert!(
         wide[header].contains("bash×1"),
-        "第一项留着：{}",
+        "第一项在：{}",
         wide[header]
     );
     assert!(
-        !wide[header].contains("task×1"),
-        "尾部先走：{}",
+        wide[header].contains("task×1"),
+        "宽档放得下最后一项：{}",
         wide[header]
     );
     assert!(
@@ -9600,7 +9475,7 @@ fn a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping() {
         &wide[header..=header + 1]
     );
 
-    // 窄档：丢得更多，而**第一项仍在** —— 从右往左丢，不是把整段直方图先扔掉。
+    // 窄档（70 列 → 主列 41）：从右往左丢尾部，而**第一项仍在**。
     let narrow = trace_page(&mut state, 70, 40);
     let header = narrow
         .iter()
@@ -9699,27 +9574,6 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
     assert!(
         (TRANSCRIPT_TOP as u16..24).any(|y| frame[(78, y)].symbol() == "█"),
         "窄档的滚动条在 x = 78"
-    );
-}
-
-/// 线是**行**，所以滚动时它跟着内容走，不跟着屏幕行重排（票 12 的修订）。
-#[test]
-fn the_trace_rule_travels_with_the_content() {
-    let mut state = state_with_roster(&["kimi"]);
-    // 三个回合就够：票 22 之后账本只有 12 行，再多的话这条内容行与它上面的组头就不一定
-    // 同时在视口里 —— 而这一条测的是「它和它上面那条线一起挪」。
-    turns(&mut state, 3);
-    open_trace_tab(&mut state, 120, 24);
-    let _ = screen(120, 24, &mut state);
-    let needle = "回合开始（第 1 次迭代）";
-    let before = rule_before(&mut state, needle).expect("最后一轮的开头在屏幕上");
-    state.mouse(wheel_at(10, 12, true));
-    let after = rule_before(&mut state, needle).expect("它还在屏幕上");
-    assert_ne!(before.0, after.0, "内容挪了屏幕行");
-    assert_eq!(
-        before.0 - before.1,
-        after.0 - after.1,
-        "而它上面那条线跟着它一起挪"
     );
 }
 
@@ -10544,154 +10398,6 @@ fn turn_started_at(seq: u64, iteration: u32) -> heng::render::RenderEvent {
 }
 
 #[test]
-fn a_usage_tail_rides_the_row_of_its_call() {
-    // 一笔用量不再是自己的块：它长在产生它的那次调用的行尾，而独立的那一行没有了
-    // （ADR 0016）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 120, 24).join("\n");
-    assert!(
-        text.contains("✓ 思考完成 in=10 out=2"),
-        "尾巴长在它那次调用的行上：{text}"
-    );
-    assert!(!text.contains("用量 in="), "独立的那一行没有了：{text}");
-    assert!(
-        !text.contains("cached="),
-        "缓存那一半留在诊断通道里：{text}"
-    );
-}
-
-#[test]
-fn a_usage_tail_lands_on_the_turn_row_when_nothing_was_thought() {
-    // 这次调用没有推理：它最后画出来的那条过程行是回合的开始行，尾巴就长在那儿。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", None));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 120, 24).join("\n");
-    assert!(
-        text.contains("回合开始（第 1 次迭代） in=10 out=2"),
-        "没有思考行时它跟在这次调用的第一行上：{text}"
-    );
-    assert!(!text.contains("用量 in="), "仍然没有独立的一行：{text}");
-}
-
-#[test]
-fn each_call_carries_its_own_tail_and_the_turn_sums_them() {
-    // 一次发言跨两次模型调用：两笔各长在各次调用的行上，收尾那行给一条合计（§5）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("第一次调用在调工具。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "", Some("第一次调用在调工具。")));
-    state.apply(tool_started(
-        4,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(5, "call-1", true, Some("ok"), None));
-    state.apply(turn_started_at(6, 2));
-    state.apply(reasoning_delta("第二次调用收尾。"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(7, 5, 1, 0, 5));
-    state.apply(message(8, "答案是 42。", Some("第二次调用收尾。")));
-    state.apply(turn_ended(9));
-    open_trace_tab(&mut state, 120, 24);
-
-    let rows = trace_page(&mut state, 120, 24);
-    let text = rows.join("\n");
-    let first = rows
-        .iter()
-        .find(|row| row.contains("in=10 out=2"))
-        .unwrap_or_else(|| panic!("第一笔在屏幕上：{text}"));
-    assert!(
-        first.contains("思考完成"),
-        "第一笔长在它那次调用的行上：{first}"
-    );
-    let second = rows
-        .iter()
-        .find(|row| row.contains("in=5 out=1"))
-        .unwrap_or_else(|| panic!("第二笔在屏幕上：{text}"));
-    assert!(second.contains("思考完成"), "第二笔同理：{second}");
-    let total = rows
-        .iter()
-        .find(|row| row.contains("合计 in=15 out=3"))
-        .unwrap_or_else(|| panic!("合计在屏幕上：{text}"));
-    assert!(total.contains("回合结束"), "合计并进收尾那一行：{total}");
-}
-
-#[test]
-fn a_single_call_turn_carries_no_total() {
-    // 只调用一次时那笔数字就在尾巴上，再加一条合计是同一个数印两遍（§5）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("想一下。"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", Some("想一下。")));
-    state.apply(turn_ended(4));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 120, 24).join("\n");
-    assert!(text.contains("in=10 out=2"), "尾巴还在：{text}");
-    assert!(!text.contains("合计"), "没有合计：{text}");
-}
-
-#[test]
-fn a_call_that_never_wrote_prose_keeps_its_usage() {
-    // 只推理、不产出正文的那次调用：用量到的时候思考行还开着，定稿是整行重写 —— 它得跟着
-    // 这条行走，不能被吞掉，也不能被顶掉（§7 的回归一）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("只想了，没写。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "", Some("只想了，没写。")));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 120, 24).join("\n");
-    assert!(
-        text.contains("✓ 思考完成 in=10 out=2"),
-        "定稿没有把这笔用量吞掉：{text}"
-    );
-    assert_eq!(
-        text.matches("思考完成").count(),
-        1,
-        "一段思考就是一行：{text}"
-    );
-    assert!(!text.contains("正在思考"), "也没有留下进行中那行：{text}");
-}
-
-#[test]
-fn a_width_change_replays_the_usage_tail_once() {
-    // 尾巴跟着绘制记录走，所以换宽度重排之后它还在、而且只有一份（§2）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
-    open_trace_tab(&mut state, 120, 24);
-    let _ = trace_page(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 100, 24).join("\n");
-    assert_eq!(
-        text.matches("in=10 out=2").count(),
-        1,
-        "重排之后尾巴不多不少：{text}"
-    );
-    assert!(!text.contains("正在思考"), "也没有留下进行中那行：{text}");
-}
-
-#[test]
 fn a_synthesizer_usage_keeps_its_own_row() {
     // 合成器那次调用不属于任何回合，没有可承载的宿主 —— 它照旧自己占一行（§4）。
     let mut state = state_with_roster(&["kimi"]);
@@ -10703,56 +10409,6 @@ fn a_synthesizer_usage_keeps_its_own_row() {
         text.contains("用量 in=10 out=2 cached=6 miss=4"),
         "合成器那笔仍是独立一行：{text}"
     );
-}
-
-#[test]
-fn a_narrow_trace_wraps_the_tail_instead_of_dropping_it() {
-    // 窄档照折行，不省略、也不消失（§6）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
-    open_trace_tab(&mut state, 80, 24);
-
-    let text = trace_page(&mut state, 80, 24).join("\n");
-    assert!(text.contains("in=10"), "窄档里这笔数字还在：{text}");
-}
-
-#[test]
-fn the_usage_tail_does_not_take_over_the_rows_detail() {
-    // 尾巴是纯文本：那一行点开还是它自己的详情（§6）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(text_delta("答案是 42。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
-    open_trace_tab(&mut state, 120, 24);
-
-    click_row(&mut state, 120, 24, "思考完成 in=10 out=2");
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains(THINKING_FACES), "弹的还是思考详情：{text}");
-    assert!(text.contains("先看依赖，"), "而且带全文：{text}");
-}
-
-#[test]
-fn a_replayed_call_that_never_wrote_prose_keeps_one_thinking_row() {
-    // 回归二：只推理、不产出正文的那次调用，换宽度重排之后不会多出一条永不消失的
-    // 「正在思考」（§7）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(reasoning_delta("只想了，没写。"));
-    state.apply(usage(2, 10, 2, 6, 4));
-    state.apply(message(3, "", Some("只想了，没写。")));
-    open_trace_tab(&mut state, 120, 24);
-    let _ = trace_page(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 100, 24).join("\n");
-    assert_eq!(text.matches("思考完成").count(), 1, "定稿只有一条：{text}");
-    assert!(!text.contains("正在思考"), "没有卡住的那一行：{text}");
-    assert_eq!(text.matches("in=10 out=2").count(), 1, "尾巴也还在：{text}");
 }
 
 // ---------------------------------------------------------------------------
@@ -11441,8 +11097,8 @@ fn an_overlay_stops_above_the_questionnaire_while_one_is_up() {
     use ratatui::layout::Rect;
 
     let area = Rect::new(0, 0, 120, 24);
-    let plain = plan(area, 1, true);
-    let asked = plan_questionnaire(area, 6, true);
+    let plain = plan(area, 1, true, false);
+    let asked = plan_questionnaire(area, 6, true, false);
 
     // 平时地板就是屏幕底边，于是浮层那块形状一个字不变：上下各留两行转录。
     assert_eq!(plain.overlay_floor, area.y + area.height);
@@ -12125,11 +11781,12 @@ fn a_message_detail_reads_its_usage_in_two_sections() {
         miss_tokens: 5_200,
         reasoning_tokens: None,
     };
-    // 行尾那个合计（`合计 in=5200 out=60`）先看：覆盖层立着的时候它被挡在下面。
+    // 票 13 起轨迹行尾**不再挂用量**（40 档弃行尾用量、28 档连时刻都不画）：那笔合计
+    // 只在详情面的「本次」一节里读，于是这里不再有一行关于它。
     let before = screen(120, 40, &mut state).join("\n");
     assert!(
-        before.contains(&wording::total_tail(&this_turn)),
-        "这次发言行尾那个合计：{before}"
+        !before.contains(&wording::total_tail(&this_turn)),
+        "轨迹行尾没有用量：{before}"
     );
 
     // 点的是**第二个回合**里那条消息：「本次」就是它那一次发言，「这一趟会话」多算了第一个
@@ -14197,7 +13854,7 @@ fn the_trace_page_pins_a_three_row_band_under_the_tabs() {
 #[test]
 fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
     use heng::render::layout;
-    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true);
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
     assert_eq!(
         panes.band.map(|band| band.height),
         Some(layout::BAND_ROWS),
@@ -14237,7 +13894,7 @@ fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
 fn the_axis_is_sixty_three_columns_wide() {
     use heng::render::layout;
     use heng::render::timeline::LABEL_COLUMNS;
-    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true);
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
     let text = panes.trace_text();
     assert_eq!(text.width - layout::STAMP_COLUMNS, 68, "正文 68 列");
     assert_eq!(
@@ -14565,7 +14222,7 @@ fn the_band_degrades_three_steps_as_the_terminal_narrows() {
         (80, BandKind::Sparse, 3),
         (40, BandKind::Compact, 2),
     ] {
-        let panes = layout::plan(ratatui::layout::Rect::new(0, 0, width, 24), 1, true);
+        let panes = layout::plan(ratatui::layout::Rect::new(0, 0, width, 24), 1, true, false);
         assert_eq!(panes.band_kind, kind, "{width} 列上的那一档");
         assert_eq!(
             panes.band.map(|band| band.height),
@@ -14924,5 +14581,163 @@ fn clearing_the_search_takes_every_band_away() {
         ],
         lanes,
         "两条泳道逐格回到过滤之前"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 右栏（票 13）：容器、轨迹搬家与两档形态
+// ---------------------------------------------------------------------------
+
+/// 票 13 的几何：120 列两侧栏同开 → 左栏 40 / 主列 50 / 右栏 28。
+///
+/// 三块从**同一条顶线**到底（顶部页签条还没来，那两行由票 15 接手）；底部三行（状态行 /
+/// 输入区 / 提示行）**只跨主列**，不跨右栏。
+#[test]
+fn the_right_rail_sits_beside_the_main_column_at_120_columns() {
+    use heng::render::layout;
+    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+    let panes = layout::plan(area, 1, true, true);
+    let sidebar = panes.sidebar.expect("左栏在");
+    let rail = panes.right_rail.expect("右栏在");
+    assert_eq!(sidebar.width, 40);
+    assert_eq!(panes.main.width, 50);
+    assert_eq!(rail.width, 28);
+    assert_eq!(rail.x, panes.main.right() + 1);
+    assert_eq!(rail.y, panes.main.y);
+    assert_eq!(rail.height, panes.main.height);
+    assert_eq!(panes.right_divide, Some(panes.main.right()));
+    for bottom in [panes.status, panes.input, panes.hints] {
+        assert!(
+            bottom.right() <= panes.main.right(),
+            "底部三行不跨右栏：{bottom:?}"
+        );
+    }
+    // 右栏的轨迹区在横带之下；28 档的横带只有一行三态版那两行。
+    assert_eq!(
+        panes.right_band_kind,
+        heng::render::timeline::BandKind::Compact
+    );
+    assert_eq!(panes.right_band.expect("横带在").height, 2);
+    let trace = panes.right_trace.expect("轨迹区在");
+    assert_eq!(trace.y, rail.y + 2);
+    assert_eq!(trace.height, rail.height - 2);
+}
+
+/// herdr 的常态：94 列、左栏收起（票 27 之后默认关），右栏仍是 28 档、主列 65。
+#[test]
+fn the_right_rail_keeps_28_columns_at_94_columns_with_the_sidebar_hidden() {
+    use heng::render::layout;
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 94, 40), 1, false, true);
+    assert!(panes.sidebar.is_none());
+    assert_eq!(panes.main.width, 65);
+    assert_eq!(panes.right_rail.expect("右栏在").width, 28);
+}
+
+/// 右栏取宽档（40）的门槛：≥ 122 列；121 列还是 28 档（再宽一档主列就跌破 40）。
+#[test]
+fn the_right_rail_takes_the_wide_tier_only_from_122_columns() {
+    use heng::render::layout;
+    let wide = layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
+    assert_eq!(wide.right_rail.expect("右栏在").width, 40);
+    assert_eq!(wide.main.width, 40);
+    let narrow = layout::plan(ratatui::layout::Rect::new(0, 0, 121, 40), 1, true, true);
+    assert_eq!(narrow.right_rail.expect("右栏在").width, 28);
+}
+
+/// 左栏在窄档（28）时，右栏在 98 列上还活得下来，97 列就让位 —— 主列的地板是 40。
+#[test]
+fn the_right_rail_gives_way_below_98_columns_when_the_sidebar_is_narrow() {
+    use heng::render::layout;
+    let hidden = layout::plan(ratatui::layout::Rect::new(0, 0, 97, 40), 1, true, true);
+    assert!(hidden.right_rail.is_none(), "97 列时右栏隐藏");
+    assert_eq!(hidden.main.width, 68, "主列拿走右栏让出的那些列");
+    let visible = layout::plan(ratatui::layout::Rect::new(0, 0, 98, 40), 1, true, true);
+    assert_eq!(visible.right_rail.expect("右栏在").width, 28);
+    assert_eq!(visible.main.width, 40);
+}
+
+/// 右栏 28 档画轨迹：**不画时刻、不带用量**（缩略索引），组头短写、不带虚线。
+#[test]
+fn the_narrow_right_rail_draws_an_index_without_stamps_or_usage() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 40), 1, true, true);
+    let rail = panes.right_rail.expect("右栏在");
+    let (frame, _) = framed(120, 40, &mut state);
+    let text: Vec<String> = (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect();
+    let joined = text.join("\n");
+    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
+    let header = text
+        .iter()
+        .find(|row| row.contains("回合 1"))
+        .unwrap_or_else(|| panic!("组头也在右栏里：{joined}"));
+    assert!(!header.contains('┄'), "组头不再并进虚线（票 13）：{header}");
+    assert!(
+        !joined.contains("in=") && !joined.contains("out="),
+        "右栏里不带行尾用量：{joined}"
+    );
+    for row in text.iter().filter(|row| !row.trim().is_empty()) {
+        assert!(
+            !row.starts_with(|c: char| c.is_ascii_digit()),
+            "28 档不画行首时刻：{row}"
+        );
+    }
+    // 时间轴只画 Compact 那一档：没有泳道标签。
+    let band = panes.right_band.expect("横带在");
+    let band_text: Vec<String> = (band.y..band.y + band.height)
+        .map(|y| cells(&frame, y, band.x, band.x + band.width))
+        .collect();
+    assert!(
+        !band_text
+            .iter()
+            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
+        "右栏的时间轴只有一行三态版：{band_text:#?}"
+    );
+}
+
+/// 右栏 40 档：保住九列时刻、**不画行尾用量**。
+#[test]
+fn the_wide_right_rail_keeps_the_stamps_and_drops_the_usage() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
+    let rail = panes.right_rail.expect("右栏在");
+    assert_eq!(rail.width, 40);
+    let (frame, _) = framed(122, 40, &mut state);
+    let text: Vec<String> = (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect();
+    let joined = text.join("\n");
+    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
+    assert!(
+        text.iter()
+            .any(|row| row.starts_with(|c: char| c.is_ascii_digit())),
+        "40 档保留行首那九列时刻：{joined}"
+    );
+    assert!(
+        !joined.contains("in=") && !joined.contains("out="),
+        "40 档也弃行尾用量：{joined}"
     );
 }

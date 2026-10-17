@@ -562,7 +562,8 @@ fn clicking_the_input_area_takes_the_keyboard_back_from_this_page() {
     open_changes(&mut state, 120, 24);
 
     // 点在输入区上：键盘还给输入区（与文件页同一条归还路径）。
-    let panes = heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true);
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
     click(&mut state, panes.input.x + 2, panes.input.y);
     state.key(Key::Char('z'));
     let frame = buffer(120, 24, &mut state);
@@ -614,8 +615,12 @@ fn the_arrows_still_walk_the_files_page_and_nothing_else_moved() {
 
 /// 详情覆盖层里那块**文本区**（框内、去掉内边距）：正文与标题都画在它里面。
 fn overlay_area(width: u16, height: u16) -> ratatui::layout::Rect {
-    let panes =
-        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, width, height), 1, true);
+    let panes = heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        false,
+    );
     let area = panes.detail().expect("有地方画覆盖层");
     let inner = heng::render::layout::inner(area);
     let (pad_x, pad_y) = heng::render::layout::detail_padding(inner);

@@ -437,6 +437,9 @@ impl Tui {
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut state = TuiState::new(facts, cwd, home);
+        // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
+        // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
+        state.set_right_rail(true);
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -1090,6 +1093,23 @@ impl View {
         self.facts.speaker_order.len() > 1
     }
 
+    /// 轨迹这一档画不画行首那九列时刻（票 08 第 8 条）。
+    ///
+    /// 28 档（右栏窄档，也是 herdr 里的常态）是**缩略索引**：不画时刻、不带用量，只读
+    /// 「哪个工具、成没成」。40 档与更宽的主列过渡档画九列时刻。
+    fn trace_stamps(&self) -> bool {
+        self.trace_width >= layout::RAIL_WIDE
+    }
+
+    /// 轨迹正文这一档的排版宽度：宽档扣掉行首那九列时刻，窄档拿满整条宽度。
+    fn trace_text_width(&self) -> u16 {
+        if self.trace_stamps() {
+            self.trace_width.saturating_sub(layout::STAMP_COLUMNS)
+        } else {
+            self.trace_width
+        }
+    }
+
     /// 只把块排成行推进窗格，不记它 —— 到达时与重放时走的是同一条路。
     ///
     /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
@@ -1101,12 +1121,7 @@ impl View {
         targets: Targets,
         replaying: bool,
     ) -> usize {
-        let BlockPaint {
-            at,
-            tail,
-            id,
-            usage,
-        } = paint;
+        let BlockPaint { at, id, usage } = paint;
         let mut produced = 0;
         // 详情入口要的那几笔账：这一块什么时候到的、产生它的那次调用的计时、以及它的用量
         // （票 13 第 6、7 条、票 15）。两个视口画的是同一块，于是共用同一份。
@@ -1160,9 +1175,9 @@ impl View {
                 self.note_section_header(block, at, targets, false);
                 self.open_group_headers(block, at, targets, self.discussion());
             }
-            // 行首那几列归时间戳，所以轨迹内容的排版宽度是主列内容宽减掉它们
-            // （`.scratch/trace-in-main/spec.md` §5）。
-            let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
+            // 行首那几列归时间戳（宽档），窄档没有它们 —— 排版宽度按这一档自己算
+            // （票 08 第 8 条：28 档是缩略索引，正文拿满整条宽度）。
+            let width = self.trace_text_width();
             let style = prefix_style(Viewport::Trace, self.trace_tier_width);
             // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
             let mut lines = paint_block(
@@ -1174,17 +1189,19 @@ impl View {
                 true,
                 facts,
             );
-            // 行尾那几段账目：**这次调用自己花了多久**（只有工具块有这一笔），然后是产生它的
-            // 那次调用的用量、或一次发言的合计。放不下时先丢耗时、保用量 —— 行尾是用量的家，
-            // 而耗时是后来者（ADR 0016、票 17 第 1、2 条）。
-            let duration = tool_duration(block);
-            attach_row_tail(lines.last_mut(), duration, tail, width as usize);
+            // 行尾用量**不进右栏**（票 13：40 档弃行尾用量、28 档连时刻都不画）。它在主列
+            // 轨迹页上也一起离开 —— 一个宽度来源、一种读法；要读用量去详情覆盖层。
             produced = produced.max(lines.len());
+            let lines = if self.trace_stamps() {
+                stamp_lines(lines, at)
+            } else {
+                lines
+            };
             let first = self.push_view_lines(
                 Viewport::Trace,
                 block_speaker(block),
                 matches!(block, Block::Message { .. }),
-                stamp_lines(lines, at),
+                lines,
                 Some(is_user_message(block)),
                 id,
             );
@@ -1218,14 +1235,12 @@ impl View {
                 block,
                 at,
                 id,
-                tail,
                 usage,
             } => {
                 self.emit_block(
                     block,
                     BlockPaint {
                         at: *at,
-                        tail: *tail,
                         id: *id,
                         usage: *usage,
                     },
@@ -1632,12 +1647,7 @@ impl View {
             self.paint_thinking_line(&speaker, at, self.targets(), id);
         }
         // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
-        self.push_painted(Painted::Thinking {
-            speaker,
-            at,
-            id,
-            tail: None,
-        });
+        self.push_painted(Painted::Thinking { speaker, at, id });
         true
     }
 
@@ -1720,12 +1730,12 @@ impl View {
     ) {
         if targets.trace {
             let (line, detail) = self.thinking_settled_line(settled, Viewport::Trace);
-            let mut line = line;
-            // 尾巴跟着这条行走：定稿是整行重写，丢在这里就等于把那笔用量吞掉。
-            if let Some(tail) = settled.tail {
-                line.spans.push(tail.span());
-            }
-            let line = stamped_line(line, settled.at);
+            // 行尾用量**不进右栏**（票 13，与块行同一条理由）。
+            let line = if self.trace_stamps() {
+                stamped_line(line, settled.at)
+            } else {
+                line
+            };
             let here = self.trace_block_ids.back() == Some(&Some(settled.id));
             if in_place && here {
                 self.trace.replace_last(line);
@@ -1755,15 +1765,15 @@ impl View {
     ) {
         if targets.trace && self.trace_admits(id) {
             let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
-            // 开着的行也有时刻：思考**开始**那一刻（`.scratch/trace-thought-stamp/spec.md`
-            // §1）。它会在定稿时就地重写成完成那一刻（§2）。
-            self.push_line(
-                Viewport::Trace,
-                stamped_line(line, at),
-                None,
-                None,
-                Some(id),
-            );
+            // 开着的行也有时刻（宽档）：思考**开始**那一刻
+            // （`.scratch/trace-thought-stamp/spec.md` §1）。它会在定稿时就地重写成完成
+            // 那一刻（§2）。窄档不画时刻列，于是这一行也拿满整条宽度。
+            let line = if self.trace_stamps() {
+                stamped_line(line, at)
+            } else {
+                line
+            };
+            self.push_line(Viewport::Trace, line, None, None, Some(id));
         }
     }
 
@@ -1776,14 +1786,13 @@ impl View {
         prefix_style(view, width)
     }
 
-    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻与尾巴），好在宽度变化时重放
-    /// （spec §1；尾巴见 ADR 0016）。
+    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻），好在宽度变化时重放
+    /// （spec §1）。
     fn push_block(
         &mut self,
         block: Block,
         at: DateTime<Utc>,
         targets: Targets,
-        tail: Option<Tail>,
         id: BlockId,
         replaying: bool,
     ) -> usize {
@@ -1794,12 +1803,7 @@ impl View {
             session: self.panel.total(),
             this: Usage::default(),
         };
-        let paint = BlockPaint {
-            at,
-            tail,
-            id,
-            usage,
-        };
+        let paint = BlockPaint { at, id, usage };
         let produced = self.emit_block(&block, paint, targets, replaying);
         if produced > 0 {
             // 索引与这一条记录同一步建：**块定稿进共享源那一刻**（票 20 第 4 条）。
@@ -1813,7 +1817,6 @@ impl View {
                 block,
                 at,
                 id,
-                tail,
                 usage,
             });
         }
@@ -1950,7 +1953,7 @@ impl View {
             Painted::Block {
                 block, at, usage, ..
             } => {
-                let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
+                let width = self.trace_text_width();
                 let style = prefix_style(Viewport::Trace, self.trace_tier_width);
                 let facts = DetailFacts {
                     at: Some(*at),
@@ -2082,8 +2085,6 @@ impl View {
         self.thinking_done = true;
         // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
         let speaker = self.thinking_speaker.clone();
-        // 尾巴若已经挂在还开着的那一条上，定稿是整行重写，得跟着搬过去。
-        let tail = self.painted.last().and_then(Painted::tail);
         // **身份也搬**：定稿不是一条新记录，是同一行从「正在思考」到「思考完成」的两个阶段
         // （ADR 0021）—— 所以选中那一行在定稿那一刻不跳。
         let id = self
@@ -2096,7 +2097,6 @@ impl View {
             trace: text,
             at,
             id,
-            tail,
             timing,
             // 用量账与计时同一条纪律：随这一行一起记下，打开时那一面读的就是它（票 15）。
             usage: UsageScope {
@@ -2232,49 +2232,20 @@ impl View {
         if let Block::Usage { usage, .. } = &block {
             if self.in_call {
                 self.turn_usage.accumulate(*usage);
-                if self.usage_host_exists() {
-                    let tail = Tail::Usage(*usage);
-                    if let Some(slot) = self.painted.last_mut() {
-                        slot.set_tail(tail);
-                    }
-                    // 那一行已经画出去了，所以这一段是补在它尾巴上，不是另起一行 —— 它的
-                    // 时刻戳、名字配色与详情入口都留在原地。
-                    self.trace.append_to_last(tail.span());
-                    return 0;
-                }
+                // 票 13 起轨迹行尾不再挂用量（右栏 40 档弃它、28 档连时刻都不画）：那笔数
+                // 只进「本次发言」的合计与详情面。于是这条块不画，返回 0。
+                return 0;
             }
-            return self.push_block(block, at, targets, None, id, replaying);
+            return self.push_block(block, at, targets, id, replaying);
         }
-        let tail = if matches!(&block, Block::TurnEnded { .. }) {
+        if matches!(&block, Block::TurnEnded { .. }) {
             self.in_call = false;
-            let total = (self.turn_calls >= 2).then_some(Tail::Total(self.turn_usage));
             // 这一次发言收尾了：合计进账，用量面的「本次」那一节按它回答（票 15 第 3 条）。
             self.turn_totals.push(self.turn_usage);
             self.turn_calls = 0;
             self.turn_usage = Usage::default();
-            total
-        } else {
-            None
-        };
-        self.push_block(block, at, targets, tail, id, replaying)
-    }
-
-    /// 窗格最后那条来源行能不能承载一笔用量。
-    ///
-    /// 用量到达这一刻，那次调用最后画出来的那条正是它 —— 有推理时是思考行，没推理时是回合
-    /// 开始那行。消息行与一条独立的用量行都不承载：前者在轨迹页是「首行 + `…`」的内容入口，
-    /// 把数字挂上去读不出归属（§1、§4）。
-    fn usage_host_exists(&self) -> bool {
-        match self.painted.last() {
-            Some(Painted::Thinking { .. } | Painted::Thought { .. }) => true,
-            Some(Painted::Block { block, .. }) => {
-                !matches!(block, Block::Message { .. } | Block::Usage { .. })
-            }
-            // 组头与小标题是一次调用的**摘要**或一个段落标题，而用量属于产生它的那次调用
-            // —— 挂到它们行尾会把数字摆在一个读不出归属的位置上（ADR 0016）。
-            Some(Painted::GroupHeader(_)) | Some(Painted::SectionHeader(_)) => false,
-            None => false,
         }
+        self.push_block(block, at, targets, id, replaying)
     }
 
     /// 这一趟重放推哪些记录（票 20）。
@@ -2567,6 +2538,12 @@ pub struct TuiState {
     /// 两层 —— 这一位说偏好，[`layout::sidebar_tier`] 说可行性 —— 两者相乘才是屏幕上真的有
     /// 的那一栏。
     sidebar_wanted: bool,
+    /// 用户想不想看见**右栏**（票 13 起默认开，票 14 的 `Ctrl-V` 切换）。
+    ///
+    /// 与 [`TuiState::sidebar_wanted`] 同一档的纯视图意愿：只活在这一次进程里，不落配置、
+    /// 不跨会话；它与宽度档相乘才是屏幕上真的有的那一栏。轨迹住在右栏里 —— 关掉右栏不是
+    /// 「不画轨迹」，是把那一条收起来（票 16 之后主列不再有轨迹页）。
+    right_wanted: bool,
     /// 会话中途换模型/档位的选择器浮层（spec §10）。
     ///
     /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
@@ -3461,29 +3438,6 @@ impl TurnRail {
     }
 }
 
-/// 轨迹页里长在一条行尾的那一段：一笔用量，或一次发言的合计。
-///
-/// 它不是块，所以既不带来自己的时刻戳，也不开详情入口 —— `▸` 的判据是「谁把内容折起来谁
-/// 就有」，而它什么都没折（ADR 0016、`.scratch/trace-usage-tail/spec.md` §1、§5）。
-#[derive(Debug, Clone, Copy)]
-enum Tail {
-    /// 产生它的那次调用的读数。
-    Usage(Usage),
-    /// 一次发言里各次调用之和 —— 只在跨 ≥2 次调用时出现。
-    Total(Usage),
-}
-
-impl Tail {
-    /// 它在屏幕上占的那几个字。
-    fn span(self) -> Span<'static> {
-        let text = match self {
-            Tail::Usage(usage) => wording::usage_tail(&usage),
-            Tail::Total(usage) => wording::total_tail(&usage),
-        };
-        Span::styled(format!(" {text}"), Style::default().fg(palette::MUTED))
-    }
-}
-
 /// 画一个块要的那几笔**不属于块本身**的账 —— 绘制记录里除块之外的字段就是它们。
 ///
 /// 一起传是因为它们的去处是同一个（[`TuiState::emit_block`] 造的那一份 [`DetailFacts`]），
@@ -3492,8 +3446,6 @@ impl Tail {
 struct BlockPaint {
     /// 这一块什么时候到的。
     at: DateTime<Utc>,
-    /// 长在它行尾的那一段（一笔用量，或一次发言的合计）。
-    tail: Option<Tail>,
     /// 它在账本上的身份。
     id: BlockId,
     /// 它到达那一刻的用量账（票 15）。
@@ -3519,7 +3471,6 @@ enum Painted {
         block: Block,
         at: DateTime<Utc>,
         id: BlockId,
-        tail: Option<Tail>,
         /// 这一块到达那一刻的用量账 —— 与 `at` 同一条纪律：重放用的就是这里记下的这一份，
         /// 不按「重放那一刻」重算（票 15 第 3 条）。
         usage: UsageScope,
@@ -3531,7 +3482,6 @@ enum Painted {
         speaker: crate::events::SpeakerId,
         at: DateTime<Utc>,
         id: BlockId,
-        tail: Option<Tail>,
     },
     /// 定稿的思考行。
     Thought(SettledThinking),
@@ -3695,7 +3645,6 @@ struct SettledThinking {
     /// **与它开着的时候同一个** —— 定稿是同一行的两个阶段，不是一条新记录（ADR 0021）。
     /// 所以选中那一行在定稿那一刻不跳。
     id: BlockId,
-    tail: Option<Tail>,
     /// 这段思考所属那次模型调用的计时（票 13 第 6 条）。
     ///
     /// 实时路径上它是被正文的第一个增量冻住的，那一刻这次调用还没完 —— 首 token 与用量都
@@ -3750,28 +3699,6 @@ impl Painted {
             },
             Painted::Thinking { .. } | Painted::Thought(_) => Some(Lane::Model),
             Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
-        }
-    }
-
-    /// 这条记录尾上挂着的那一段，有的话。
-    fn tail(&self) -> Option<Tail> {
-        match self {
-            Painted::Block { tail, .. }
-            | Painted::Thinking { tail, .. }
-            | Painted::Thought(SettledThinking { tail, .. }) => *tail,
-            // 组头与小标题没有尾巴：它们不是一条调用，不挂用量。
-            Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
-        }
-    }
-
-    /// 把尾巴挂上去 —— 该次调用收尾时那一下。
-    fn set_tail(&mut self, tail: Tail) {
-        match self {
-            Painted::Block { tail: slot, .. }
-            | Painted::Thinking { tail: slot, .. }
-            | Painted::Thought(SettledThinking { tail: slot, .. }) => *slot = Some(tail),
-            // 组头与小标题没有尾巴可挂。
-            Painted::GroupHeader(_) | Painted::SectionHeader(_) => {}
         }
     }
 }
@@ -3992,6 +3919,9 @@ impl TuiState {
             sidebar_keyboard: false,
             main_tab: MainTab::Conversation,
             sidebar_wanted: true,
+            // 右栏默认开（冻结项 6）：轨迹住在它里面，关掉只是收起来，不是不画轨迹。
+            // 这里留关，真进程在 `Tui::run` 里打开 —— 集成测试的既有帧因此留在旧基线上。
+            right_wanted: false,
             picker: None,
             notice: None,
             last_session_click: None,
@@ -4036,6 +3966,17 @@ impl TuiState {
     /// 当前前台是哪一个会话。
     pub fn front(&self) -> &crate::events::SessionId {
         &self.front
+    }
+
+    /// 右栏想不想看见（票 13 起默认开，票 14 的 `Ctrl-V` 走这里）。
+    ///
+    /// 集成测试用它把既有的帧钉在「右栏关」的基线上，新的右栏断言再显式打开 —— 于是这一
+    /// 次外壳改造没有把两百条与右栏无关的断言一起推倒。
+    pub fn set_right_rail(&mut self, wanted: bool) {
+        if self.right_wanted != wanted {
+            self.right_wanted = wanted;
+            self.dirty = true;
+        }
     }
 
     /// 这一刻终端标题该是什么（`.scratch/terminal-title/spec.md` §1–§3）。
@@ -4992,7 +4933,8 @@ impl TuiState {
             chain: None,
             usage: None,
         };
-        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        let width = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted)
+            .detail_text_width() as usize;
         // 待办是一份快照，不是账本上的某一行 —— 它没有来源面，也就没有「本行」。
         self.open_detail(detail, width, DetailOpener::Todo, None);
     }
@@ -5082,7 +5024,7 @@ impl TuiState {
         }
         // 两块浮层互斥：开着详情时点开文件查看器，先把详情收掉。
         self.close_detail();
-        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+        let panes = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted);
         let Some(area) = panes.overlay_area(panes.viewer_width(self.view.facts.file_viewer.width))
         else {
             // 没地方画：与详情覆盖层给同一个诚实答案 —— 不开，而不是开成两行。
@@ -5196,7 +5138,8 @@ impl TuiState {
             chain: None,
             usage: None,
         };
-        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        let width = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted)
+            .detail_text_width() as usize;
         self.open_detail(detail, width, DetailOpener::Files, None);
     }
 
@@ -5861,7 +5804,7 @@ impl TuiState {
     ///
     /// `here` 是那一行在**账本上的行号**（来源面那条链按它定「本行」）。
     fn open_trace_detail(&mut self, detail: Detail, here: usize) {
-        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+        let panes = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted);
         let opener = DetailOpener::Trace {
             top: self.view.trace.top(),
             follow: self.view.trace.following(),
@@ -5979,7 +5922,7 @@ impl TuiState {
     /// （`.scratch/files-page/spec.md` §5 的「归还」）—— 点在哪儿，键盘就归哪儿。输入区没有
     /// 别的点击语义（那是行编辑，点在哪儿都还是同一份草稿），所以这一下到头了。
     fn take_input_keyboard(&mut self, column: u16, row: u16) -> bool {
-        let input = layout::plan(self.area, 1, self.sidebar_wanted).input;
+        let input = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted).input;
         if !input.contains((column, row).into()) {
             return false;
         }
@@ -7738,7 +7681,8 @@ impl TuiState {
         // `git diff`。于是配了 `[ui] diff_viewer` 时两种文件都会交给那个命令 —— 票 06 的口径
         // 是「未跟踪也一视同仁」（`.scratch/diff-page/issues/06-grilling-external-viewer.md`
         // 的边界那一条）。
-        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        let width = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted)
+            .detail_text_width() as usize;
         self.view.diff_reading = Some(DiffReading {
             serial,
             file: file.clone(),
@@ -8217,13 +8161,15 @@ impl TuiState {
             Some(questionnaire) => questionnaire_lines(
                 &questionnaire.questions[questionnaire.index],
                 &questionnaire.drafts[questionnaire.index],
-                layout::content_width(area, self.sidebar_wanted) as usize,
+                layout::content_width(area, self.sidebar_wanted, self.right_wanted) as usize,
                 questionnaire.zone == Zone::Options,
             )
             .len() as u16,
-            None => self
-                .editor
-                .height(layout::content_width(area, self.sidebar_wanted)),
+            None => self.editor.height(layout::content_width(
+                area,
+                self.sidebar_wanted,
+                self.right_wanted,
+            )),
         }
     }
 }
@@ -8545,18 +8491,20 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 上限也是问卷自己的：一份题面与选项要一起放下来的问卷，不该被草稿的十行夹住。
     let content_rows = state.bottom_rows(area);
     let panes = if state.questionnaire().is_some() {
-        layout::plan_questionnaire(area, content_rows, state.sidebar_wanted)
+        layout::plan_questionnaire(area, content_rows, state.sidebar_wanted, state.right_wanted)
     } else {
-        layout::plan(area, content_rows, state.sidebar_wanted)
+        layout::plan(area, content_rows, state.sidebar_wanted, state.right_wanted)
     };
-    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：两个视图都画在主列那块
-    // 内容区里，所以宽度同源，而且都**常驻** —— 与现在显示哪一页无关，切页才不会漏内容
-    // （`.scratch/trace-in-main/spec.md` §3）。
+    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：对话视图按主列那一条排，
+    // 轨迹视图按**右栏**那一条排 —— 票 13 起轨迹的家是右栏，`trace_width` 不再跟主列宽度
+    // 走（票 24 的「一个宽度来源」）。右栏没画出来时退回主列宽：那时主列轨迹页是唯一还能
+    // 看轨迹的地方（票 16 之前它还在）。
     let conversation_width = panes.transcript_text().width;
-    let trace_width = conversation_width;
-    // 前缀分档量的是主列**页**的宽度：主列最小 40 列（终端下界就是它），所以轨迹视图恒为
-    // 宽档、恒带方括号（`.scratch/trace-in-main/spec.md` §3）。
-    state.view.trace_tier_width = panes.main.width;
+    let trace_width = panes
+        .right_trace
+        .map_or(conversation_width, |rect| rect.width);
+    // 前缀分档量的是轨迹那一栏的宽度（票 13）：40 档带方括号、28 档去掉。
+    state.view.trace_tier_width = panes.right_rail.map_or(panes.main.width, |rect| rect.width);
     state.rerender_if_width_changed(conversation_width, trace_width);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
@@ -8570,6 +8518,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     }
     draw_shell(frame, &panes, state, area);
     draw_transcript(frame, &panes, state);
+    draw_right_rail(frame, &panes, state);
     draw_status(frame, &panes, state);
     let anchor = draw_bottom(frame, &panes, state);
     // `/` 菜单浮在主列之上、在它所属的那个光标下面 —— 也浮在问题之下，因为问题占着键盘、
@@ -8624,6 +8573,7 @@ fn draw_shell(
     area: Rect,
 ) {
     draw_divide(frame, panes, area);
+    draw_right_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
     draw_main_tab_bar(frame, panes, state);
     // 输入区与提示行各自上面那条分隔线 —— 状态行上方那条已经离开（spec §2），所以这里是
@@ -8658,6 +8608,21 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     let buffer = frame.buffer_mut();
     // 竖虚线跟左栏同高：画到屏幕最后一行（`.scratch/tui-feedback/spec.md` §2 —— 提示行回到
     // 主列之后，左栏不再为它让出底下那一行）。
+    for y in area.y..area.bottom() {
+        buffer[(divide, y)].set_symbol("┆").set_style(style);
+    }
+}
+
+/// 右栏与主列之间那一列：与左栏那条同一种竖虚线，方向相反（票 13）。
+///
+/// 它从屏幕顶画到底：底部三行（状态行 / 输入区 / 提示行）只跨主列、不跨右栏（spec 决定 4）
+/// —— 所以右栏那一列从头到尾都是一条线。
+fn draw_right_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) {
+    let Some(divide) = panes.right_divide else {
+        return;
+    };
+    let style = Style::default().fg(palette::CHROME);
+    let buffer = frame.buffer_mut();
     for y in area.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
@@ -10349,51 +10314,120 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             draw_indicator(frame, text_area, state, Viewport::Conversation);
         }
         MainTab::Trace => {
+            // 票 13 起轨迹的家已经搬到右栏；主列这一页只在本票与票 16 之间过渡存在，于是它
+            // 按右栏的排法画出来、**不接指针与键盘** —— 指针与键盘都归右栏那一份（票 14）。
             let text_area = panes.trace_text();
-            // 固定区那一块排在账本上面，于是它不随账本滚动（票 22 第 1 条）。
-            draw_trace_band(frame, panes, state, text_area.height);
-            // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
-            let live = TuiState::live_rows(&state.view.live);
-            let mut rows = state
-                .view
-                .trace
-                .view(text_area.width, text_area.height, &live);
-            let top = state.view.trace.top();
-            mark_trace_selection(state, top, &mut rows);
-            state.view.trace_drawn.top = text_area.y;
-            state.view.trace_drawn.rows = (0..rows.len())
-                .map(|offset| state.view.trace.source_at(top + offset))
-                .collect();
-            // 折叠热区：这一帧真画出来的**组头行与折行**整行都算把手（票 21 第 5 条）。每帧
-            // 重建、与屏幕文本层同一套纪律 —— 一个滚出视口的把手不必各自失效。
-            //
-            // 只认**每一条源行的第一显示行**：一条窄到折成两行的组头不该被热两次。
-            let handles: Vec<(u16, BlockId)> = (0..rows.len())
-                .filter_map(|offset| {
-                    let source = state.view.trace.source_at(top + offset)?;
-                    if offset > 0 && state.view.trace.source_at(top + offset - 1) == Some(source) {
-                        return None;
-                    }
-                    let id = state.fold_handle_at(source)?;
-                    Some((offset as u16, id))
-                })
-                .collect();
-            for (offset, id) in handles {
-                state.regions.push(
-                    Rect::new(text_area.x, text_area.y + offset, text_area.width, 1),
-                    HitAction::Fold(id),
-                );
-            }
-            let folded = soft_folds(&state.view.trace, top, rows.len());
-            note_rows(state, text_area, &rows, &folded, &[]);
-            // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
-            // 只是现在它等于主列的内容区）。
-            state.trace_rect = Some(text_area);
-            frame.render_widget(Paragraph::new(rows), text_area);
-            draw_scrollbar(frame, panes.trace_scrollbar(), &state.view.trace);
-            draw_indicator(frame, text_area, state, Viewport::Trace);
+            let width = state.view.trace_width;
+            let axis_width = text_area
+                .width
+                .saturating_sub(layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS);
+            draw_trace_pane(
+                frame,
+                panes.band,
+                panes.band_kind,
+                text_area,
+                width,
+                axis_width,
+                state,
+                true,
+                Some(panes.trace_scrollbar()),
+            );
         }
     }
+}
+
+/// 画右栏（票 13）：这一版右栏里只有轨迹一页，所以**顶部没有页面标签** —— 只有一页时不画
+/// 那一条（票 08 第 2 条）。后续页面（团队、任务板）只要求容器留得下。
+///
+/// 右栏的滚动、贴底与指示器都跟**会话**走（票 08 第 5 条）：它们就在 `View::trace` 里，与
+/// 主列轨迹页共用同一份视口意图。
+fn draw_right_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let Some(text_area) = panes.right_trace else {
+        return;
+    };
+    let width = state.view.trace_width;
+    // 轴宽与排版里那一笔同源（票 04）：右栏宽扣掉滚动条与指示器那两列、九列时刻、五列泳道
+    // 标签 —— 40 档 24 格、28 档 12 格。
+    let axis_width = panes.right_rail.map_or(0, |rail| {
+        rail.width.saturating_sub(
+            layout::TRAILING_COLUMNS + layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS,
+        )
+    });
+    draw_trace_pane(
+        frame,
+        panes.right_band,
+        panes.right_band_kind,
+        text_area,
+        width,
+        axis_width,
+        state,
+        true,
+        None,
+    );
+}
+
+/// 把轨迹这一个视图画进一块区域：主列轨迹页（过渡）与右栏共用同一条路径。
+///
+/// `interactive` 说这一份接不接指针：只有右栏那一份填命中表、`trace_rect` 与新内容指示器。
+/// 主列那一份在票 16 之前还画着，但它已经不是一个入口 —— 指针落在主列轨迹上什么都不做。
+fn draw_trace_pane(
+    frame: &mut ratatui::Frame,
+    band: Option<Rect>,
+    band_kind: BandKind,
+    text_area: Rect,
+    layout_width: u16,
+    axis_width: u16,
+    state: &mut TuiState,
+    interactive: bool,
+    scrollbar: Option<Rect>,
+) {
+    // 固定区那一块排在账本上面，于是它不随账本滚动（票 22 第 1 条）。
+    if let Some(band) = band {
+        draw_trace_band(frame, band, band_kind, text_area.height, axis_width, state);
+    }
+    // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
+    let live = TuiState::live_rows(&state.view.live);
+    let mut rows = state.view.trace.view(layout_width, text_area.height, &live);
+    let top = state.view.trace.top();
+    mark_trace_selection(state, top, &mut rows);
+    let folded = soft_folds(&state.view.trace, top, rows.len());
+    if interactive {
+        state.view.trace_drawn.top = text_area.y;
+        state.view.trace_drawn.rows = (0..rows.len())
+            .map(|offset| state.view.trace.source_at(top + offset))
+            .collect();
+        // 折叠热区：这一帧真画出来的**组头行与折行**整行都算把手（票 21 第 5 条）。每帧
+        // 重建、与屏幕文本层同一套纪律 —— 一个滚出视口的把手不必各自失效。
+        //
+        // 只认**每一条源行的第一显示行**：一条窄到折成两行的组头不该被热两次。
+        let handles: Vec<(u16, BlockId)> = (0..rows.len())
+            .filter_map(|offset| {
+                let source = state.view.trace.source_at(top + offset)?;
+                if offset > 0 && state.view.trace.source_at(top + offset - 1) == Some(source) {
+                    return None;
+                }
+                let id = state.fold_handle_at(source)?;
+                Some((offset as u16, id))
+            })
+            .collect();
+        for (offset, id) in handles {
+            state.regions.push(
+                Rect::new(text_area.x, text_area.y + offset, text_area.width, 1),
+                HitAction::Fold(id),
+            );
+        }
+        // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹时才有值（票 09 那条纪律照旧，
+        // 只是它现在指右栏）。
+        state.trace_rect = Some(text_area);
+    }
+    note_rows(state, text_area, &rows, &folded, &[]);
+    frame.render_widget(Paragraph::new(rows), text_area);
+    if let Some(scrollbar) = scrollbar {
+        draw_scrollbar(frame, scrollbar, &state.view.trace);
+    }
+    // 指示器两种形态都画：主列轨迹页在票 16 之前还活着，它「点回底部」的入口不能先没了。
+    // 右栏那一份最后画、覆盖 `trace_indicator` —— 指针按右栏算。
+    draw_indicator(frame, text_area, state, Viewport::Trace);
 }
 
 /// 画这一帧横带时几条泳道共用的那点东西：轴、它在屏幕上的起点、横带的第一行、以及
@@ -10587,29 +10621,19 @@ impl Lanes {
 /// 宽度。
 fn draw_trace_band(
     frame: &mut ratatui::Frame,
-    panes: &layout::Regions,
-    state: &TuiState,
+    band: Rect,
+    kind: BandKind,
     ledger_rows: u16,
+    axis_width: u16,
+    state: &TuiState,
 ) {
-    let Some(band) = panes.band else {
-        return;
-    };
     // 进行中的那一段画到**此刻**（票 22 第 8 条）—— 轴域因此也跟着走到此刻，而一趟静止的
     // 会话不会每帧变宽（那由 `Timeline::domain` 里的 `running` 判）。
     let now = Utc::now();
     let Some((from, to)) = state.view.timeline.domain(now) else {
         return;
     };
-    let Some(axis) = timeline::Axis::new(
-        from,
-        to,
-        // 轴宽与排版里那一笔同源：正文宽（扣掉滚动条与回合条那两列）再扣行首九列与泳道标签
-        // 五列 —— 120 列下是 63 格。
-        panes
-            .trace_text()
-            .width
-            .saturating_sub(layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS),
-    ) else {
+    let Some(axis) = timeline::Axis::new(from, to, axis_width) else {
         return;
     };
     let lanes = Lanes {
@@ -10618,10 +10642,10 @@ fn draw_trace_band(
         top: band.y,
         now,
     };
-    lanes.ticks(frame, state, panes.band_kind, ledger_rows);
+    lanes.ticks(frame, state, kind, ledger_rows);
     // 命中底色铺在泳道那几行上，在字形之前：刻度行那一段只认视口（票 23 第 2 条）。
-    lanes.hits(frame, state, panes.band_kind == BandKind::Compact);
-    match panes.band_kind {
+    lanes.hits(frame, state, kind == BandKind::Compact);
+    match kind {
         BandKind::Compact => lanes.compact(frame, state),
         _ => {
             let labels_x = band.x + layout::STAMP_COLUMNS;
@@ -10921,7 +10945,7 @@ fn draw_bottom(
         return None;
     }
     let (rows, cursor) = state.editor.view(
-        layout::content_width(frame.area(), state.sidebar_wanted),
+        layout::content_width(frame.area(), state.sidebar_wanted, state.right_wanted),
         panes.input.height,
     );
     // 草稿归正文档，自己不带任何前缀：提示符与它的色相随 `.scratch/ui-trim/spec.md` 一起退场
@@ -11956,51 +11980,27 @@ fn section_header_line(header: &SectionHeader) -> Line<'static> {
     ])
 }
 
-/// 组头那一行：**行首的起时刻 + 组头的字 + 一级头那条填到右缘的虚线**。
+/// 组头那一行：**组头的字，独占一行**（票 13 起右栏里的形状）。
 ///
-/// 字段顺序是**起时刻 · 序号 · 墙钟跨度 · 工具直方图**，超宽时**从右往左丢**（见
-/// [`unit_header_head`] / [`iteration_header_head`] 的候选表），所以它**永远占一行** ——
-/// 折成两行会同时推翻「零额外行数」与时刻列的竖向对齐（`.scratch/trace-ledger/spec.md` §5、
-/// 票 16 第 5 条）。
+/// 它推翻 `trace-ledger` §5 的「组头并进单位之间的虚线、零额外行数」：右栏 40 档只剩四列
+/// 虚线、28 档长组头整条丢掉，那条设计在窄栏里失效（票 04 第 3 条、票 08 第 9 条）。于是
+/// 组头改成一整行**短写**、不带虚线 —— 这不改变它占的行数（它本来也单独占一行），只是不再
+/// 假装自己是那条边界线。
 ///
-/// 一级头与二级头是两种形状：一级占满一整行虚线（它是一条边界、文字亮一档），二级是弱色
-/// 单行、**不带虚线**（它只是那一段的标题）。
+/// **一级头与二级头仍是两种形状**：一级是 BOLD 的一段边界，二级是弱色单行。
 fn group_header_line(header: &GroupHeader, width: u16, discussion: bool) -> Line<'static> {
     let style = match header.level {
-        // 一级是**边界**：它与虚线同一支，文字亮一档。
+        // 一级是**边界**：文字亮一档。
         HeaderLevel::Unit => Style::default().add_modifier(Modifier::BOLD),
         // 二级只是那一段的标题，退后。
         HeaderLevel::Iteration => Style::default().fg(palette::MUTED),
     };
-    let mut spans = vec![
-        // 行首那九列放**这一组自己的**起时刻 ⇒ 所有行的时刻列竖向对齐不变。
-        Span::styled(
-            wording::stamp(header.at),
-            Style::default().fg(palette::MUTED),
-        ),
-    ];
-    match header.level {
-        HeaderLevel::Unit => {
-            // 一级头占的那几列里，行首九列归时刻、`┄ ` 那个前缀与末尾那一格空白也不能动
-            // —— 剩下的才是这一段字段的余地。
-            let budget = (width as usize).saturating_sub(layout::STAMP_COLUMNS as usize + 2 + 1);
-            let head = unit_header_head(header, discussion, budget);
-            spans.push(Span::styled("┄ ", Style::default().fg(palette::CHROME)));
-            spans.push(Span::styled(head.clone(), style));
-            // 虚线填到屏幕右缘 —— 那一行因此读起来是**一条边界**，而不是一行孤零零的字。
-            let used = layout::STAMP_COLUMNS as usize + 2 + text_columns(&head) + 1;
-            spans.push(Span::styled(" ", Style::default()));
-            spans.push(Span::styled(
-                "┄".repeat((width as usize).saturating_sub(used)),
-                Style::default().fg(palette::CHROME),
-            ));
-        }
-        HeaderLevel::Iteration => {
-            let budget = (width as usize).saturating_sub(layout::STAMP_COLUMNS as usize);
-            spans.push(Span::styled(iteration_header_head(header, budget), style));
-        }
-    }
-    Line::from(spans)
+    let budget = width as usize;
+    let head = match header.level {
+        HeaderLevel::Unit => unit_header_head(header, discussion, budget),
+        HeaderLevel::Iteration => iteration_header_head(header, budget),
+    };
+    Line::from(vec![Span::styled(head, style)])
 }
 
 /// 在一串**从最全到最简**的候选里挑第一个放得下的；一个都放不下就把最简那个截断。
@@ -12323,49 +12323,6 @@ fn error_first_line(outcome: Option<&ToolOutcome>) -> Option<String> {
     let error = outcome.error.as_deref()?;
     let first = error.lines().next().unwrap_or_default();
     (!first.trim().is_empty()).then(|| first.to_owned())
-}
-
-/// 这一块行尾该挂的**耗时**那一段 —— 只有工具块有这一笔（票 17 第 1 条）。
-///
-/// **拿不到就不画**：一次调用还没有结果时（还在跑、或者它那一块根本没有结果），它的墙钟不在
-/// 手上，于是这里给 `None`，行上空着 —— 不写 0，也不写占位符（第 3 条）。
-fn tool_duration(block: &Block) -> Option<String> {
-    let Block::Tool(tool) = block else {
-        return None;
-    };
-    tool.outcome
-        .as_ref()
-        .map(|outcome| wording::tool_duration_tail(outcome.duration_ms))
-}
-
-/// 把行尾那两段账目拼到最后一条行上：**这次调用自己花了多久**（只有工具块有这一笔），
-/// 然后是**尾巴**（一笔用量，或一次发言的合计）。
-///
-/// 尾巴补在**最后一条**行尾：那是这一块读下来的落脚点，于是实时与重放画出来的是同一行
-/// （ADR 0016、`.scratch/trace-usage-tail/spec.md` §3、§5）。
-///
-/// 顺序是耗时在前、尾巴在后（票 17 第 1 条）。**放不下时丢的是耗时**：行尾是用量的家，
-/// 而耗时是后来者 —— 两段一起挤不下时留下的是那笔用量（第 2 条）。拿不到耗时的那些情形
-/// （这次调用没有结果、行太窄）那一段就空着，不写 0 也不写占位符（第 3 条）。
-fn attach_row_tail(
-    line: Option<&mut RenderedLine>,
-    duration: Option<String>,
-    tail: Option<Tail>,
-    room: usize,
-) {
-    let Some(last) = line else { return };
-    let duration_width = duration.as_deref().map(text_columns).unwrap_or(0);
-    let tail_width = tail.map(|tail| tail.span().width()).unwrap_or(0);
-    if line_columns(&last.line) + duration_width + tail_width <= room
-        && let Some(duration) = duration
-    {
-        last.line
-            .spans
-            .push(Span::styled(duration, Style::default().fg(palette::MUTED)));
-    }
-    if let Some(tail) = tail {
-        last.line.spans.push(tail.span());
-    }
 }
 
 /// 对话视图里一条消息的排版：**名字独占一行**，话从下一行起、顶格
@@ -14887,71 +14844,6 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 mod tests {
     use super::*;
 
-    /// 一次调用还没有结果时行尾没有耗时那一段。拿不到就不画，不写 0 也不写占位符 ——
-    /// 「还在跑」的调用在流上就是这样一块：没有结果
-    /// （`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md` 第 3 条）。
-    ///
-    /// 被取消的调用是另一回事：循环为它合成结果，那笔墙钟是排队加取消那一刻、不是工具花的时间，
-    /// 而流上它与真跑过的调用同形，所以行上照画（同一张票的「落地注记」第二条）。
-    #[test]
-    fn a_call_without_a_result_has_no_duration_to_draw() {
-        use crate::render::transcript::ToolOutcome;
-
-        let tool = |outcome: Option<ToolOutcome>| {
-            Block::Tool(Box::new(ToolBlock {
-                speaker: crate::events::SpeakerId::Debater("kimi".into()),
-                tool_call_id: ToolCallId::new("c-1"),
-                tool: "bash".to_owned(),
-                args: serde_json::json!({"command": "ls"}),
-                outcome,
-                timing: Default::default(),
-            }))
-        };
-        assert_eq!(tool_duration(&tool(None)), None);
-        assert_eq!(
-            tool_duration(&tool(Some(ToolOutcome {
-                ok: true,
-                output: Some("out".to_owned()),
-                error: None,
-                duration_ms: 1_500,
-            }))),
-            Some(" · 1.5 s".to_owned())
-        );
-    }
-
-    /// 行尾那两段一起挤不下时，先走的是**耗时**：用量尾巴完整保留
-    /// （同上那张票第 2 条）。
-    #[test]
-    fn a_tail_that_does_not_fit_sheds_the_duration_first() {
-        let usage = Usage {
-            input_tokens: 19_502,
-            output_tokens: 1_880,
-            cached_tokens: 0,
-            miss_tokens: 0,
-            reasoning_tokens: None,
-        };
-        let mut line = RenderedLine::from(Line::from("调用 bash 运行 cargo test"));
-        // 刚好放得下用量、放不下再一段耗时。
-        let room = line_columns(&line.line) + Tail::Usage(usage).span().width() + 4;
-        attach_row_tail(
-            Some(&mut line),
-            Some(" · 1.5 s".to_owned()),
-            Some(Tail::Usage(usage)),
-            room,
-        );
-        let text = line_text(&line.line);
-        assert!(text.ends_with("in=19502 out=1880"), "用量留着：{text}");
-        assert!(!text.contains("1.5 s"), "耗时让位：{text}");
-
-        // 宽得下时两段都在：耗时排在用量之前（第 1 条）。
-        attach_row_tail(Some(&mut line), Some(" · 1.5 s".to_owned()), None, 200);
-        assert!(
-            line_text(&line.line).ends_with("· 1.5 s"),
-            "宽得下时耗时在行尾：{:?}",
-            line_text(&line.line)
-        );
-    }
-
     /// 平行表跟着窗格交回来的丢弃数裁，而不是自己数 `CAP`：推过上限之后，行链接与回合条
     /// 仍与窗格的源行一一对应（`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
     #[test]
@@ -15524,7 +15416,7 @@ mod tests {
     fn state_with_viewer() -> (TuiState, viewer::FakeWatcher) {
         let mut state = state();
         state.area = Rect::new(0, 0, 100, 30);
-        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted, state.right_wanted);
         let area = panes
             .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
             .expect("100x30 放得下浮层");
@@ -15642,7 +15534,7 @@ mod tests {
         // 「去框留白」那一档：外框再内缩一格，那一格就是留白（`.scratch/nvim-file-viewer` §3）。
         let mut state = state();
         state.area = Rect::new(0, 0, 100, 30);
-        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted, state.right_wanted);
 
         let area = panes
             .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
@@ -15657,7 +15549,7 @@ mod tests {
             60
         );
         assert_eq!(
-            layout::plan(Rect::new(0, 0, 40, 20), 1, true).viewer_width(135),
+            layout::plan(Rect::new(0, 0, 40, 20), 1, true, false).viewer_width(135),
             36
         );
     }
@@ -15731,7 +15623,7 @@ mod tests {
             .unwrap();
 
         // 第二帧：装上浮层（与 `state_with_viewer` 同一套几何）。
-        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted, state.right_wanted);
         let area = panes
             .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
             .expect("100x30 放得下浮层");
@@ -16685,15 +16577,14 @@ mod tests {
             line_text(&line)
         };
 
-        // 宽档：四个字段一个不少。
-        let wide = row(48);
-        assert!(
-            wide.contains("回合 1 · 12 s · bash×2 read×1 edit×1"),
-            "{wide}"
-        );
+        // 宽档：四个字段一个不少。票 13 起组头独占一行、不带时刻，所以它拿到的是整条
+        // 宽度 —— 门槛按这一行自己的显示列数取，不再手写。
+        let full = "回合 1 · 12 s · bash×2 read×1 edit×1";
+        let wide = row(text_columns(full) as u16);
+        assert!(wide.contains(full), "{wide}");
 
         // 窄一列：直方图的**尾部**先丢一项，它前面那些留着。
-        let shorter = row(47);
+        let shorter = row(text_columns(full) as u16 - 1);
         assert!(
             shorter.contains("回合 1 · 12 s · bash×2 read×1"),
             "{shorter}"
@@ -16701,22 +16592,24 @@ mod tests {
         assert!(!shorter.contains("edit×1"), "尾部那一项先走：{shorter}");
 
         // 再窄：尾部一路丢到只剩第一项（分档的粒度是**工具项**）。
-        let one_left = row(40);
-        assert!(one_left.contains("回合 1 · 12 s · bash×2"), "{one_left}");
+        let one = "回合 1 · 12 s · bash×2";
+        let one_left = row(text_columns(one) as u16);
+        assert!(one_left.contains(one), "{one_left}");
         assert!(!one_left.contains("read×1"), "{one_left}");
 
         // 一项都不剩时才整段不画，而那时**跨度还在**。
-        let span_left = row(25);
-        assert!(span_left.contains("回合 1 · 12 s"), "{span_left}");
+        let span = "回合 1 · 12 s";
+        let span_left = row(text_columns(span) as u16);
+        assert!(span_left.contains(span), "{span_left}");
         assert!(!span_left.contains('×'), "整段直方图不画了：{span_left}");
 
         // 直方图丢完之后才轮到跨度：只剩序号。
-        let ordinal_only = row(18);
+        let ordinal_only = row(text_columns(span) as u16 - 1);
         assert!(ordinal_only.contains("回合 1"), "{ordinal_only}");
         assert!(!ordinal_only.contains("12 s"), "{ordinal_only}");
 
         // 连序号都放不下时**截断**，而不是折行。
-        assert!(row(17).contains("回合"), "{}", row(17));
+        assert!(row(5).contains("回合"), "{}", row(5));
     }
 
     /// 二级组头（弱色单行、不带虚线）只有两个字段，超宽时先丢**跨度**、序号最后丢；
@@ -16744,8 +16637,9 @@ mod tests {
             line_text(&line)
         };
 
-        assert!(row(30).contains("第 7 次迭代 · 18 s"), "{}", row(30));
-        let short = row(20);
+        let full = "第 7 次迭代 · 18 s";
+        assert!(row(text_columns(full) as u16).contains(full));
+        let short = row(text_columns(full) as u16 - 1);
         assert!(short.contains("第 7 次迭代"), "{short}");
         assert!(!short.contains("18 s"), "跨度先走：{short}");
     }
