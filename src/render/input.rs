@@ -164,6 +164,9 @@ pub enum ConsoleRequest {
     /// 重建。切换与启动那次重放共用同一套机制 —— 差别只在收尾不插「以下是历史」那条分隔行。
     SwitchSession {
         facts: super::tui::SessionFacts,
+        /// 这个会话的工作目录（票 25）：`cwd` 是**每会话**的事实，切过去之后终端标题与
+        /// `@` 候选都跟着它。
+        cwd: std::path::PathBuf,
         events: Vec<Event>,
     },
     /// 一个会话被从宿主表里卸下来了，以及卸完之后表空不空（票 21）。
@@ -207,7 +210,10 @@ pub enum ConsoleRequest {
     ///
     /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
     /// 路径，得由它自己挡住。
-    ReadOnly { read_only: bool },
+    ReadOnly {
+        id: crate::events::SessionId,
+        read_only: bool,
+    },
     /// 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
     ///
     /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事（它会阻塞 TUI），
@@ -219,7 +225,13 @@ pub enum ConsoleRequest {
     ///
     /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
     /// 前端 —— plain 那条控制台 —— 与它无关。
-    Catalog { entries: Vec<CatalogEntry> },
+    ///
+    /// **带会话 id**（票 25）：宿主表里可以同时活着几个会话，而名册是**每个会话自己的**技能
+    /// 目录 —— 渲染器按 id 存表，切焦点时取对应那一份。
+    Catalog {
+        id: crate::events::SessionId,
+        entries: Vec<CatalogEntry>,
+    },
     /// 输入区是不是禁言了（`.scratch/goal-loop/spec.md` §5）。
     ///
     /// 无人值守的目标循环跑着的时候，打字插话不是这个功能的一部分（那是
@@ -313,10 +325,15 @@ impl ConsoleHandle {
     /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
     /// 是会话的技能，所以菜单读起来的顺序就是循环会尝试它们的顺序。
     /// 换到另一个：把这个会话的事实与事件流快照推过去，渲染器据此整块换成它。
-    pub fn switch_session(&self, facts: super::tui::SessionFacts, events: Vec<Event>) {
+    pub fn switch_session(
+        &self,
+        facts: super::tui::SessionFacts,
+        cwd: std::path::PathBuf,
+        events: Vec<Event>,
+    ) {
         let _ = self
             .requests
-            .send(ConsoleRequest::SwitchSession { facts, events });
+            .send(ConsoleRequest::SwitchSession { facts, cwd, events });
     }
 
     /// 说一个会话被卸下来了，以及表空不空。
@@ -374,8 +391,10 @@ impl ConsoleHandle {
     }
 
     /// 说这个会话是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
-    pub fn read_only(&self, read_only: bool) {
-        let _ = self.requests.send(ConsoleRequest::ReadOnly { read_only });
+    pub fn read_only(&self, id: crate::events::SessionId, read_only: bool) {
+        let _ = self
+            .requests
+            .send(ConsoleRequest::ReadOnly { id, read_only });
     }
 
     /// 推一份会话页要的列表。与 [`catalog`](Self::catalog) 一样发完就完。
@@ -383,8 +402,8 @@ impl ConsoleHandle {
         let _ = self.requests.send(ConsoleRequest::Sessions { listing });
     }
 
-    pub fn catalog(&self, entries: Vec<CatalogEntry>) {
-        let _ = self.requests.send(ConsoleRequest::Catalog { entries });
+    pub fn catalog(&self, id: crate::events::SessionId, entries: Vec<CatalogEntry>) {
+        let _ = self.requests.send(ConsoleRequest::Catalog { id, entries });
     }
 
     /// 说循环是不是在一次运行里面。

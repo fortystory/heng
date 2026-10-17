@@ -73,6 +73,7 @@ fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
 fn switch(state: &mut TuiState, session_id: &str, events: Vec<Event>) {
     state.request(ConsoleRequest::SwitchSession {
         facts: facts(session_id),
+        cwd: std::path::PathBuf::from("/x/heng"),
         events,
     });
     while state.replay_pending() {
@@ -132,6 +133,7 @@ fn a_live_event_of_the_new_session_lands_after_the_snapshot() {
     let mut state = fresh();
     state.request(ConsoleRequest::SwitchSession {
         facts: facts("s-b"),
+        cwd: std::path::PathBuf::from("/x/heng"),
         events: vec![said(1, "快照里的")],
     });
     state.live_event(RenderEvent::Logged {
@@ -208,6 +210,7 @@ fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
     let mut state = fresh();
     state.request(ConsoleRequest::SwitchSession {
         facts: facts("s-b"),
+        cwd: std::path::PathBuf::from("/x/heng"),
         events: vec![said(1, "乙")],
     });
     state.live_event(RenderEvent::Notice {

@@ -420,11 +420,14 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `/` 菜单里的名字。真正对提交作出反应的是循环，所以「有哪些名字」也由循环说了算：它解析的那
     // 些内建命令，然后是这个会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
     // 而不是随表头那些事实一起注入的原因。
-    console.catalog(slash_catalog(
-        &render::wording::BUILT_IN_COMMANDS,
-        &harness.skill_catalog(),
-        &prompts,
-    ));
+    console.catalog(
+        harness.session_id().clone(),
+        slash_catalog(
+            &render::wording::BUILT_IN_COMMANDS,
+            &harness.skill_catalog(),
+            &prompts,
+        ),
+    );
 
     // 这个会话交给宿主表：拥有它的那个 task 跑完整段交互循环，主循环从表里驱动它
     // （`.scratch/session-tab/spec.md` §1）。渲染端先克隆一份 —— 会话收工之后由主循环等它
@@ -435,7 +438,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 只读预览也告诉渲染器：页内改名那种「渲染器自己发起」的写动作要挡住（票 18）。
     // 要在 `console` 被移进 actor 之前说。
     if read_only {
-        console.read_only(true);
+        console.read_only(session_id.clone(), true);
     }
     // 前台会话的只读快照（票 15 的 `FrontFacts`）：主循环解析每一次提交要的那几样。会话的
     // `Harness` 一交给 task 就问不到它了，所以在这里取一份。

@@ -251,7 +251,11 @@ mod loading {
             // 已在宿主表：零延迟取回 —— 不装载、也不说「正在装载」。
             AttachPlan::SwitchOnly { .. } => {
                 host.switch(&id);
-                console.switch_session(kit.ui_facts(&stored, &events), events);
+                let session_cwd = host
+                    .get(&id)
+                    .map(|entry| entry.cwd.clone())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                console.switch_session(kit.ui_facts(&stored, &events), session_cwd, events);
                 Ok(id)
             }
             AttachPlan::Refuse { reason } => {
@@ -289,6 +293,7 @@ mod loading {
                     quit: ExitRequest::default(),
                     requests: requests.clone(),
                 };
+                let session_cwd = cwd.clone();
                 if let Err(error) =
                     host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))
                 {
@@ -300,7 +305,7 @@ mod loading {
                     asker.attach(entry.state_tx.clone());
                 }
                 host.switch(&id);
-                console.switch_session(kit.ui_facts(&stored, &events), events);
+                console.switch_session(kit.ui_facts(&stored, &events), session_cwd.clone(), events);
                 // 装完要说的话（票 18 的缺格、票 21 的新开回执）只在这里说。
                 if !loaded.filled.is_empty() {
                     say_notice(kit, &id, &Notice::FactsFilled(loaded.filled.clone()));
@@ -573,7 +578,11 @@ pub(super) async fn attach(
         // 已在宿主表：零延迟取回 —— 不装载、也不说「正在装载」。
         AttachPlan::SwitchOnly { .. } => {
             host.switch(&id);
-            console.switch_session(kit.ui_facts(&stored, &events), events);
+            let session_cwd = host
+                .get(&id)
+                .map(|entry| entry.cwd.clone())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            console.switch_session(kit.ui_facts(&stored, &events), session_cwd, events);
             Ok(id)
         }
         AttachPlan::Refuse { reason } => {
@@ -611,6 +620,7 @@ pub(super) async fn attach(
                 quit: ExitRequest::default(),
                 requests: requests.clone(),
             };
+            let session_cwd = cwd.clone();
             if let Err(error) =
                 host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))
             {
@@ -622,7 +632,7 @@ pub(super) async fn attach(
                 asker.attach(entry.state_tx.clone());
             }
             host.switch(&id);
-            console.switch_session(kit.ui_facts(&stored, &events), events);
+            console.switch_session(kit.ui_facts(&stored, &events), session_cwd, events);
             // 装完要说的话（票 18 的缺格、票 21 的新开回执）只在这里说。
             if !loaded.filled.is_empty() {
                 say_notice(kit, &id, &Notice::FactsFilled(loaded.filled.clone()));

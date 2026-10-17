@@ -2575,6 +2575,13 @@ pub struct TuiState {
     tiles: Vec<crate::events::SessionId>,
     /// 这一帧是**平铺态**吗（票 17）。默认标签态；`Ctrl-R` 或顶部条的平铺按钮切。
     tiled: bool,
+    /// 每会话的命令 / 技能名册（票 25）：`/` 菜单按焦点会话取。
+    catalogs: std::collections::HashMap<
+        crate::events::SessionId,
+        Vec<crate::render::input::CatalogEntry>,
+    >,
+    /// 每会话的只读预览标志（票 25）：渲染器自己发起的那几处写动作按焦点会话判。
+    read_only_by: std::collections::HashMap<crate::events::SessionId, bool>,
     /// 平铺集合的上限（`[ui] tile_limit`，票 19、26 读它；缺省 4）。
     tile_limit: usize,
     /// 被关掉的前台会话留下的**座位**：`/clear` 翻页时新会话接替它（票 19）。
@@ -3987,6 +3994,8 @@ impl TuiState {
             tiles: Vec::new(),
             tiled: false,
             tile_limit: crate::config::DEFAULT_TILE_LIMIT,
+            catalogs: std::collections::HashMap::new(),
+            read_only_by: std::collections::HashMap::new(),
             tile_picker: None,
             tile_seat: None,
             picker: None,
@@ -4353,6 +4362,8 @@ impl TuiState {
     fn stash_light(&mut self) {
         let light = SessionLight {
             editor: std::mem::take(&mut self.editor),
+            cwd: self.cwd.clone(),
+            files: std::mem::take(&mut self.files),
             conversation: self.view.conversation.viewport(),
             trace: self.view.trace.viewport(),
             detail: self.detail.take(),
@@ -4369,9 +4380,24 @@ impl TuiState {
         self.light.insert(self.front.clone(), light);
     }
 
-    /// 把目标那个会话的轻状态装进来（没有就装一份干净的）。
-    fn load_light(&mut self) {
-        let light = self.light.remove(&self.front).unwrap_or_default();
+    /// 把目标那个会话的轻状态装进来。
+    ///
+    /// 没装过（第一次切到它）就用请求带来的 `cwd` 起一份干净的：文件索引空着、请一次重扫
+    /// （票 25：`cwd` / 文件索引是**每会话**的事实）。
+    fn load_light(&mut self, cwd: std::path::PathBuf) {
+        let Some(light) = self.light.remove(&self.front) else {
+            self.cwd = cwd;
+            self.files = FileIndex::new();
+            self.file_scan_wanted = true;
+            self.editor = Input::new();
+            self.detail = None;
+            self.file_viewer = None;
+            self.picker = None;
+            self.slash = MenuSelection::default();
+            return;
+        };
+        self.cwd = light.cwd;
+        self.files = light.files;
         self.editor = light.editor;
         self.view.conversation.restore_viewport(light.conversation);
         self.view.trace.restore_viewport(light.trace);
@@ -7267,7 +7293,7 @@ impl TuiState {
             }
             // 换到另一个会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**，而会话级的
             // 轻状态先收走当前那份、再装入目标那份。
-            ConsoleRequest::SwitchSession { facts, events } => {
+            ConsoleRequest::SwitchSession { facts, cwd, events } => {
                 // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一个**，不能泄到这个会话来。
                 if let Some(old) = self.replay.take() {
                     self.finish_replay(old);
@@ -7313,7 +7339,11 @@ impl TuiState {
                         self.tiles.insert(position, new_front.clone());
                     }
                 }
-                self.load_light();
+                self.load_light(cwd);
+                // 名册与只读是**每会话**的（票 25）：按 id 从表里取。
+                self.catalog = self.catalogs.get(&self.front).cloned().unwrap_or_default();
+                self.read_only = self.read_only_by.get(&self.front).copied().unwrap_or(false);
+                self.sync_tokens();
                 // 上一个会话攒下的实时事件不带过去。
                 self.live_buffer.clear();
                 if first_load && !events.is_empty() {
@@ -7384,8 +7414,11 @@ impl TuiState {
                 self.dirty = true;
             }
             // 这个会话是不是只读预览（票 18）。
-            ConsoleRequest::ReadOnly { read_only } => {
-                self.read_only = read_only;
+            ConsoleRequest::ReadOnly { id, read_only } => {
+                self.read_only_by.insert(id.clone(), read_only);
+                if id == self.front {
+                    self.read_only = read_only;
+                }
             }
             // 一个会话被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
             ConsoleRequest::SessionClosed { id, empty } => {
@@ -7399,6 +7432,8 @@ impl TuiState {
                 }
                 self.light.remove(&id);
                 self.views.remove(&id);
+                self.catalogs.remove(&id);
+                self.read_only_by.remove(&id);
                 // 关掉的会话从平铺集合里移出；只剩一个就自动回标签态（票 19）。关掉的要是
                 // 前台，把它的**座位**记下来 —— `/clear` 的新会话随后接替这个位置。
                 if let Some(position) = self.tiles.iter().position(|held| held == &id) {
@@ -7463,10 +7498,13 @@ impl TuiState {
             }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
-            ConsoleRequest::Catalog { entries } => {
-                self.catalog = entries;
-                // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
-                self.sync_tokens();
+            ConsoleRequest::Catalog { id, entries } => {
+                self.catalogs.insert(id.clone(), entries.clone());
+                if id == self.front {
+                    self.catalog = entries;
+                    // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
+                    self.sync_tokens();
+                }
             }
             // 重新打开的会话组装时用的那段历史。空流不是一次重放：进入那个状态会为一次什么
             // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
@@ -10128,6 +10166,10 @@ impl Picker {
 struct SessionLight {
     /// 草稿与它的光标。
     editor: Input,
+    /// 这个会话的工作目录（票 25）：终端标题与 `@` 候选都跟着它。
+    cwd: std::path::PathBuf,
+    /// 工作区的文件索引（根 = 这个会话的 `cwd`；票 25）。
+    files: FileIndex,
     /// 对话视图的视口意图。
     conversation: crate::render::pane::Viewport,
     /// 轨迹视图的视口意图。

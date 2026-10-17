@@ -4861,7 +4861,10 @@ fn install_catalog(state: &mut TuiState) {
         // 第三类来源也摆上（票 09）：三色各有一条，才谈得上「看得出是三类」。
         CatalogEntry::template("db:user_report", "按 id 出一份报告"),
     ]);
-    state.request(ConsoleRequest::Catalog { entries });
+    state.request(ConsoleRequest::Catalog {
+        id: state.front().clone(),
+        entries,
+    });
 }
 
 /// 给状态装一份文件索引：`@` 的候选来源（票 01 的那个会话级值）。
@@ -5074,6 +5077,7 @@ fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
     let description = "说明".repeat(20);
     let mut state = state();
     state.request(ConsoleRequest::Catalog {
+        id: state.front().clone(),
         entries: vec![CatalogEntry::command("demo", description.clone())],
     });
     state.key(Key::Char('/'));
@@ -5138,6 +5142,7 @@ fn a_description_still_reads_as_one_line_in_the_full_width_menu() {
     let description = "说明".repeat(10);
     let mut state = state();
     state.request(ConsoleRequest::Catalog {
+        id: state.front().clone(),
         entries: vec![CatalogEntry::command("demo", description.clone())],
     });
     state.key(Key::Char('/'));
@@ -10811,10 +10816,16 @@ fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
 
 /// 模拟循环把前台切到另一个会话（渲染端只发上行，真正改指针的是循环）。
 fn switch_session(state: &mut TuiState, id: &str) {
+    switch_session_at(state, id, "/x/heng");
+}
+
+/// 同上，但带上那个会话自己的工作目录（票 25）。
+fn switch_session_at(state: &mut TuiState, id: &str, cwd: &str) {
     let mut session_facts = facts();
     session_facts.session_id = id.to_owned();
     state.request(ConsoleRequest::SwitchSession {
         facts: session_facts,
+        cwd: std::path::PathBuf::from(cwd),
         events: Vec::new(),
     });
     while state.replay_pending() {
@@ -11252,4 +11263,77 @@ fn the_selection_and_fold_survive_a_mode_round_trip() {
     let _ = screen(120, 40, &mut state);
     let back = trace_page(&mut state, 120, 40).join("\n");
     assert_eq!(folded, back, "折叠与选中都活过了两态往返");
+}
+
+// ---------------------------------------------------------------------------
+// 跟会话走的那几样事实（票 25）
+// ---------------------------------------------------------------------------
+
+/// `cwd` 每会话：切到别的工作目录的会话，终端标题跟着换；切回来复原。
+#[test]
+fn each_session_keeps_its_own_cwd_in_the_title() {
+    let mut state = state_with_roster(&["kimi"]);
+    let first = state.title();
+    assert!(first.contains("heng"), "起点的标题用启动目录：{first}");
+
+    switch_session_at(&mut state, "s-b", "/x/other");
+    let second = state.title();
+    assert!(second.contains("other"), "切过去标题换成它的 cwd：{second}");
+
+    switch_session(&mut state, "01J8ZQ4K7M");
+    assert_eq!(state.title(), first, "切回来标题复原");
+}
+
+/// 文件索引每会话：切走再切回，文件页还是那个会话自己的索引。
+#[test]
+fn each_session_keeps_its_own_file_index() {
+    let mut state = state_with_roster(&["kimi"]);
+    install_files(&mut state, &["a.rs"]);
+    switch_session_at(&mut state, "s-b", "/x/other");
+    install_files(&mut state, &["b.rs"]);
+
+    switch_session(&mut state, "01J8ZQ4K7M");
+    open_files_page(&mut state, 120, 24);
+    let rows = screen(120, 24, &mut state).join("\n");
+    assert!(rows.contains("a.rs"), "甲的文件索引回来了：{rows}");
+    assert!(!rows.contains("b.rs"), "乙的文件不在甲里：{rows}");
+}
+
+/// `/` 菜单的名册每会话：切焦点换名册，互不混。
+#[test]
+fn each_session_keeps_its_own_slash_catalog() {
+    use heng::render::input::CatalogEntry;
+    let mut state = idle();
+    let first = state.front().clone();
+    state.request(ConsoleRequest::Catalog {
+        id: first.clone(),
+        entries: vec![CatalogEntry::command("only-a", "甲的")],
+    });
+    switch_session_at(&mut state, "s-b", "/x/other");
+    let second = state.front().clone();
+    state.request(ConsoleRequest::Catalog {
+        id: second,
+        entries: vec![CatalogEntry::command("only-b", "乙的")],
+    });
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+    let text = (0..24)
+        .map(|y| row_text(&frame, y, 120))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("only-b"), "乙的名册：{text}");
+    assert!(!text.contains("only-a"), "甲的名字不混进来：{text}");
+
+    // 切回甲：名册换回它自己那份。
+    state.key(Key::Esc);
+    state.key(Key::Esc);
+    switch_session(&mut state, "01J8ZQ4K7M");
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+    let text = (0..24)
+        .map(|y| row_text(&frame, y, 120))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("only-a"), "甲的名册回来了：{text}");
+    assert!(!text.contains("only-b"), "乙的名字不混进来：{text}");
 }

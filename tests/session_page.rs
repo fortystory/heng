@@ -230,6 +230,7 @@ fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
     switched.session_id = "s-other".to_owned();
     state.request(ConsoleRequest::SwitchSession {
         facts: switched,
+        cwd: std::path::PathBuf::from("/x/heng"),
         events: Vec::new(),
     });
 
@@ -806,5 +807,39 @@ fn a_refused_close_offers_a_clickable_switch() {
             id: SessionId::new("s-b")
         }],
         "点那段可点的 = 把前台切到相邻的那一个"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 只读预览是**每会话**的（票 25）
+// ---------------------------------------------------------------------------
+
+/// 只读预览里会话页的改名被挡住并说一句。
+#[test]
+fn a_read_only_session_blocks_the_rename() {
+    let mut state = fresh();
+    state.request(ConsoleRequest::ReadOnly {
+        id: SessionId::new("01J8ZQ4K7M"),
+        read_only: true,
+    });
+    open_sessions(&mut state, 120, 24);
+    state.key(Key::Char('r'));
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows.contains(&wording::read_only_session()),
+        "只读会话里改名被拒：{rows}"
+    );
+}
+
+/// 普通会话里同一个键照旧进改名。
+#[test]
+fn a_normal_session_still_enters_the_rename() {
+    let mut state = fresh();
+    open_sessions(&mut state, 120, 24);
+    state.key(Key::Char('r'));
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        !rows.contains(&wording::read_only_session()),
+        "普通会话不被只读挡：{rows}"
     );
 }
