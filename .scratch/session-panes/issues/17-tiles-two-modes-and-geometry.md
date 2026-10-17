@@ -1,7 +1,7 @@
 # 17: 平铺两态与几何
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 16
 
@@ -15,14 +15,32 @@ Blocked by: 16
 
 ## 验收
 
-- [ ] 120×40 的 1 / 2 / 3 / 4 格帧各一，格尺寸符合排法。
-- [ ] 94×40 帧：右栏照开、2 格各 32；80×24 帧：回标签态。
-- [ ] 平铺态左栏不画；按 `Ctrl-O` 出回执且布局不变。
-- [ ] 任一格低于 32 列或高度不足时自动回标签态（帧）。
-- [ ] 至少 6 条新的帧断言，`cargo test` 全绿。
+- [x] 120×40 的 1 / 2 / 3 / 4 格帧各一，格尺寸符合排法。
+- [x] 94×40 帧：右栏照开、2 格各 32；80×24 帧：回标签态。
+- [x] 平铺态左栏不画；按 `Ctrl-O` 出回执且布局不变。
+- [x] 任一格低于 32 列或高度不足时自动回标签态（帧）。
+- [x] 至少 6 条新的帧断言，`cargo test` 全绿。
 
 ## 依赖
 
 [16 删主列页签条与提示行改造](16-remove-main-tabs-and-hints.md)。决定见
 [`issues/05-prototype-panes-layout.md`](05-prototype-panes-layout.md) 与
 [`issues/08-grilling-right-rail-keyboard.md`](08-grilling-right-rail-keyboard.md)。
+
+## 落地注记（2026-10-17）
+
+- **几何**：`layout::tile_cells(pool, count)` 是纯函数（1 独占 / 2 左右 / 3 L 形 / 4 上下各
+  二），门槛 `MIN_TILE_WIDTH = 32`、`MIN_TILE_HEIGHT = 10`；不满足就返回 `None`，`draw_frame`
+  每帧判一次并**自动落回标签态**。3 / 4 格「屏高 ≥ 30」是从 `(池高 − 1) / 2 ≥ 10` 推出来的。
+- **平铺区的池子** = `plan(area, rows, sidebar=false, right_wanted)` 的 `transcript`：顶部条
+  之下、状态行之上、右栏之左。所以左栏自动收起、右栏照开、底部三行横跨整个 pane 区，全由
+  既有排版给出，没有第二套算式。
+- **绘制**：`draw_tiles` 每格一条标题行（`◆` / `·` + 标题）+ 该会话自己的对话视图；非焦点格
+  的投影从 `views` 里临时取出、画完放回（窗格折行要 `&mut`）。格间虚线用与 `tile_cells`
+  同一算式。
+- **集合**：`Ctrl-R` 空集合时自动加焦点、焦点不在集合时拒绝、几何放不下时回执。票 19 的
+  「新装载自动加入末尾」提前接上（`Hosted` 的差集），这样帧能造出 2–4 格；满员拒绝与关闭移出
+  留票 19。
+- **1 格排法**在真实流程里不可达（集合非满时末尾总有一个 `[+ 加入]`，即至少 2 格），由
+  `layout::tile_tests` 的纯几何单测覆盖；帧覆盖可达的 2 / 3 / 4 格。
+- 测试：`layout::tile_tests` 5 条 + `render_layout` 6 条帧断言。

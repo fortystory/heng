@@ -148,6 +148,12 @@ pub enum Key {
     /// 视图手势，所以忙闲都生效，也不清举手；只有两个独占键盘的视图（详情覆盖层、历史重放）
     /// 拦得住它。
     CtrlO,
+    /// `Ctrl-R`：标签态与平铺态之间的开关（票 17）。
+    ///
+    /// 与 [`Key::CtrlO`] / [`Key::CtrlV`] 同一档的纯视图手势：忙闲都生效、不清举手；只被
+    /// 详情覆盖层与历史重放拦下（那两层在它之前返回）。平铺态里左栏自动收起，所以它不跟
+    /// 左栏开关抢同一枚键。
+    CtrlR,
     /// `Ctrl-T`：打开模型/档位的选择器（`.scratch/model-switching/spec.md` §7）。
     ///
     /// 它不归任何视图管 —— 与 `Ctrl-Z` 同一档 —— 但**选择器立着时归选择器**（先判它）。
@@ -186,6 +192,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'j' => Some(Key::Newline),
                 'z' => Some(Key::CtrlZ),
                 'o' => Some(Key::CtrlO),
+                'r' => Some(Key::CtrlR),
                 // `Ctrl-M` 不在这儿：它在终端里就是回车（`\r`），落到下面那个 `Enter` 分支
                 // 里去 —— 与「提交」撞车（spec §7）。
                 't' => Some(Key::CtrlT),
@@ -418,6 +425,8 @@ pub struct TuiOptions {
     ///
     /// 它只决定这一次进程开始时那一栏在不在；`Ctrl-O` 照旧改布局意愿、只活在进程内。
     pub sidebar: bool,
+    /// 平铺集合的上限（`[ui] tile_limit`，票 19、26）。
+    pub tile_limit: usize,
 }
 
 /// TUI 渲染器。
@@ -437,6 +446,7 @@ impl Tui {
             cwd,
             reopened,
             sidebar,
+            tile_limit,
         } = self.options;
         // 家目录在这里读一次，不进 `TuiState::new` 的调用方：标题那一层是纯函数，读环境
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
@@ -444,6 +454,7 @@ impl Tui {
         let mut state = TuiState::new(facts, cwd, home);
         // 左栏的启动初值（票 25/27）：`auto` 在 herdr 里收起，`always` / `never` 是显式覆盖。
         state.set_sidebar_wanted(sidebar);
+        state.set_tile_limit(tile_limit);
         // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
         // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
         state.set_right_rail(true);
@@ -2553,8 +2564,12 @@ pub struct TuiState {
     sidebar_wanted: bool,
     /// 平铺集合（票 17、18）：一个显式的有序集合，屏幕上的格按它排。
     ///
-    /// 票 15 先在顶部页签条上用它画集合成员标记；格本身的几何由票 17 接。
+    /// 票 15 先在顶部页签条上用它画集合成员标记；票 17 起它同时决定屏上有几格。
     tiles: Vec<crate::events::SessionId>,
+    /// 这一帧是**平铺态**吗（票 17）。默认标签态；`Ctrl-R` 或顶部条的平铺按钮切。
+    tiled: bool,
+    /// 平铺集合的上限（`[ui] tile_limit`，票 19、26 读它；缺省 4）。
+    tile_limit: usize,
     /// 用户想不想看见**右栏**（票 13 起默认开，票 14 的 `Ctrl-V` 切换）。
     ///
     /// 与 [`TuiState::sidebar_wanted`] 同一档的纯视图意愿：只活在这一次进程里，不落配置、
@@ -3948,6 +3963,8 @@ impl TuiState {
             // 这里留关，真进程在 `Tui::run` 里打开 —— 集成测试的既有帧因此留在旧基线上。
             right_wanted: false,
             tiles: Vec::new(),
+            tiled: false,
+            tile_limit: crate::config::DEFAULT_TILE_LIMIT,
             picker: None,
             notice: None,
             last_session_click: None,
@@ -4038,6 +4055,11 @@ impl TuiState {
             .find(|row| &row.id == id)
             .map(|row| row.title.clone())
             .unwrap_or_else(|| id.as_str().to_owned())
+    }
+
+    /// 平铺集合的上限（票 19、26）：`Tui::run` 从配置读一次，测试也可以直接设。
+    pub fn set_tile_limit(&mut self, limit: usize) {
+        self.tile_limit = limit.clamp(crate::config::MIN_TILE_LIMIT, crate::config::MAX_TILE_LIMIT);
     }
 
     /// 左栏想不想看见（票 26、27 的启动初值；`Ctrl-O` 之后直接改字段）。
@@ -4912,7 +4934,7 @@ impl TuiState {
             // 右端那个开关与 `Ctrl-V` 是同一条动作（票 15）。平铺按钮的动作由票 17 接：
             // 这一版只画出来，点它什么都不做。
             Some(HitAction::ToggleRail) => self.toggle_right_rail(),
-            Some(HitAction::ToggleTiles) => {}
+            Some(HitAction::ToggleTiles) => self.toggle_tiles(),
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
@@ -5974,6 +5996,65 @@ impl TuiState {
     /// 这个位置。
     fn release_trace_keyboard(&mut self) {
         self.trace_keyboard = false;
+    }
+
+    /// 平铺态这一帧要切几格：集合成员 + 末尾那个 `[+ 加入]`（集合没满时）。
+    fn tile_cell_count(&self) -> usize {
+        let add = usize::from(self.tiles.len() < self.tile_limit);
+        self.tiles.len() + add
+    }
+
+    /// 焦点格在这个平铺池里的宽度；焦点不在集合里时 `None`。
+    ///
+    /// 对话视图的源行宽度按**焦点格**重排：同一份投影在标签态与平铺态之间换宽度，走的正是
+    /// 既有的宽度重放（票 24 的保真）。
+    fn focused_tile_width(&self, pool: Rect) -> Option<u16> {
+        let cells = layout::tile_cells(pool, self.tile_cell_count())?;
+        let slot = self.tiles.iter().position(|id| id == &self.front)?;
+        cells.get(slot).map(|rect| rect.width)
+    }
+
+    /// 平铺格这一帧的几何；`None` = 放不下，回标签态。
+    ///
+    /// 池子是**平铺区**：顶部条之下、状态行之上、右栏之左 —— 与 [`draw_tiles`] 画的是同一块。
+    fn tile_cells_now(&self, area: Rect, rows: u16) -> Option<Vec<Rect>> {
+        let panes = layout::plan(area, rows, false, self.right_wanted);
+        layout::tile_cells(panes.transcript, self.tile_cell_count())
+    }
+
+    /// `Ctrl-R` / 顶部条的平铺按钮：标签态 ⇄ 平铺态（票 17）。
+    ///
+    /// 三条边界（票 18）：集合空时进平铺先**自动把焦点加进来**；集合非空而焦点不在里面时
+    /// **拒绝**并给一句；几何放不下时也给一句、不进入。
+    fn toggle_tiles(&mut self) {
+        if self.tiled {
+            self.tiled = false;
+            self.dirty = true;
+            return;
+        }
+        if self.tiles.is_empty() {
+            self.tiles.push(self.front.clone());
+        } else if !self.tiles.contains(&self.front) {
+            self.notice = Some((
+                std::time::Instant::now(),
+                wording::tiles_focus_not_in_set().to_owned(),
+            ));
+            self.dirty = true;
+            return;
+        }
+        let rows = self.bottom_rows(self.area);
+        if self.tile_cells_now(self.area, rows).is_none() {
+            self.notice = Some((
+                std::time::Instant::now(),
+                wording::tiles_too_small().to_owned(),
+            ));
+            self.dirty = true;
+            return;
+        }
+        self.tiled = true;
+        // 左栏在平铺态自动收起：它的键盘归属也一起放下（那一列不画了）。
+        self.release_sidebar_keyboard();
+        self.dirty = true;
     }
 
     /// `Ctrl-V`：右栏开关，**一次按下同时把键盘交给它**（票 14，冻结项 7）。
@@ -7150,7 +7231,18 @@ impl TuiState {
             // 宿主表里装着哪几个（票 29）：会话页那三档标题色。
             ConsoleRequest::Hosted { ids } => {
                 // 顺序 = 宿主表的装载顺序（票 15：顶部页签条按它排，稳定）。
+                let added: Vec<_> = ids
+                    .iter()
+                    .filter(|id| !self.sessions.hosted.contains(id))
+                    .cloned()
+                    .collect();
                 self.sessions.hosted = ids;
+                // 新装载的会话自动加入平铺集合末尾（票 19）：已经在集合里、或集合满了就不动。
+                for id in added {
+                    if self.tiles.len() < self.tile_limit && !self.tiles.contains(&id) {
+                        self.tiles.push(id);
+                    }
+                }
                 self.dirty = true;
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
@@ -7412,7 +7504,20 @@ impl TuiState {
             self.ask_picker(PickerKind::Model);
             return;
         }
+        if key == Key::CtrlR {
+            self.toggle_tiles();
+            return;
+        }
         if key == Key::CtrlO {
+            // 平铺态左栏自动收起（票 17）：「愿不愿意」不归它管，于是只给一句回执。
+            if self.tiled {
+                self.notice = Some((
+                    std::time::Instant::now(),
+                    wording::tiles_sidebar_fixed().to_owned(),
+                ));
+                self.dirty = true;
+                return;
+            }
             self.sidebar_wanted = !self.sidebar_wanted;
             // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
             if !self.sidebar_wanted {
@@ -8552,6 +8657,22 @@ fn wrap_with_lead(body: &str, lead: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// 这一帧的排版：平铺态左栏**自动收起**（票 17），标签态按用户意愿。
+fn plan_for(
+    area: Rect,
+    rows: u16,
+    tiled: bool,
+    questionnaire: bool,
+    state: &TuiState,
+) -> layout::Regions {
+    let sidebar = !tiled && state.sidebar_wanted;
+    if questionnaire {
+        layout::plan_questionnaire(area, rows, sidebar, state.right_wanted)
+    } else {
+        layout::plan(area, rows, sidebar, state.right_wanted)
+    }
+}
+
 /// 画一帧外壳。
 ///
 /// 这是排版被测试所通过的接缝：一个状态进去，一帧固定尺寸的画出来，不涉及任何终端
@@ -8594,16 +8715,25 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）—— 而那条
     // 上限也是问卷自己的：一份题面与选项要一起放下来的问卷，不该被草稿的十行夹住。
     let content_rows = state.bottom_rows(area);
-    let panes = if state.questionnaire().is_some() {
-        layout::plan_questionnaire(area, content_rows, state.sidebar_wanted, state.right_wanted)
+    let questionnaire = state.questionnaire().is_some();
+    // 平铺态的几何放不下就**自动回标签态**（票 17）：这个判断每帧做一次，因为窗口会在两帧
+    // 之间变大变小。
+    let mut tiled = state.tiled;
+    let mut panes = plan_for(area, content_rows, tiled, questionnaire, state);
+    if tiled && layout::tile_cells(panes.transcript, state.tile_cell_count()).is_none() {
+        state.tiled = false;
+        tiled = false;
+        panes = plan_for(area, content_rows, false, questionnaire, state);
+    }
+    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：对话视图按**焦点格**那一条
+    // 排（标签态就是主列），轨迹视图按**右栏**那一条排 —— 票 13 起轨迹的家是右栏。
+    let conversation_width = if tiled {
+        state
+            .focused_tile_width(panes.transcript)
+            .unwrap_or(panes.transcript.width)
     } else {
-        layout::plan(area, content_rows, state.sidebar_wanted, state.right_wanted)
+        panes.transcript_text().width
     };
-    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：对话视图按主列那一条排，
-    // 轨迹视图按**右栏**那一条排 —— 票 13 起轨迹的家是右栏，`trace_width` 不再跟主列宽度
-    // 走（票 24 的「一个宽度来源」）。右栏没画出来时退回主列宽：那时主列轨迹页是唯一还能
-    // 看轨迹的地方（票 16 之前它还在）。
-    let conversation_width = panes.transcript_text().width;
     let trace_width = panes
         .right_trace
         .map_or(conversation_width, |rect| rect.width);
@@ -8621,7 +8751,11 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         ));
     }
     draw_shell(frame, &panes, state, area);
-    draw_transcript(frame, &panes, state);
+    if tiled {
+        draw_tiles(frame, &panes, state);
+    } else {
+        draw_transcript(frame, &panes, state);
+    }
     draw_right_rail(frame, &panes, state);
     draw_status(frame, &panes, state);
     let anchor = draw_bottom(frame, &panes, state);
@@ -10460,6 +10594,100 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     draw_scrollbar(frame, panes.scrollbar(), &state.view.conversation);
     draw_turn_rail(frame, panes, state);
     draw_indicator(frame, text_area, state, Viewport::Conversation);
+}
+
+/// 画平铺态（票 17）：在平铺区里切格，每格一条标题行 + 它自己那个会话的对话视图。
+///
+/// 平铺态每格**只有对话视图**（票 08 第 12 条）—— 轨迹的家仍是右栏。格与格之间一条虚线，
+/// 焦点格的标题前 `◆`、其余 `·`；集合没满时最后一格是 `[+ 加入]`。
+///
+/// 非焦点格的投影从 [`TuiState::views`] 里**临时取出来**画完再放回：绘制要 `&mut` 那个
+/// 窗格（折行缓存），而 `TuiState` 不能同时借出两份。
+fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let Some(cells) = layout::tile_cells(panes.transcript, state.tile_cell_count()) else {
+        return;
+    };
+    draw_tile_dividers(frame, panes.transcript, cells.len());
+    let focus = state.front().clone();
+    let slots: Vec<(Rect, Option<crate::events::SessionId>)> = cells
+        .iter()
+        .enumerate()
+        .map(|(index, rect)| (*rect, state.tiles.get(index).cloned()))
+        .collect();
+    for (rect, id) in slots {
+        let Some(id) = id else {
+            // `[+ 加入]` 格：动作由票 18 接，这一版先把它画出来。
+            paint_text(
+                frame,
+                rect.x + 1,
+                rect.y,
+                wording::TILE_ADD,
+                Style::default().fg(palette::MUTED),
+            );
+            continue;
+        };
+        let focused = id == focus;
+        let title = state.hosted_title(&id);
+        let title = fit_title(&title, rect.width.saturating_sub(4) as usize);
+        let style = if focused {
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette::PLAIN)
+        };
+        paint_text(
+            frame,
+            rect.x + 1,
+            rect.y,
+            &wording::tile_title(focused, &title),
+            style,
+        );
+        let body = Rect::new(
+            rect.x,
+            rect.y + 1,
+            rect.width,
+            rect.height.saturating_sub(1),
+        );
+        if focused {
+            draw_tile_body(frame, body, &mut state.view);
+        } else if let Some(mut view) = state.views.remove(&id) {
+            draw_tile_body(frame, body, &mut view);
+            state.views.insert(id, view);
+        }
+    }
+}
+
+/// 一格的正文：它自己那个会话的对话视图。尾巴按它自己的流来（非焦点格没有「正在想」的
+/// 动画 —�� 那需要全局脉冲，而它只属于焦点）。
+fn draw_tile_body(frame: &mut ratatui::Frame, body: Rect, view: &mut View) {
+    if body.width == 0 || body.height == 0 {
+        return;
+    }
+    let live = TuiState::live_rows(&view.live);
+    let rows = view.conversation.view(body.width, body.height, &live);
+    frame.render_widget(Paragraph::new(rows), body);
+}
+
+/// 格与格之间那几条虚线：与 [`layout::tile_cells`] 同一算式（左半宽、上半高），所以线与
+/// 格矩形的边界永远严丝合缝。
+fn draw_tile_dividers(frame: &mut ratatui::Frame, pool: Rect, cells: usize) {
+    let style = Style::default().fg(palette::CHROME);
+    let left = pool.width.saturating_sub(1) / 2;
+    let top = pool.height.saturating_sub(1) / 2;
+    let buffer = frame.buffer_mut();
+    if cells >= 2 {
+        let x = pool.x + left;
+        for y in pool.y..pool.bottom() {
+            buffer[(x, y)].set_symbol("┆").set_style(style);
+        }
+    }
+    if cells >= 3 {
+        let y = pool.y + top;
+        for x in pool.x + left + 1..pool.right() {
+            buffer[(x, y)].set_symbol("┄").set_style(style);
+        }
+    }
 }
 
 /// 画右栏（票 13）：这一版右栏里只有轨迹一页，所以**顶部没有页面标签** —— 只有一页时不画

@@ -1806,6 +1806,31 @@ pub const TOP_TILING: &str = "▤ 平铺";
 /// 顶部条右端的右栏开关（动作与 `Ctrl-V` 同一条）。
 pub const TOP_RAIL: &str = "▥ 右栏";
 
+/// 平铺态一格的标题行：焦点格 `◆ 标题`，其余 `· 标题`（票 17）。
+///
+/// 状态类一个都不上格标题：忙 / 闲 / 等人类只有两个家 —— 左栏与状态行的全局读数。
+pub fn tile_title(focused: bool, title: &str) -> String {
+    format!("{} {title}", if focused { "◆" } else { "·" })
+}
+
+/// 平铺集合没满时末尾那一格：点它开会话选择器（票 18）。
+pub const TILE_ADD: &str = "[+ 加入]";
+
+/// 平铺几何放不下（票 17）：回标签态，并说一句 —— 否则按 `Ctrl-R` 像没反应。
+pub fn tiles_too_small() -> &'static str {
+    "这个尺寸放不下平铺；回到标签态"
+}
+
+/// 焦点会话不在平铺集合里（票 18）：拒绝进平铺并说清。
+pub fn tiles_focus_not_in_set() -> &'static str {
+    "焦点会话不在平铺集合里"
+}
+
+/// 平铺态按 `Ctrl-O`（票 17）：左栏在平铺态自动收起，不是心愿被吞掉了。
+pub fn tiles_sidebar_fixed() -> &'static str {
+    "平铺态左栏自动收起"
+}
+
 /// 右栏在这个宽度下放不下（票 14）：`Ctrl-V` 只回一句，布局一个字节都不动。
 ///
 /// 与「按了没反应」区分开 —— 那会让人以为是按键没送到。

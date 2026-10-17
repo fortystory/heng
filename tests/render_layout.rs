@@ -10613,3 +10613,191 @@ fn a_hidden_starting_sidebar_leaves_the_frame_without_it() {
         "分隔列也不画"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 平铺两态与几何（票 17）
+// ---------------------------------------------------------------------------
+
+/// 平铺区的池子：顶部条之下、状态行之上、右栏之左。
+fn tile_pool(width: u16, height: u16, right: bool) -> ratatui::layout::Rect {
+    heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        false,
+        right,
+    )
+    .transcript
+}
+
+/// 一格标题行的文本。
+fn tile_heading(frame: &Buffer, cell: ratatui::layout::Rect, width: u16) -> String {
+    cells(frame, cell.y, cell.x, (cell.x + cell.width).min(width))
+}
+
+/// `Ctrl-R` 进平铺态：左栏让位、右栏照开、每格一条标题行，集合没满时末尾是 `[+ 加入]`。
+#[test]
+fn ctrl_r_tiles_the_hosted_sessions() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲会话"),
+            ("s-b", "乙会话"),
+            ("s-c", "丙会话"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells4 = heng::render::layout::tile_cells(pool, 4).expect("三会话 + 加号是四格");
+    assert!(tile_heading(&frame, cells4[0], 120).contains("◆ 甲会话"));
+    assert!(tile_heading(&frame, cells4[1], 120).contains("· 乙会话"));
+    assert!(tile_heading(&frame, cells4[2], 120).contains("· 丙会话"));
+    assert!(tile_heading(&frame, cells4[3], 120).contains(wording::TILE_ADD));
+    // 格与格之间的分隔：一条竖线、一条横线。
+    let left = pool.width.saturating_sub(1) / 2;
+    let top = pool.height.saturating_sub(1) / 2;
+    assert_eq!(frame[(pool.x + left, pool.y)].symbol(), "┆");
+    assert_eq!(frame[(pool.x + left + 1, pool.y + top)].symbol(), "┄");
+    // 平铺态左栏整条让位；右栏照开（分隔线在）。
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(!text.contains("调用量"), "平铺态没有左栏：{text}");
+    assert_eq!(
+        frame[(pool.right(), pool.y)].symbol(),
+        "┆",
+        "右栏的分隔线还在"
+    );
+}
+
+/// 94 列（herdr 的常态）：右栏 28、平铺区 65，两格各 32 宽 —— 票 08 第 13 条的门槛。
+#[test]
+fn at_94_columns_the_tiles_are_32_wide() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(94, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(94, 40, &mut state);
+    let pool = tile_pool(94, 40, true);
+    let cells3 = heng::render::layout::tile_cells(pool, 3).expect("两会话 + 加号是三格");
+    assert_eq!((cells3[0].width, cells3[1].width), (32, 32));
+    assert!(tile_heading(&frame, cells3[0], 94).contains("◆ 甲会话"));
+}
+
+/// 4 个宿主会话、上限 4：满员，末尾**不画** `[+ 加入]`。
+#[test]
+fn a_full_set_draws_four_tiles_and_no_add_cell() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲"),
+            ("s-b", "乙"),
+            ("s-c", "丙"),
+            ("s-d", "丁"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(120, 40, &mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::TILE_ADD),
+        "满员时不画加号格：{text}"
+    );
+    let pool = tile_pool(120, 40, true);
+    let cells4 = heng::render::layout::tile_cells(pool, 4).expect("四格");
+    for (cell, title) in cells4.iter().zip(["甲", "乙", "丙", "丁"]) {
+        assert!(
+            tile_heading(&frame, *cell, 120).contains(title),
+            "四格各有自己的标题：{title}"
+        );
+    }
+}
+
+/// 几何不够（80×24）时按 `Ctrl-R` **自动回标签态**并给一句回执。
+#[test]
+fn a_narrow_screen_falls_back_to_the_tab_state() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(80, 24, &mut state);
+    state.key(Key::CtrlR);
+    let rows = screen(80, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(text.contains("放不下平铺"), "回执说清为什么没进：{text}");
+    assert!(text.contains("调用量"), "仍在标签态（左栏在）：{text}");
+}
+
+/// 4 格需要屏高 ≥ 30：24 行时回标签态。
+#[test]
+fn four_tiles_need_a_taller_screen() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲"),
+            ("s-b", "乙"),
+            ("s-c", "丙"),
+            ("s-d", "丁"),
+        ],
+    );
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlR);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("放不下平铺"), "24 行撑不住四格：{text}");
+    assert!(text.contains("调用量"), "仍在标签态：{text}");
+}
+
+/// 平铺态按 `Ctrl-O`：左栏本来就不画，只给一句回执，布局不动。
+#[test]
+fn ctrl_o_in_the_tiled_state_only_leaves_a_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let before = screen(120, 40, &mut state);
+    state.key(Key::CtrlO);
+    let after = screen(120, 40, &mut state);
+    assert!(
+        after.iter().any(|row| row.contains("左栏自动收起")),
+        "回执在提示行：{after:#?}"
+    );
+    let last = after.len() - 1;
+    assert_eq!(after[..last], before[..last], "除提示行之外布局没变");
+}
+
+/// 把一份宿主表与它的标题推进状态里：顺序就是 `entries` 的顺序（票 15 的排序判据）。
+fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
+    use heng::events::SessionId;
+    use heng::render::ConsoleRequest;
+    use heng::session::listing::{SessionListing, SessionMark, SessionRow};
+    let rows: Vec<SessionRow> = entries
+        .iter()
+        .map(|(id, title)| SessionRow {
+            id: SessionId::new(*id),
+            cwd: Some("/x/heng".to_owned()),
+            title: (*title).to_owned(),
+            group_key: "heng".to_owned(),
+            group: "heng".to_owned(),
+            written: None,
+            broken: false,
+            missing_cwd: false,
+            foreground: false,
+            mark: SessionMark::Idle,
+        })
+        .collect();
+    let ids: Vec<SessionId> = entries.iter().map(|(id, _)| SessionId::new(*id)).collect();
+    state.request(ConsoleRequest::Sessions {
+        listing: SessionListing {
+            rows,
+            total: entries.len(),
+            unreadable: false,
+        },
+    });
+    state.request(ConsoleRequest::Hosted { ids });
+}

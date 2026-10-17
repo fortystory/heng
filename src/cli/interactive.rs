@@ -271,6 +271,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // 左栏的启动初值（票 26、27）：`auto` 只在 TUI 组装这一刻读一次环境，
             // plain 与 headless 不读。
             sidebar: config.sidebar.initial_wanted(crate::herdr::in_herdr(env)),
+            tile_limit: config.tile_limit,
         })
     } else {
         // plain 前端读 stdin；它是行缓冲的，所以没有 raw 模式、也没有按键事件。

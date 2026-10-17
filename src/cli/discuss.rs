@@ -228,6 +228,7 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             reopened: false,
             sidebar: config.sidebar.initial_wanted(crate::herdr::in_herdr(env)),
+            tile_limit: config.tile_limit,
         })
     } else {
         render::spawn_plain_console(port);

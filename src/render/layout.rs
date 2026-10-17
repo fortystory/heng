@@ -793,3 +793,114 @@ const MENU_MIN_WIDTH: u16 = 12;
 /// 它曾经借 [`BORDER_COLUMNS`]，而那个常数说的是**列** —— 四边各一列。行数与列数碰巧都是 2，
 /// 借来用会把两笔账混成一处，于是这里自己写一个名字。
 const MENU_CHROME_ROWS: u16 = 2;
+
+// ---------------------------------------------------------------------------
+// 平铺态：在 `transcript` 那块里切格子（票 17）
+// ---------------------------------------------------------------------------
+
+/// 平铺态一个格的宽度下限（票 08 第 13 条）：标签态主列是 40，平铺态让步到 32 ——
+/// 94 列扣右栏 29 之后主列 65，两格各 32 正好成立。
+pub const MIN_TILE_WIDTH: u16 = 32;
+
+/// 一个格的高度下限：标题行加一小段转录。3 / 4 格要屏高 ≥ 30 就是从这里推出来的
+/// （`(池高 − 1) / 2 ≥ 10` ⇔ 池高 ≥ 21 ⇔ 屏高 ≥ 30）。
+pub const MIN_TILE_HEIGHT: u16 = 10;
+
+/// 平铺态最大的格数：排法只到四格。
+pub const MAX_TILES: usize = 4;
+
+/// 平铺态在 `pool` 里按固定排法切出的格子（1 独占 / 2 左右 / 3 L 形 / 4 上下各二）。
+///
+/// 几何不够（任一格窄于 [`MIN_TILE_WIDTH`] 或矮于 [`MIN_TILE_HEIGHT`]）时返回 `None` ——
+/// 调用方据此**自动回标签态**，而不是把字挤成一条缝（冻结项 4）。
+///
+/// 返回的顺序就是视觉顺序：先左后右、先上后下。焦点格按调用方给的下标认，不在这里判。
+pub fn tile_cells(pool: Rect, cells: usize) -> Option<Vec<Rect>> {
+    if cells == 0 || cells > MAX_TILES {
+        return None;
+    }
+    let (w, h) = (pool.width, pool.height);
+    let left = w.saturating_sub(1) / 2;
+    let right = w.saturating_sub(left + 1);
+    let top = h.saturating_sub(1) / 2;
+    let bottom = h.saturating_sub(top + 1);
+    let rects = match cells {
+        1 => vec![pool],
+        2 => vec![
+            Rect::new(pool.x, pool.y, left, h),
+            Rect::new(pool.x + left + 1, pool.y, right, h),
+        ],
+        3 => vec![
+            Rect::new(pool.x, pool.y, left, h),
+            Rect::new(pool.x + left + 1, pool.y, right, top),
+            Rect::new(pool.x + left + 1, pool.y + top + 1, right, bottom),
+        ],
+        _ => vec![
+            Rect::new(pool.x, pool.y, left, top),
+            Rect::new(pool.x + left + 1, pool.y, right, top),
+            Rect::new(pool.x, pool.y + top + 1, left, bottom),
+            Rect::new(pool.x + left + 1, pool.y + top + 1, right, bottom),
+        ],
+    };
+    rects
+        .iter()
+        .all(|rect| rect.width >= MIN_TILE_WIDTH && rect.height >= MIN_TILE_HEIGHT)
+        .then_some(rects)
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::*;
+
+    fn pool(w: u16, h: u16) -> Rect {
+        Rect::new(0, 0, w, h)
+    }
+
+    #[test]
+    fn one_tile_takes_the_whole_pool() {
+        let cells = tile_cells(pool(120, 31), 1).expect("一格");
+        assert_eq!(cells, vec![pool(120, 31)]);
+    }
+
+    #[test]
+    fn two_tiles_split_left_right_with_a_one_column_gap() {
+        let cells = tile_cells(pool(65, 31), 2).expect("两格");
+        assert_eq!(cells[0].width, 32);
+        assert_eq!(cells[1].width, 32);
+        assert_eq!(cells[0].right() + 1, cells[1].x, "中间空一列分隔");
+    }
+
+    #[test]
+    fn three_tiles_make_an_l() {
+        let cells = tile_cells(pool(65, 31), 3).expect("三格");
+        assert_eq!((cells[0].width, cells[0].height), (32, 31));
+        assert_eq!((cells[1].width, cells[1].height), (32, 15));
+        assert_eq!((cells[2].width, cells[2].height), (32, 15));
+        assert_eq!(cells[1].bottom() + 1, cells[2].y, "右边上下之间空一行");
+    }
+
+    #[test]
+    fn four_tiles_make_a_two_by_two() {
+        let cells = tile_cells(pool(65, 31), 4).expect("四格");
+        for rect in &cells {
+            assert_eq!((rect.width, rect.height), (32, 15));
+        }
+        assert_eq!(cells[0].y, cells[1].y);
+        assert_eq!(cells[2].y, cells[3].y);
+    }
+
+    #[test]
+    fn the_narrow_and_short_cases_fall_back() {
+        // 票 17 的两个门槛：宽度 32 与高度 10；94 列扣右栏 29 之后 65 刚好两格 32。
+        assert!(tile_cells(pool(64, 31), 2).is_none(), "64 列两格各 31 太窄");
+        assert!(tile_cells(pool(65, 31), 2).is_some(), "65 列两格各 32 成立");
+        // 3 / 4 格要屏高 ≥ 30：池高 21 起。
+        assert!(tile_cells(pool(120, 20), 3).is_none(), "池高 20 撑不住三层");
+        assert!(
+            tile_cells(pool(120, 21), 3).is_some(),
+            "池高 21 起三格各 10"
+        );
+        assert!(tile_cells(pool(120, 31), 4).is_some());
+        assert!(tile_cells(pool(120, 31), 5).is_none(), "排法只到四格");
+    }
+}
