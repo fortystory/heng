@@ -10801,3 +10801,272 @@ fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
     });
     state.request(ConsoleRequest::Hosted { ids });
 }
+
+// ---------------------------------------------------------------------------
+// 平铺集合与焦点手势（票 18）、生灭与满员（票 19）
+// ---------------------------------------------------------------------------
+
+/// 模拟循环把前台切到另一个会话（渲染端只发上行，真正改指针的是循环）。
+fn switch_session(state: &mut TuiState, id: &str) {
+    let mut session_facts = facts();
+    session_facts.session_id = id.to_owned();
+    state.request(ConsoleRequest::SwitchSession {
+        facts: session_facts,
+        events: Vec::new(),
+    });
+    while state.replay_pending() {
+        state.replay_batch();
+    }
+}
+
+/// 点焦点格标题行末尾的 `×`。
+fn click_tile_close(state: &mut TuiState, width: u16, height: u16) {
+    let frame = buffer(width, height, state);
+    let pool = tile_pool(width, height, true);
+    let cells = heng::render::layout::tile_cells(pool, tile_count(state)).expect("格子在");
+    let slot = state
+        .tiles()
+        .iter()
+        .position(|id| id == state.front())
+        .expect("焦点在集合里");
+    let cell = cells[slot];
+    let row = cell.y;
+    let text = row_text(&frame, row, width);
+    let at = text.rfind(wording::TILE_CLOSE).expect("焦点格有 ×");
+    let column = heng::render::width::text_columns(&text[..at]) as u16;
+    click(state, column, row);
+}
+
+/// 点末尾的 `[+ 加入]` 格。
+fn click_tile_add(state: &mut TuiState, width: u16, height: u16) {
+    let frame = buffer(width, height, state);
+    let pool = tile_pool(width, height, true);
+    let cells = heng::render::layout::tile_cells(pool, tile_count(state)).expect("格子在");
+    let cell = *cells.last().expect("至少一格");
+    let text = row_text(&frame, cell.y, width);
+    let at = text.find(wording::TILE_ADD).expect("加号格在");
+    let column = heng::render::width::text_columns(&text[..at]) as u16;
+    click(state, column, cell.y);
+}
+
+/// 平铺态这一帧的格数（与渲染同一算式：集合 + 没满时的加号；测试里上限恒为 4）。
+fn tile_count(state: &mut TuiState) -> usize {
+    let members = state.tiles().len();
+    members + usize::from(members < 4)
+}
+
+/// `[+ 加入]` 打开选择器、回车加入：格数 +1，焦点不动（票 18）。
+#[test]
+fn the_add_cell_opens_a_picker_and_adds_a_session() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲会话"),
+            ("s-b", "乙会话"),
+            ("s-c", "丙会话"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    // 先移出焦点，让候选里出现它（票 19 的自动加入会把宿主表的每个新会话都收进来）。
+    click_tile_close(&mut state, 120, 40);
+    let _ = screen(120, 40, &mut state);
+    let before = tile_count(&mut state);
+    click_tile_add(&mut state, 120, 40);
+    let _ = screen(120, 40, &mut state);
+    // 选择器立着：把高亮行回车下去。
+    state.key(Key::Enter);
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(tile_count(&mut state), before + 1, "选中一个会话后格数 +1");
+    // 焦点没跟着换（加入不等于切前台），所以 ◆ 还落在原来那个会话上。
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells = heng::render::layout::tile_cells(pool, tile_count(&mut state)).expect("格子在");
+    assert!(
+        cells
+            .iter()
+            .any(|cell| tile_heading(&frame, *cell, 120).contains("◆ 甲会话")),
+        "焦点仍在甲会话那一格"
+    );
+}
+
+/// 点焦点格的 `×` 移出；逐步收窄到只剩一个时自动回标签态（票 18、19）。
+#[test]
+fn removing_tiles_until_one_left_falls_back_to_tabs() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲会话"),
+            ("s-b", "乙会话"),
+            ("s-c", "丙会话"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    click_tile_close(&mut state, 120, 40);
+    switch_session(&mut state, "s-b");
+    let _ = screen(120, 40, &mut state);
+    click_tile_close(&mut state, 120, 40);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("调用量"), "只剩一格时回到标签态：{text}");
+}
+
+/// 满员（`tile_limit = 4`）时新装载的会话被拒绝并给回执（票 19）。
+#[test]
+fn a_fifth_session_is_refused_with_a_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲"),
+            ("s-b", "乙"),
+            ("s-c", "丙"),
+            ("s-d", "丁"),
+        ],
+    );
+    // 第五个装载进来：集合已满，拒绝。
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲"),
+            ("s-b", "乙"),
+            ("s-c", "丙"),
+            ("s-d", "丁"),
+            ("s-e", "戊"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(&wording::tiles_full(4)), "满员回执：{text}");
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells = heng::render::layout::tile_cells(pool, 4).expect("仍是四格");
+    let titles: Vec<String> = cells
+        .iter()
+        .map(|cell| tile_heading(&frame, *cell, 120))
+        .collect();
+    assert!(
+        titles.iter().all(|title| !title.contains("戊")),
+        "第五个没有进格子：{titles:?}"
+    );
+}
+
+/// `/clear` 翻页：新会话**接替**旧会话在集合里的位置（票 19）。
+#[test]
+fn a_cleared_session_takes_the_old_ones_place_in_the_set() {
+    use heng::events::SessionId;
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    switch_session(&mut state, "01J8ZQ4K7M");
+    // `/clear`：甲关掉、丙开起来（宿主表换了一份，焦点也要换）。
+    host_sessions(&mut state, &[("s-b", "乙会话"), ("s-c", "丙会话")]);
+    state.request(ConsoleRequest::SessionClosed {
+        id: SessionId::new("01J8ZQ4K7M"),
+        empty: false,
+    });
+    switch_session(&mut state, "s-c");
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells = heng::render::layout::tile_cells(pool, tile_count(&mut state)).expect("格子在");
+    // 集合顺序是 [丙, 乙]：丙接替了甲的位置（第一格），乙还在第二格。
+    assert!(
+        tile_heading(&frame, cells[0], 120).contains("丙会话"),
+        "新会话接替旧位：{:?}",
+        tile_heading(&frame, cells[0], 120)
+    );
+    assert!(tile_heading(&frame, cells[1], 120).contains("乙会话"));
+}
+
+/// 空集合按 `Ctrl-R`：自动把焦点加进来（1 会话 + 加号 = 两格），◆ 在它上面。
+#[test]
+fn an_empty_set_adopts_the_focused_session() {
+    let mut state = state_with_roster(&["kimi"]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, false);
+    let cells = heng::render::layout::tile_cells(pool, 2).expect("一会话 + 加号是两格");
+    assert!(
+        tile_heading(&frame, cells[0], 120).contains('◆'),
+        "焦点那一格带 ◆"
+    );
+    assert!(tile_heading(&frame, cells[1], 120).contains(wording::TILE_ADD));
+}
+
+/// 焦点不在集合里时 `Ctrl-R` 被拒绝并给回执（票 18 的第三条边界）。
+#[test]
+fn ctrl_r_refuses_when_the_focus_is_not_in_the_set() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    // 移出焦点（此时集合里只剩乙），再回到标签态 —— 焦点已不在集合里。
+    click_tile_close(&mut state, 120, 40);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("焦点会话不在平铺集合里"),
+        "拒绝并说清：{text}"
+    );
+}
+
+/// `Ctrl-2` 跳到第二格：焦点格换成第二个会话（矩阵里 ◆ 只出现在第二格）。
+#[test]
+fn ctrl_digit_moves_the_focus_to_that_tile() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    state.key(Key::CtrlDigit(2));
+    // 渲染端只发上行；循环那一步用一次切换模拟。
+    switch_session(&mut state, "s-b");
+    let _ = screen(120, 40, &mut state);
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells = heng::render::layout::tile_cells(pool, 3).expect("两会话 + 加号");
+    assert!(
+        tile_heading(&frame, cells[1], 120).contains("◆ 乙会话"),
+        "第二格成了焦点：{:?}",
+        tile_heading(&frame, cells[1], 120)
+    );
+    assert!(
+        !tile_heading(&frame, cells[0], 120).contains('◆'),
+        "第一格不再是焦点"
+    );
+}
+
+/// 新装载的会话出现在集合末尾（票 19）。
+#[test]
+fn a_newly_loaded_session_joins_the_end_of_the_set() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲会话"),
+            ("s-b", "乙会话"),
+            ("s-c", "丙会话"),
+        ],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let cells = heng::render::layout::tile_cells(pool, 4).expect("三会话 + 加号");
+    assert!(
+        tile_heading(&frame, cells[2], 120).contains("丙会话"),
+        "新会话在末尾：{:?}",
+        tile_heading(&frame, cells[2], 120)
+    );
+}

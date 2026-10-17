@@ -1816,6 +1816,19 @@ pub fn tile_title(focused: bool, title: &str) -> String {
 /// 平铺集合没满时末尾那一格：点它开会话选择器（票 18）。
 pub const TILE_ADD: &str = "[+ 加入]";
 
+/// 焦点格标题行末尾那个移出记号（票 18）。
+pub const TILE_CLOSE: &str = "×";
+
+/// `[+ 加入]` 打开的会话选择器的标题（票 18）。
+pub fn picker_title_session() -> &'static str {
+    "平铺加入哪个会话"
+}
+
+/// 平铺集合满员（票 19）：说清上限，并给出下一步。
+pub fn tiles_full(limit: usize) -> String {
+    format!("平铺最多 {limit} 个；先移出一个再加")
+}
+
 /// 平铺几何放不下（票 17）：回标签态，并说一句 —— 否则按 `Ctrl-R` 像没反应。
 pub fn tiles_too_small() -> &'static str {
     "这个尺寸放不下平铺；回到标签态"

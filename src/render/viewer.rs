@@ -87,6 +87,8 @@ pub fn key_bytes(key: &Key) -> Option<Vec<u8>> {
         Key::CtrlP => vec![0x10],
         // `Ctrl-R` 与 `Ctrl-O` 同一档的视图手势；进到 nvim 里就是它的 redo。
         Key::CtrlR => vec![0x12],
+        // `Ctrl-1…4` 是平铺的焦点手势，到不了外来屏幕那一层。
+        Key::CtrlDigit(_) => return None,
         Key::CtrlU => vec![0x15],
         Key::CtrlW => vec![0x17],
         // `Ctrl-D` 在 nvim 里是「向下翻半屏」，比它在前端当「退出」更值钱。
