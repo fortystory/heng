@@ -309,3 +309,4 @@ Status: done（2026-10-17 由 [`map.md`](map.md) 折成 —— 12 张决策票�
   `map.md` 留着当决策记录。
 - **目标帧**：[`prototype/06-final-shell.txt`](prototype/06-final-shell.txt)（标签态与平铺态）；
   形态讨论的帧在 `prototype/04-*.txt` 与 `05-*.txt`。
+

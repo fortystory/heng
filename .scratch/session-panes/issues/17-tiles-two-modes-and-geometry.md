@@ -44,3 +44,5 @@ Blocked by: 16
 - **1 格排法**在真实流程里不可达（集合非满时末尾总有一个 `[+ 加入]`，即至少 2 格），由
   `layout::tile_tests` 的纯几何单测覆盖；帧覆盖可达的 2 / 3 / 4 格。
 - 测试：`layout::tile_tests` 5 条 + `render_layout` 6 条帧断言。
+- 审查后补的帧：`three_tiles_make_an_l_in_the_frame`（2 会话 + 加号 = 3 格 L 形，左格全高、
+  右边上下各半高）。

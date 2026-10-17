@@ -150,6 +150,10 @@ pub enum Key {
     CtrlO,
     /// `Ctrl-1`…`Ctrl-4`：直接跳到平铺态的第 N 格（票 18）。不写进提示表 —— 它是加速档。
     CtrlDigit(u8),
+    /// `Ctrl-←` / `Ctrl-→`：标签态按宿主表顺序换标签（spec 决定 15/18）。
+    CtrlLeft,
+    /// `Ctrl-→`：见 [`Key::CtrlLeft`]。
+    CtrlRight,
     /// `Ctrl-R`：标签态与平铺态之间的开关（票 17）。
     ///
     /// 与 [`Key::CtrlO`] / [`Key::CtrlV`] 同一档的纯视图手势：忙闲都生效、不清举手；只被
@@ -204,6 +208,15 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'v' => Some(Key::CtrlV),
                 _ => None,
             };
+        }
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        // 方向键带 Ctrl：标签态换标签（spec 决定 15/18）。不带 Ctrl 的左右仍是行编辑的光标
+        // 移动，所以只在有修饰时接。
+        match key.code {
+            KeyCode::Left => return Some(Key::CtrlLeft),
+            KeyCode::Right => return Some(Key::CtrlRight),
+            _ => {}
         }
     }
     // `Shift+Enter` 与 `Ctrl-J` 是同一个动作。它只在支持键盘增强协议的终端里到得了这里 ——
@@ -461,7 +474,8 @@ impl Tui {
         // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
         // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
         state.set_right_rail(true);
-        state.take_trace_keyboard();
+        // 注意：这里**不**把键盘交给右栏。右栏默认开着，但键盘一开始仍归输入区
+        // （票 14/16/21：`Ctrl-V` 或点右栏才交过去；`TuiState::new` 里 `trace_keyboard` 是 false）。
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -6165,6 +6179,24 @@ impl TuiState {
         self.dirty = true;
     }
 
+    /// `Ctrl-左右`：标签态按宿主表顺序换到相邻会话（spec 决定 15/18）。
+    ///
+    /// 与点顶部标签同一条路：渲染层只发上行 `OpenSession`，前台指针归循环。
+    fn switch_tab(&mut self, forward: bool) {
+        let count = self.sessions.hosted.len();
+        if count < 2 {
+            return;
+        }
+        let Some(index) = self.sessions.hosted.iter().position(|id| id == &self.front) else {
+            return;
+        };
+        let step = if forward { 1 } else { count - 1 };
+        let next = self.sessions.hosted[(index + step) % count].clone();
+        if next != self.front {
+            self.events.push(FrontEndEvent::OpenSession { id: next });
+        }
+    }
+
     /// 换到平铺态的第 `slot` 格（0 起数）：`Ctrl-1…4` 与点格都走这里。
     ///
     /// 平铺态换焦点只改前台指针，几何一个像素不动（票 17 决定 9）。
@@ -6244,7 +6276,14 @@ impl TuiState {
         };
         self.tiles.remove(position);
         if self.tiles.len() <= 1 {
+            // 收窄到只剩一个：回标签态，**焦点也给剩下的那一个**（票 18 的「给下一个」在
+            // 最后一格上同样成立）。
             self.tiled = false;
+            if let Some(last) = self.tiles.first().cloned()
+                && last != self.front
+            {
+                self.events.push(FrontEndEvent::OpenSession { id: last });
+            }
         } else if let Some(next) = self
             .tiles
             .get(position.min(self.tiles.len().saturating_sub(1)))
@@ -7762,8 +7801,19 @@ impl TuiState {
             self.ask_picker(PickerKind::Model);
             return;
         }
+        if matches!(key, Key::CtrlLeft | Key::CtrlRight) {
+            // 标签态按宿主表顺序换标签（spec 决定 15/18）；平铺态的焦点手势是 `Ctrl-1…4`
+            // 与点格，`Ctrl-左右` 不在这里抢。
+            if !self.tiled {
+                self.switch_tab(key == Key::CtrlRight);
+            }
+            return;
+        }
         if let Key::CtrlDigit(slot) = key {
-            self.focus_tile((slot as usize).saturating_sub(1));
+            // 它只在平铺态是手势（票 18）：标签态按下去什么都不该发生。
+            if self.tiled {
+                self.focus_tile((slot as usize).saturating_sub(1));
+            }
             return;
         }
         if key == Key::CtrlR {
@@ -8996,9 +9046,11 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     } else {
         panes.transcript_text().width
     };
+    // 右栏关着的时候轨迹不在屏幕上：**宽度不跟着对话视图走**，保持它上一次那一档 ——
+    // 否则两态切换（50 ↔ 45）会顺带重放一份看不见的轨迹（票 24 的「两态不重放」）。
     let trace_width = panes
         .right_trace
-        .map_or(conversation_width, |rect| rect.width);
+        .map_or(state.view.trace_width, |rect| rect.width);
     // 前缀分档量的是轨迹那一栏的宽度（票 13）：40 档带方括号、28 档去掉。
     state.view.trace_tier_width = panes.right_rail.map_or(panes.main.width, |rect| rect.width);
     state.rerender_if_width_changed(conversation_width, trace_width);
@@ -10894,6 +10946,8 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     let Some(cells) = layout::tile_cells(panes.transcript, state.tile_cell_count()) else {
         return;
     };
+    // 平铺帧没有「标签态那一块对话区」：指针分派只认真画出来的东西。
+    state.conversation_rect = None;
     draw_tile_dividers(frame, panes.transcript, &cells);
     let focus = state.front().clone();
     let slots: Vec<(usize, Rect, Option<crate::events::SessionId>)> = cells
@@ -10945,7 +10999,14 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
                 .regions
                 .push(Rect::new(close_x, rect.y, 2, 1), HitAction::TileRemove);
         }
-        state.regions.push(rect, HitAction::Tile(index));
+        // 焦点格的正文让给文本层（拖选 / 可点链接），所以只有标题行是「换焦点」的命中；
+        // 非焦点格整格可点 —— 点了就换焦点（票 18）。
+        let hit = if focused {
+            Rect::new(rect.x, rect.y, rect.width, 1)
+        } else {
+            rect
+        };
+        state.regions.push(hit, HitAction::Tile(index));
         let body = Rect::new(
             rect.x,
             rect.y + 1,
@@ -10953,9 +11014,10 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             rect.height.saturating_sub(1),
         );
         if focused {
-            draw_tile_body(frame, body, &mut state.view);
+            draw_focused_tile_body(frame, body, state);
         } else if let Some(mut view) = state.views.remove(&id) {
-            draw_tile_body(frame, body, &mut view);
+            let rows = draw_tile_body(frame, body, &mut view);
+            note_rows(state, body, &rows, &[], &[]);
             state.views.insert(id, view);
         }
     }
@@ -10963,12 +11025,36 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
 
 /// 一格的正文：它自己那个会话的对话视图。尾巴按它自己的流来（非焦点格没有「正在想」的
 /// 动画 —— 那需要全局脉冲，而它只属于焦点）。
-fn draw_tile_body(frame: &mut ratatui::Frame, body: Rect, view: &mut View) {
+///
+/// 返回画出来的行，好让调用方记进屏幕文本层（拖选要按区域取文本）。
+fn draw_tile_body(frame: &mut ratatui::Frame, body: Rect, view: &mut View) -> Vec<Line<'static>> {
     if body.width == 0 || body.height == 0 {
-        return;
+        return Vec::new();
     }
     let live = TuiState::live_rows(&view.live);
     let rows = view.conversation.view(body.width, body.height, &live);
+    frame.render_widget(Paragraph::new(rows.clone()), body);
+    rows
+}
+
+/// 焦点格的正文：与标签态的主列那一份走同一套（可点链接、拖选、指示器），只是画在格里。
+///
+/// 焦点格是**平铺态里前台那一份**，所以 `conversation_rect` 指向它 —— 指针的链接热区与
+/// 拖选区域都按它算（票 22 的验收「拖选不跨格」在这里才真正落在焦点格的矩形上）。
+fn draw_focused_tile_body(frame: &mut ratatui::Frame, body: Rect, state: &mut TuiState) {
+    if body.width == 0 || body.height == 0 {
+        return;
+    }
+    let live = TuiState::live_rows(&state.view.live);
+    let mut rows = state.view.conversation.view(body.width, body.height, &live);
+    let folded = soft_folds(
+        &state.view.conversation,
+        state.view.conversation.top(),
+        rows.len(),
+    );
+    let hotspots = links::mark(&mut rows, &folded);
+    note_rows(state, body, &rows, &folded, &hotspots);
+    state.conversation_rect = Some(body);
     frame.render_widget(Paragraph::new(rows), body);
 }
 

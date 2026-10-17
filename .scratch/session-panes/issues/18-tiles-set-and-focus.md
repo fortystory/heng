@@ -39,3 +39,6 @@ Blocked by: 17
   几何。测试里用一次模拟的 `SwitchSession` 补上循环那一步。
 - 边界三条全在：空集合自动加焦点、焦点不在集合拒绝并回执、移出到只剩一个回标签。
 - 测试：`render_layout` 6 条（加号 +1、移出收窄、Ctrl-2、空集合、拒绝、加人后焦点不变）。
+- 审查后修的边界：移出到**只剩一个**时不只是回标签态，**焦点也给剩下的那一个**（上行
+  `OpenSession`）—— `removing_until_one_left_hands_the_focus_to_the_survivor` 钉住。
+- `Ctrl-1…4` 只在平铺态是手势（标签态按下去什么都不发生，`ctrl_digits_only_work_in_the_tiled_state`）。

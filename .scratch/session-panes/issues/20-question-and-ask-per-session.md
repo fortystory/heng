@@ -35,3 +35,6 @@ Blocked by: 19
 - `Ctrl-C` / `Esc` 的语义没动（它们读焦点那一份 pending，既有问卷测试覆盖）。
 - 测试：`render_layout` 的 `each_session_keeps_its_own_pending_question`（两格各一份题面、切回
   原样、作答只回原会话、另一个的通道不受影响）。
+- 覆盖强度说明：现有帧断言用**权限门**（同为 `Pending::Loop` 的等人类）覆盖「切走切回题面与
+  回复通道」；问卷的「已填作答」是 `Questionnaire` 的内部状态，未单独构造断言 —— 两份 pending
+  搬移的是同一个 `Pending` 值，这条差额在渲染层没有额外分支。

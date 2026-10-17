@@ -42,3 +42,5 @@ Blocked by: —
 
 无（可以立刻开始）。决定与依据在 [`issues/08-grilling-right-rail-keyboard.md`](08-grilling-right-rail-keyboard.md)
 与 [`issues/11-grilling-limits-config-and-herdr.md`](11-grilling-limits-config-and-herdr.md)。
+- - 票 16 的「删主列页签条」那一提交曾把这六条右栏测试一起删掉（误删）；本轮审查后恢复
+  （`git show 33f7e6a^` 取回，312 条全绿）。

@@ -11516,3 +11516,556 @@ fn a_closed_session_leaves_the_tile_set() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("调用量"), "标签态的左栏回来了：{text}");
 }
+
+// ---------------------------------------------------------------------------
+// 标签态与平铺态的键盘手势（spec 决定 15/18；Spec 轴审查补的缺口）
+// ---------------------------------------------------------------------------
+
+/// `Ctrl-→` / `Ctrl-←` 在标签态按宿主表顺序换标签（上行 `OpenSession`）。
+#[test]
+fn ctrl_left_and_right_walk_the_tabs() {
+    use heng::render::FrontEndEvent;
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlRight);
+    let events = state.take_events();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, FrontEndEvent::OpenSession { id } if id.as_str() == "s-b")
+        ),
+        "右切到下一个标签：{events:?}"
+    );
+    state.key(Key::CtrlLeft);
+    let events = state.take_events();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, FrontEndEvent::OpenSession { id } if id.as_str() == "s-b")
+        ),
+        "左切按宿主表顺序回绕：{events:?}"
+    );
+}
+
+/// `Ctrl-1…4` 只在平铺态是手势；标签态按下去什么都不发生（票 18 的边界）。
+#[test]
+fn ctrl_digits_only_work_in_the_tiled_state() {
+    use heng::render::FrontEndEvent;
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlDigit(2));
+    assert!(state.take_events().is_empty(), "标签态没有跳格这回事");
+
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlDigit(2));
+    let events = state.take_events();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, FrontEndEvent::OpenSession { id } if id.as_str() == "s-b")
+        ),
+        "平铺态跳第二格：{events:?}"
+    );
+}
+
+/// 焦点格的正文进了屏幕文本层：在格内拖选能复制到它自己的话（票 22 的拖选按区域走）。
+#[test]
+fn dragging_in_the_focused_tile_copies_its_text() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    switch_session(&mut state, "01J8ZQ4K7M");
+    state.apply(message(1, "甲说的话", None));
+    switch_session(&mut state, "s-b");
+    state.apply(message(2, "乙说的话", None));
+    switch_session(&mut state, "01J8ZQ4K7M");
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let tiles = heng::render::layout::tile_cells(pool, 3).expect("两会话 + 加号是三格");
+    let cell = tiles[0];
+    let row = (cell.y + 1..cell.bottom())
+        .find(|y| cells(&frame, *y, cell.x, (cell.x + cell.width).min(120)).contains("甲说的话"))
+        .expect("焦点格里有那句话");
+    let text = cells(&frame, row, cell.x, (cell.x + cell.width).min(120));
+    let at = text.find("甲").expect("文本在");
+    let start = cell.x + heng::render::width::text_columns(&text[..at]) as u16;
+    drag(
+        &mut state,
+        (start, row),
+        (cell.right().saturating_sub(1), row),
+    );
+    let expected = heng::render::selection::osc52("甲说的话");
+    assert_eq!(
+        state.take_clipboard().as_deref(),
+        Some(expected.as_str()),
+        "复制到的是焦点格那一行，隔壁格的字不进来"
+    );
+}
+
+#[test]
+fn the_right_rail_sits_beside_the_main_column_at_120_columns() {
+    use heng::render::layout;
+    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+    let panes = layout::plan(area, 1, true, true);
+    let sidebar = panes.sidebar.expect("左栏在");
+    let rail = panes.right_rail.expect("右栏在");
+    assert_eq!(sidebar.width, 40);
+    assert_eq!(panes.main.width, 50);
+    assert_eq!(rail.width, 28);
+    assert_eq!(rail.x, panes.main.right() + 1);
+    assert_eq!(rail.y, panes.main.y);
+    assert_eq!(rail.height, panes.main.height);
+    assert_eq!(panes.right_divide, Some(panes.main.right()));
+    for bottom in [panes.status, panes.input, panes.hints] {
+        assert!(
+            bottom.right() <= panes.main.right(),
+            "底部三行不跨右栏：{bottom:?}"
+        );
+    }
+    // 右栏的轨迹区在横带之下；28 档的横带只有一行三态版那两行。
+    assert_eq!(
+        panes.right_band_kind,
+        heng::render::timeline::BandKind::Compact
+    );
+    assert_eq!(panes.right_band.expect("横带在").height, 2);
+    let trace = panes.right_trace.expect("轨迹区在");
+    assert_eq!(trace.y, rail.y + 2);
+    assert_eq!(trace.height, rail.height - 2);
+}
+
+/// herdr 的常态：94 列、左栏收起（票 27 之后默认关），右栏仍是 28 档、主列 65。
+#[test]
+fn the_right_rail_keeps_28_columns_at_94_columns_with_the_sidebar_hidden() {
+    use heng::render::layout;
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 94, 40), 1, false, true);
+    assert!(panes.sidebar.is_none());
+    assert_eq!(panes.main.width, 65);
+    assert_eq!(panes.right_rail.expect("右栏在").width, 28);
+}
+
+/// 右栏取宽档（40）的门槛：≥ 122 列；121 列还是 28 档（再宽一档主列就跌破 40）。
+#[test]
+fn the_right_rail_takes_the_wide_tier_only_from_122_columns() {
+    use heng::render::layout;
+    let wide = layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
+    assert_eq!(wide.right_rail.expect("右栏在").width, 40);
+    assert_eq!(wide.main.width, 40);
+    let narrow = layout::plan(ratatui::layout::Rect::new(0, 0, 121, 40), 1, true, true);
+    assert_eq!(narrow.right_rail.expect("右栏在").width, 28);
+}
+
+/// 左栏在窄档（28）时，右栏在 98 列上还活得下来，97 列就让位 —— 主列的地板是 40。
+#[test]
+fn the_right_rail_gives_way_below_98_columns_when_the_sidebar_is_narrow() {
+    use heng::render::layout;
+    let hidden = layout::plan(ratatui::layout::Rect::new(0, 0, 97, 40), 1, true, true);
+    assert!(hidden.right_rail.is_none(), "97 列时右栏隐藏");
+    assert_eq!(hidden.main.width, 68, "主列拿走右栏让出的那些列");
+    let visible = layout::plan(ratatui::layout::Rect::new(0, 0, 98, 40), 1, true, true);
+    assert_eq!(visible.right_rail.expect("右栏在").width, 28);
+    assert_eq!(visible.main.width, 40);
+}
+
+/// 右栏 28 档画轨迹：**不画时刻、不带用量**（缩略索引），组头短写、不带虚线。
+#[test]
+fn the_narrow_right_rail_draws_an_index_without_stamps_or_usage() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 40), 1, true, true);
+    let rail = panes.right_rail.expect("右栏在");
+    let (frame, _) = framed(120, 40, &mut state);
+    let text: Vec<String> = (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect();
+    let joined = text.join("\n");
+    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
+    let header = text
+        .iter()
+        .find(|row| row.contains("回合 1"))
+        .unwrap_or_else(|| panic!("组头也在右栏里：{joined}"));
+    assert!(!header.contains('┄'), "组头不再并进虚线（票 13）：{header}");
+    assert!(
+        !joined.contains("in=") && !joined.contains("out="),
+        "右栏里不带行尾用量：{joined}"
+    );
+    for row in text.iter().filter(|row| !row.trim().is_empty()) {
+        assert!(
+            !row.starts_with(|c: char| c.is_ascii_digit()),
+            "28 档不画行首时刻：{row}"
+        );
+    }
+    // 时间轴只画 Compact 那一档：没有泳道标签。
+    let band = panes.right_band.expect("横带在");
+    let band_text: Vec<String> = (band.y..band.y + band.height)
+        .map(|y| cells(&frame, y, band.x, band.x + band.width))
+        .collect();
+    assert!(
+        !band_text
+            .iter()
+            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
+        "右栏的时间轴只有一行三态版：{band_text:#?}"
+    );
+}
+
+/// 右栏 40 档：保住九列时刻、**不画行尾用量**。
+#[test]
+fn the_wide_right_rail_keeps_the_stamps_and_drops_the_usage() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
+    let rail = panes.right_rail.expect("右栏在");
+    assert_eq!(rail.width, 40);
+    let (frame, _) = framed(122, 40, &mut state);
+    let text: Vec<String> = (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect();
+    let joined = text.join("\n");
+    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
+    assert!(
+        text.iter()
+            .any(|row| row.starts_with(|c: char| c.is_ascii_digit())),
+        "40 档保留行首那九列时刻：{joined}"
+    );
+    assert!(
+        !joined.contains("in=") && !joined.contains("out="),
+        "40 档也弃行尾用量：{joined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 右栏开关与键盘层序（票 14）
+// ---------------------------------------------------------------------------
+
+/// 右栏里那些行：几何取自 `plan(..., right_wanted=true)`，与绘制共用同一份排版。
+fn rail_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let panes = heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    );
+    let Some(rail) = panes.right_rail else {
+        return Vec::new();
+    };
+    let frame = buffer(width, height, state);
+    (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect()
+}
+
+/// 右栏在屏幕上的分隔列。
+fn right_divide(width: u16, height: u16) -> u16 {
+    heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    )
+    .right_divide
+    .expect("右栏在")
+}
+
+/// `Ctrl-V` 一次按下 = 开栏 + 把键盘交给右栏；再按 = 交还键盘 + 关栏。
+#[test]
+fn ctrl_v_opens_the_right_rail_and_hands_it_the_keyboard() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let divide = right_divide(120, 24);
+
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "起步时键盘在输入区");
+    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏还没画");
+    assert!(
+        conversation_rows(&mut state, 120, 24)
+            .join("\n")
+            .contains("问题"),
+        "起步是对话页"
+    );
+
+    state.key(Key::CtrlV);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "开栏同时把键盘交给右栏");
+    assert_eq!(cells(&frame, 2, divide, divide + 1), "┆", "右栏画出来了");
+    let rail = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(rail.contains("调用 bash"), "轨迹在右栏里：{rail}");
+    // 主列页签没有被它翻动（票 14 推翻了「Ctrl-V 翻两页」）：对话内容留在主列里，
+    // 而过程行只在右栏。主列的右缘要按右栏开着时的几何取（`conversation_rows` 的常量切片
+    // 会把右栏也算进去）。
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let frame = buffer(120, 24, &mut state);
+    let conversation: String = (0..24)
+        .map(|y| cells(&frame, y, panes.main.x, panes.main.right()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        conversation.contains("问题"),
+        "主列仍是对话页：{conversation}"
+    );
+    assert!(
+        !conversation.contains("调用 bash"),
+        "过程行不在主列：{conversation}"
+    );
+
+    state.key(Key::CtrlV);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "再按一次交还键盘");
+    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏收起来了");
+}
+
+/// 点输入区 = 交还键盘但右栏留着 —— 与「开栏」那一下的两个后果故意不同。
+#[test]
+fn clicking_the_input_hands_the_keyboard_back_and_keeps_the_rail() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlV);
+    let divide = right_divide(120, 24);
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let _ = screen(120, 24, &mut state);
+    click(&mut state, panes.input.x + 2, panes.input.y + 1);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "键盘回到输入区");
+    assert_eq!(
+        cells(&frame, 2, divide, divide + 1),
+        "┆",
+        "右栏留在了屏幕上"
+    );
+}
+
+/// 宽度放不下右栏时 `Ctrl-V` 只回一句，布局一个字节都不动。
+#[test]
+fn ctrl_v_on_a_narrow_screen_only_leaves_a_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    let _ = screen(80, 24, &mut state);
+    let before = screen(80, 24, &mut state);
+    state.key(Key::CtrlV);
+    let after = screen(80, 24, &mut state);
+    assert!(
+        after.iter().any(|row| row.contains("右栏放不下")),
+        "回执在提示行：{after:#?}"
+    );
+    let last = after.len() - 1;
+    assert_eq!(
+        after[..last],
+        before[..last],
+        "除提示行之外布局没变：{before:#?} → {after:#?}"
+    );
+}
+
+/// 右栏里的 `Esc` 一次退一层：清选中 → 交还键盘（搜索与过滤各占一层，没有时不占）。
+#[test]
+fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlV);
+    let divide = right_divide(120, 24);
+    let _ = screen(120, 24, &mut state);
+
+    state.key(Key::Down);
+    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "选中一块时键盘仍在右栏");
+    state.key(Key::Esc);
+    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "清掉选中之后键盘还在右栏");
+    state.key(Key::Esc);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "第二下把键盘交还输入区");
+    assert_eq!(
+        cells(&frame, 2, divide, divide + 1),
+        "┆",
+        "右栏还开着 —— Esc 退的是键盘，不是栏"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 顶部页签条（票 15）
+// ---------------------------------------------------------------------------
+
+/// 120×40：第 0 行是标签、第 1 行是一条横跨整屏的虚线；左栏与右栏都从第 2 行起。
+#[test]
+fn the_top_tabs_strip_lists_every_hosted_session() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "会话 A"),
+            ("s-b", "会话 B"),
+            ("s-c", "会话 C"),
+        ],
+    );
+    let frame = buffer(120, 40, &mut state);
+    let top = row_text(&frame, 0, 120);
+    for title in ["会话 A", "会话 B", "会话 C"] {
+        assert!(top.contains(title), "标签上写着 {title}：{top}");
+    }
+    assert!(top.contains('◆'), "焦点带 `◆`：{top}");
+    assert!(
+        top.contains("平铺") && top.contains("右栏"),
+        "右端两个按钮：{top}"
+    );
+    assert_eq!(
+        row_text(&frame, 1, 120).trim_end_matches(' '),
+        "┄".repeat(120),
+        "第 1 行是一条横跨整屏的虚线"
+    );
+    // 三块都从第 2 行起：两条竖分隔线都在第 2 行上。
+    assert_eq!(frame[(40, 2)].symbol(), "┆", "左栏分隔线从顶部条之下起");
+    assert_eq!(frame[(91, 2)].symbol(), "┆", "右栏分隔线也从第 2 行起");
+}
+
+/// 状态类不上标签：同一个会话在跑，标签一个字都不变（等人类由状态行承担）。
+#[test]
+fn the_top_tabs_never_show_a_sessions_state() {
+    use heng::render::ConsoleRequest;
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A"), ("s-b", "会话 B")]);
+    let before = row_text(&buffer(120, 40, &mut state), 0, 120);
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
+    let after = row_text(&buffer(120, 40, &mut state), 0, 120);
+    assert_eq!(before, after, "跑起来不往标签上加任何状态字形");
+    assert!(!after.contains("跑"), "标签里没有状态字：{after}");
+    assert!(!after.contains("等"), "标签里没有等人类：{after}");
+}
+
+/// 放不下的标签从尾部收成 `+N`，靠右端；`+N` 不可点。
+#[test]
+fn the_top_tabs_fold_the_overflow_into_a_plus_n() {
+    let mut state = state_with_roster(&["kimi"]);
+    let ids: Vec<String> = (0..8).map(|index| format!("s-{index}")).collect();
+    let mut entries: Vec<(&str, &str)> = vec![("01J8ZQ4K7M", "会话零号")];
+    entries.extend(ids.iter().enumerate().map(|(index, id)| {
+        (
+            id.as_str(),
+            if index % 2 == 0 {
+                "会话甲甲"
+            } else {
+                "会话乙乙"
+            },
+        )
+    }));
+    host_sessions(&mut state, &entries);
+    let frame = buffer(120, 40, &mut state);
+    let top = row_text(&frame, 0, 120);
+    assert!(top.contains("+"), "溢出收成 `+N`：{top}");
+    assert!(top.contains("会话零号"), "排在前面的标签留着：{top}");
+
+    // `+N` 不可点：点它前后屏幕完全一样（它没有进命中表）。
+    let x = top.find('+').expect("`+N` 在行里") as u16;
+    let before = screen(120, 40, &mut state);
+    click(&mut state, x, 0);
+    let after = screen(120, 40, &mut state);
+    assert_eq!(before, after, "`+N` 点了什么都不发生");
+}
+
+/// 屏高 < 20 时顶部条收成一行、没有那条虚线；到 20 行恢复两行。
+#[test]
+fn the_top_tabs_shrink_to_one_row_on_a_short_screen() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A")]);
+    let short = screen(120, 19, &mut state);
+    assert!(short[0].contains("会话 A"), "标签还在第 0 行：{short:#?}");
+    assert!(
+        !short[1].starts_with('┄'),
+        "矮屏上不画顶部条那条虚线：{:?}",
+        short[1]
+    );
+
+    let tall = screen(120, 20, &mut state);
+    assert!(tall[0].contains("会话 A"), "标签还在第 0 行：{tall:#?}");
+    assert!(
+        tall[1].starts_with('┄'),
+        "20 行起是两行顶部条：{:?}",
+        tall[1]
+    );
+}
+
+/// 3 格是 L 形（票 17 的排法）：左边一格全高、右边上下两格。
+#[test]
+fn three_tiles_make_an_l_in_the_frame() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let tiles = heng::render::layout::tile_cells(pool, 3).expect("两会话 + 加号是三格");
+    assert!(tile_heading(&frame, tiles[0], 120).contains("◆ 甲会话"));
+    assert!(tile_heading(&frame, tiles[1], 120).contains("· 乙会话"));
+    assert!(tile_heading(&frame, tiles[2], 120).contains(wording::TILE_ADD));
+    assert_eq!(tiles[0].height, pool.height, "左边一格全高");
+    assert_eq!(
+        tiles[1].height + tiles[2].height + 1,
+        pool.height,
+        "右边上下两格加中间一条线"
+    );
+}
+
+/// 移出到只剩一个：回标签态，**焦点给剩下的那一个**（票 18 的「给下一个」）。
+#[test]
+fn removing_until_one_left_hands_the_focus_to_the_survivor() {
+    use heng::render::FrontEndEvent;
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    click_tile_close(&mut state, 120, 40);
+    assert!(!state.tiled(), "只剩一个就回标签态");
+    let events = state.take_events();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, FrontEndEvent::OpenSession { id } if id.as_str() == "s-b")
+        ),
+        "焦点交给幸存的那个会话：{events:?}"
+    );
+}
+
+/// 右栏关着时两态往返**不**重放轨迹：轨迹宽度不跟着对话视图走（票 24 的边界）。
+#[test]
+fn two_modes_do_not_replay_the_trace_when_the_rail_is_closed() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "一句话", None));
+    let _ = screen(120, 40, &mut state);
+    let replays = state.trace_replays();
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(
+        state.trace_replays(),
+        replays,
+        "右栏关着时两态往返不动轨迹缓存"
+    );
+}

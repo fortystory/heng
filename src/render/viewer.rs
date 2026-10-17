@@ -89,6 +89,9 @@ pub fn key_bytes(key: &Key) -> Option<Vec<u8>> {
         Key::CtrlR => vec![0x12],
         // `Ctrl-1…4` 是平铺的焦点手势，到不了外来屏幕那一层。
         Key::CtrlDigit(_) => return None,
+        // `Ctrl-←` / `Ctrl-→` 在 nvim 里是「按词移动」，照原样发过去。
+        Key::CtrlLeft => b"\x1b[1;5D".to_vec(),
+        Key::CtrlRight => b"\x1b[1;5C".to_vec(),
         Key::CtrlU => vec![0x15],
         Key::CtrlW => vec![0x17],
         // `Ctrl-D` 在 nvim 里是「向下翻半屏」，比它在前端当「退出」更值钱。

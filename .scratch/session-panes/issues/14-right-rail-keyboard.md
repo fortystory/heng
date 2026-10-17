@@ -39,3 +39,5 @@ Blocked by: 13
   判据是 `(right_wanted || main_tab == Trace) && trace_keyboard`。
 - **被推翻的测试**：`ctrl_v_flips_the_main_tab_both_ways` 删除；`the_trace_page_hints_at_its_own_keys`
   里「Ctrl-V 切回对话页」改成点主列页签 —— 提示行判据本身由票 16 改。
+- - 票 16 的「删主列页签条」那一提交曾把这几条 `Ctrl-V` 测试一起删掉（误删）；本轮审查后
+  恢复（含「再按一次交还并关栏」与 `Esc` 层序）。
