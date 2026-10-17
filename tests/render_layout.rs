@@ -11494,3 +11494,25 @@ fn the_tile_limit_caps_the_set_and_puts_the_limit_in_the_receipt() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("平铺最多 2 个"), "回执点名上限：{text}");
 }
+
+/// 关闭一个会话：它在平铺集合里的那一格消失，集合顺序保持（票 19）。
+#[test]
+fn a_closed_session_leaves_the_tile_set() {
+    use heng::events::SessionId;
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    assert_eq!(state.tiles().len(), 2);
+    state.request(ConsoleRequest::SessionClosed {
+        id: SessionId::new("s-b"),
+        empty: false,
+    });
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(state.tiles(), &[SessionId::new("01J8ZQ4K7M")], "乙的格没了");
+    // 只剩一个会话：按票 19 的收窄规则自动回标签态。
+    assert!(!state.tiled(), "只剩一格就回标签态");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("调用量"), "标签态的左栏回来了：{text}");
+}
