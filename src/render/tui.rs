@@ -1180,7 +1180,7 @@ impl View {
             let width = self.trace_text_width();
             let style = prefix_style(Viewport::Trace, self.trace_tier_width);
             // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
-            let mut lines = paint_block(
+            let lines = paint_block(
                 block,
                 &mut self.colors,
                 width,
@@ -2529,9 +2529,6 @@ pub struct TuiState {
     /// 的时候走树的那几个键归文件页，`Esc` 把键盘还回输入区
     /// （`.scratch/files-page/spec.md` §5）。
     sidebar_keyboard: bool,
-    /// 正在显示主列的哪一页：`对话` 还是 `轨迹`（`.scratch/trace-in-main/spec.md` §2）。
-    /// 与 [`TuiState::tab`] 同级：只活在这一次进程里，不落配置，重开回到对话。
-    main_tab: MainTab,
     /// 用户想不想看见左栏（`Ctrl-O` 切换，`.scratch/sidebar-toggle/spec.md` §1）。
     ///
     /// 与选中的页签同级：只活在这一次进程里，重开回到显示，不落配置、不跨会话。它与宽度是
@@ -3138,8 +3135,6 @@ enum HitAction {
     /// 点提示行上那段「切到「…」」（票 32）：关闭被前台规则拒了之后，把前台切到相邻的那一个，
     /// 焦点仍留在要关的那一行上。
     CloseBlockedSwitch,
-    /// 显示主列的这一页，跟点它的页签一样（`.scratch/trace-in-main/spec.md` §2）。
-    SwitchMainTab(MainTab),
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
     TurnRailUnit(usize),
     /// 点状态行的模型那一格：打开模型清单（spec §7）。
@@ -3930,7 +3925,6 @@ impl TuiState {
             changes_wanted: true,
             tabs_rect: None,
             sidebar_keyboard: false,
-            main_tab: MainTab::Conversation,
             sidebar_wanted: true,
             // 右栏默认开（冻结项 6）：轨迹住在它里面，关掉只是收起来，不是不画轨迹。
             // 这里留关，真进程在 `Tui::run` 里打开 —— 集成测试的既有帧因此留在旧基线上。
@@ -4006,10 +4000,8 @@ impl TuiState {
         if hidden > 0 {
             // `+N` 也得放得下：放不下就再让一个标签出去。
             let more = text_columns(&wording::top_more(hidden));
-            if used + more > room as usize
-                && let Some((text, ..)) = entries.pop()
-            {
-                used = used.saturating_sub(text_columns(&text) + 1);
+            if used + more > room as usize {
+                let _ = entries.pop();
             }
         }
         (entries, hidden)
@@ -4580,26 +4572,18 @@ impl TuiState {
     /// 滚轮一格：滚的是**当前显示的那一页**
     /// （`.scratch/trace-in-main/spec.md` §4）。
     fn wheel_current(&mut self, up: bool) {
-        match self.main_tab {
-            MainTab::Conversation => self.view.conversation.wheel(up),
-            MainTab::Trace => self.view.trace.wheel(up),
-        }
+        // 票 16 之后主列只剩对话视图；轨迹的滚轮按指针落在右栏上分派（`wheel_at`）。
+        self.view.conversation.wheel(up);
     }
 
     /// 翻页两键：翻的是**当前显示的那一页**（§4）。
     fn page_current(&mut self, up: bool) {
-        match self.main_tab {
-            MainTab::Conversation => self.view.conversation.page(up),
-            MainTab::Trace => self.view.trace.page(up),
-        }
+        self.view.conversation.page(up);
     }
 
     /// 回底键：回的是**当前显示的那一页**的底（§4）。
     fn current_page_to_bottom(&mut self) {
-        match self.main_tab {
-            MainTab::Conversation => self.view.conversation.to_bottom(),
-            MainTab::Trace => self.view.trace.to_bottom(),
-        }
+        self.view.conversation.to_bottom();
     }
 
     /// 指针事件的入口：按**手势**分派，再按谁占着指针分派。
@@ -4898,7 +4882,6 @@ impl TuiState {
             // 这一版只画出来，点它什么都不做。
             Some(HitAction::ToggleRail) => self.toggle_right_rail(),
             Some(HitAction::ToggleTiles) => {}
-            Some(HitAction::SwitchMainTab(tab)) => self.set_main_tab(tab),
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
@@ -5960,18 +5943,6 @@ impl TuiState {
     /// 这个位置。
     fn release_trace_keyboard(&mut self) {
         self.trace_keyboard = false;
-    }
-
-    /// 切主列页签：点页签与 `Ctrl-V` 走的是这同一条路。
-    ///
-    /// 轨迹页**重新成为当前显示页时自动回到持有**（票 18 第 3 条）：交还过的那一位不留着
-    /// —— 它是「我要去轨迹页上做事」那一下，没必要再多点一次。切到对话页时不用管：那一层
-    /// 的前提本来就不成立（`trace_keyboard` 只在主列显示轨迹页时被读）。
-    fn set_main_tab(&mut self, tab: MainTab) {
-        self.main_tab = tab;
-        if tab == MainTab::Trace {
-            self.take_trace_keyboard();
-        }
     }
 
     /// `Ctrl-V`：右栏开关，**一次按下同时把键盘交给它**（票 14，冻结项 7）。
@@ -7378,12 +7349,8 @@ impl TuiState {
         // 浮层立着时归浮层」是同一条纪律
         // （`.scratch/questionnaire-reading/spec.md`），而这一层扣着 `Enter` 与方向键不放会
         // 让一道正在等的题按不动。关掉它们之后原样还给轨迹页 —— 这一位没被动过。
-        // 票 14 起这一层归**右栏**；过渡期（票 16 之前）主列那个轨迹页还在，它拿键盘的
-        // 老路径照旧成立 —— 两个入口共用同一份 `trace_keyboard` 与同一份轨迹视口。
-        if (self.right_wanted || self.main_tab == MainTab::Trace)
-            && self.trace_keyboard
-            && self.pending.is_none()
-            && self.trace_key(key)
+        // 票 14 起这一层归**右栏**（票 16 之后主列只剩对话，不再有第二个入口）。
+        if self.right_wanted && self.trace_keyboard && self.pending.is_none() && self.trace_key(key)
         {
             return;
         }
@@ -8160,7 +8127,7 @@ impl TuiState {
     /// （`.scratch/tui-visual-language/spec.md` §18）。
     ///
     /// 键位提示有**两套**，按主列当前显示的那一页挑：对话页那套见
-    /// [`wording::status_line_with`]，轨迹页那套见 [`wording::trace_status_line_with`]
+    /// [`wording::status_line_with`]，右栏那套见 [`wording::rail_status_line_with`]
     /// （`.scratch/trace-shortcuts/spec.md` §2）。出口那一段两页共用。
     fn hint_line(&self, width: u16) -> String {
         // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句「再按一次
@@ -8188,12 +8155,12 @@ impl TuiState {
             .or_else(|| self.notice_line())
             .or_else(|| self.open_receipt())
             .or_else(|| self.copy_receipt());
-        // **主列的两页各有自己的一套提示**（`.scratch/trace-shortcuts/spec.md` §2）：判据是
-        // 当前显示的是哪一页，所以这一支排在下面那个 `prompt_reply` 分叉**之前** —— 轨迹页上
-        // 的 `enter` 是开详情、不是发送，而它在讨论会话里也照样成立（与 `viewer_status_line`
-        // 那条区分同一个理由：提示说的是键盘*现在*干什么）。
-        if self.main_tab == MainTab::Trace {
-            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width, raised);
+        // **提示跟着键盘归属走**（票 16，推翻 `trace-shortcuts` §2 的「按页」判据）：右栏
+        // 拿住键盘时用 `RAIL_HINTS`，否则用对话那一套。这一支排在下面那个 `prompt_reply`
+        // 分叉**之前** —— 右栏上的 `enter` 是开详情、不是发送，而它在讨论会话里也照样成立
+        // （与 `viewer_status_line` 那条区分同一个理由：提示说的是键盘*现在*干什么）。
+        if self.right_wanted && self.trace_keyboard {
+            return wording::rail_status_line_with(receipt.as_deref(), self.busy(), width, raised);
         }
         if self.prompt_reply.is_some() {
             wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
@@ -8668,7 +8635,6 @@ fn draw_shell(
     draw_divide(frame, panes, area);
     draw_right_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
-    draw_main_tab_bar(frame, panes, state);
     // 输入区与提示行各自上面那条分隔线 —— 状态行上方那条已经离开（spec §2），所以这里是
     // 两条而不是三条。两条都**只画在主列里**：提示行回到主列之后，左栏与它们无关了
     // （`.scratch/tui-feedback/spec.md` §2）。左栏不存在时主列就是整屏，与改动前逐字相同。
@@ -9493,34 +9459,6 @@ fn draw_tab_bar(
     draw_label_bar(frame, state, tabs, &entries);
 }
 
-/// 主列的页签条：`对话 ┆ 轨迹`，同一份转录的两个视图
-/// （`.scratch/trace-in-main/spec.md` §1、§2）。
-///
-/// 它只画标签下面那一条线 —— 屏幕第一行就是标签那一行，上边界就是屏幕自己，不必再画一条。
-/// 点标签切页，而键盘上另有一个 `Ctrl-V` 切它（`.scratch/trace-shortcuts/spec.md` §1）——
-/// `Tab` 与 `Shift+Tab` 照左栏那条既有的规矩归 `/` 菜单与模式循环。
-fn draw_main_tab_bar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    paint_rule(
-        frame,
-        panes.main_tabs.y + 1,
-        panes.main.x,
-        panes.screen.right(),
-    );
-    let entries = [
-        (
-            wording::TAB_CONVERSATION,
-            state.main_tab == MainTab::Conversation,
-            HitAction::SwitchMainTab(MainTab::Conversation),
-        ),
-        (
-            wording::TAB_TRACE,
-            state.main_tab == MainTab::Trace,
-            HitAction::SwitchMainTab(MainTab::Trace),
-        ),
-    ];
-    draw_label_bar(frame, state, panes.main_tabs, &entries);
-}
-
 /// 一条页签条的标签行：标签、之间一个分隔符、这一行其余部分用线填满，选中的那个更亮
 /// （spec §3；`.scratch/trace-in-main/spec.md` §2）。
 ///
@@ -10041,20 +9979,6 @@ enum Tab {
     Changes,
 }
 
-/// 正在显示主列的哪一页：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
-///
-/// 与 [`Tab`] 同一套规矩：只活在这一次进程里。默认是 `Conversation`
-/// —— 起步与拆分之前一致。**跟左栏那几页不同的是它有一个键位**：`Ctrl-V` 在两页之间翻一个
-/// 来回（`.scratch/trace-shortcuts/spec.md` §1，那一条推翻了「两处页签都不给键位」里主列那
-/// 一半）；左栏那几页仍然只靠点 —— `Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MainTab {
-    /// 对话视图：用户文本、assistant 正文与保留清单。
-    Conversation,
-    /// 轨迹视图：全量块（`.scratch/trace-tab/spec.md` §2）。
-    Trace,
-}
-
 /// 四个浮层表面共用的框架：`CHROME` 的虚线，**四角为空**
 /// （`.scratch/tui-visual-language/spec.md` §25）。
 ///
@@ -10462,65 +10386,35 @@ pub const SWEEP_PERIOD: u64 = 30;
 const SWEEP_CORE: i64 = 2;
 const SWEEP_HALO: i64 = 6;
 
-/// 主列的内容区：这条转录的两个视图之一，加上它右边缘的滚动条、指示器，以及（只在对话页上
-/// 的）回合条。
+/// 主列的内容区：对话视图，加上它右边缘的滚动条、指示器，以及回合条。
 ///
-/// 画哪一页看 [`TuiState::main_tab`]（`.scratch/trace-in-main/spec.md` §3）：两页共用同一块
-/// 矩形、同一条滚动条列，各自的窗格、滚动位置、跟随与链接表互不影响。回合条只画在对话页上
-/// —— 它量的是对话视口的单位位置，画在轨迹页上会指着一个跟它无关的视口（§4）。
+/// 票 16 之后主列只剩这一页 —— 轨迹那一页搬进了右栏（[`draw_right_rail`]）。回合条也只在
+/// 这里画：它量的是对话视口的单位位置。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    // 两页的正文区**底边同高、顶上差一条横带**（票 22）：横带只属于轨迹页，所以它扣掉的
-    // 那几行也从轨迹页的正文里出，对话页一个字都不白给。
-    match state.main_tab {
-        MainTab::Conversation => {
-            let text_area = panes.transcript_text();
-            let live = state.conversation_live();
-            // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
-            // （`.scratch/tui-feedback/spec.md` §5–§6）。
-            //
-            // 这个视图是**唯一**认可点链接的地方（`.scratch/clickable-links/spec.md` §1）：
-            // 认一遍，结果一分为二 —— 下划线就地铺在这一行上，候选跟着进屏幕文本层供点击
-            // 命中。认在画之前，所以两处用的是同一次识别的同一份答案。
-            let mut rows = state
-                .view
-                .conversation
-                .view(text_area.width, text_area.height, &live);
-            let folded = soft_folds(
-                &state.view.conversation,
-                state.view.conversation.top(),
-                rows.len(),
-            );
-            let hotspots = links::mark(&mut rows, &folded);
-            note_rows(state, text_area, &rows, &folded, &hotspots);
-            // 这一页画在哪儿：点击要拿它判「落在对话的转录里吗」。与轨迹页那条同一条纪律，
-            // 每帧重填（`.scratch/clickable-links/spec.md` §1）。
-            state.conversation_rect = Some(text_area);
-            frame.render_widget(Paragraph::new(rows), text_area);
-            draw_scrollbar(frame, panes.scrollbar(), &state.view.conversation);
-            draw_turn_rail(frame, panes, state);
-            draw_indicator(frame, text_area, state, Viewport::Conversation);
-        }
-        MainTab::Trace => {
-            // 票 13 起轨迹的家已经搬到右栏；主列这一页只在本票与票 16 之间过渡存在，于是它
-            // 按右栏的排法画出来、**不接指针与键盘** —— 指针与键盘都归右栏那一份（票 14）。
-            let text_area = panes.trace_text();
-            let width = state.view.trace_width;
-            let axis_width = text_area
-                .width
-                .saturating_sub(layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS);
-            draw_trace_pane(
-                frame,
-                panes.band,
-                panes.band_kind,
-                text_area,
-                width,
-                axis_width,
-                state,
-                true,
-                Some(panes.trace_scrollbar()),
-            );
-        }
-    }
+    let text_area = panes.transcript_text();
+    let live = state.conversation_live();
+    // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
+    // （`.scratch/tui-feedback/spec.md` §5–§6）。
+    //
+    // 这个视图是**唯一**认可点链接的地方（`.scratch/clickable-links/spec.md` §1）：
+    // 认一遍，结果一分为二 —— 下划线就地铺在这一行上，候选跟着进屏幕文本层供点击
+    // 命中。认在画之前，所以两处用的是同一次识别的同一份答案。
+    let mut rows = state
+        .view
+        .conversation
+        .view(text_area.width, text_area.height, &live);
+    let folded = soft_folds(
+        &state.view.conversation,
+        state.view.conversation.top(),
+        rows.len(),
+    );
+    let hotspots = links::mark(&mut rows, &folded);
+    note_rows(state, text_area, &rows, &folded, &hotspots);
+    state.conversation_rect = Some(text_area);
+    frame.render_widget(Paragraph::new(rows), text_area);
+    draw_scrollbar(frame, panes.scrollbar(), &state.view.conversation);
+    draw_turn_rail(frame, panes, state);
+    draw_indicator(frame, text_area, state, Viewport::Conversation);
 }
 
 /// 画右栏（票 13）：这一版右栏里只有轨迹一页，所以**顶部没有页面标签** —— 只有一页时不画
@@ -15901,7 +15795,7 @@ mod tests {
     /// 「附属行不是落点」这件事要的正是它。
     fn a_page_with_a_failed_call() -> TuiState {
         let mut page = state();
-        page.main_tab = MainTab::Trace;
+        page.set_right_rail(true);
         page.apply(logged(
             1,
             EventPayload::ToolCallStarted {
@@ -16053,7 +15947,7 @@ mod tests {
     #[test]
     fn enter_on_a_row_without_a_detail_opens_nothing() {
         let mut page = state();
-        page.main_tab = MainTab::Trace;
+        page.set_right_rail(true);
         // 一条注入既是开场段的一块（于是那一页顶上多一行小标题），又是一条点得开的记录。
         page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         let header = page
@@ -17439,7 +17333,7 @@ mod tests {
     /// 这几处边界。
     fn a_page_with_two_levels() -> TuiState {
         let mut page = state();
-        page.main_tab = MainTab::Trace;
+        page.set_right_rail(true);
         let kimi = crate::events::SpeakerId::Debater("kimi".into());
         page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         page.apply(logged(
@@ -17806,7 +17700,7 @@ mod tests {
 
         // 另一个回合里的调用才是「那个组一个成员都没命中」的样子。
         let mut two_turns = state();
-        two_turns.main_tab = MainTab::Trace;
+        two_turns.set_right_rail(true);
         let kimi = crate::events::SpeakerId::Debater("kimi".into());
         two_turns.apply(logged(
             1,

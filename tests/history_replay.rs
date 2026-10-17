@@ -278,7 +278,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。它只在对话页上画，所以这一列从转录的
 /// 第一行起量；主列页签条自己那条线也画到屏幕右缘，量进去就什么都不剩
 /// （`.scratch/trace-in-main/spec.md` §3）。
-const TRANSCRIPT_TOP: u16 = 4;
+const TRANSCRIPT_TOP: u16 = 2;
 
 fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
@@ -352,10 +352,9 @@ fn click(state: &mut TuiState, column: u16, row: u16) {
     ));
 }
 
-/// 切到轨迹页：工具行与思考行现在只住在那里，而那一页是主列页签条上的第二个标签
-/// （`.scratch/trace-in-main/spec.md` §2）。
+/// 打开右栏：工具行与思考行现在只住在那里（票 16 删掉了主列页签条）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
-    click_row(state, width, height, wording::TAB_TRACE);
+    state.set_right_rail(true);
     let _ = screen(width, height, state);
 }
 
@@ -1222,9 +1221,10 @@ fn a_replayed_history_keeps_the_times_it_was_written_with() {
         ],
     );
     run_replay(&mut state);
-    open_trace_tab(&mut state, 120, 40);
+    // 130 列让右栏落 40 档（≥122）：只有那一档画行首的时刻列。
+    open_trace_tab(&mut state, 130, 40);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen(130, 40, &mut state).join("\n");
     let early_stamp = wording::stamp(early);
     let late_stamp = wording::stamp(late);
     assert_ne!(early_stamp, late_stamp, "两个时刻读起来不同");

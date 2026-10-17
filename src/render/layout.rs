@@ -19,38 +19,12 @@ use crate::render::timeline::{self, BandKind};
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
 
-/// 外壳花在既不是转录也不是输入区的那些构件上的行：**主列页签条的两行**（标签、它下面那条
-/// 线）、输入区与提示行各自上面那条线、状态行与提示行。
-/// `转录行 = h − CHROME − 输入行数`，这就是纵向算术的全部（spec §1、§2）。
+/// 外壳花在既不是转录也不是输入区的那些构件上的行：输入区与提示行各自上面那条线、
+/// 状态行与提示行 —— 四条。
 ///
-/// 它从 7 一路减到这里，两笔账都是 `tui-chrome` 的：外框的上下两行随外框一起离开（§1），
-/// 状态行上方那条线也离开、它占的那一行还给了转录（§2）。2026-10-06 起它涨到 6：主列顶上
-/// 多了一条页签条（标签行 + 一条线，屏幕上缘就是它的上边界），轨迹视图从左栏搬进主列
-/// （`.scratch/trace-in-main/spec.md` §1）。
-///
-/// **轨迹页在这之上还有三行**（[`BAND_ROWS`]）—— 那三行只归它，因为横带只画在那一页上
-/// （`.scratch/trace-ledger/spec.md` §10、票 22）。所以这一条常数仍是 6，而轨迹页摊到的是
-/// [`TRACE_CHROME`]。
-const CHROME: u16 = 6;
-
-/// 轨迹页顶部那条三行横带占的行（票 22 第 1 条）。它从转录里扣、记账在 [`TRACE_CHROME`]：
-/// 120×24 下轨迹页可视从 15 行变成 **12 行**。
-pub const BAND_ROWS: u16 = 3;
-
-/// 轨迹页的外壳高度：页签条那两行加上横带那三行（票 22 那句「从 6 改成 9」）。
-///
-/// 它**只属于轨迹页**：那一页顶上真的画着三行横带，而对话页没有这回事 —— 把这三行也
-/// 从对话页的转录里扣掉，换回来的是顶上三行空白。
-pub const TRACE_CHROME: u16 = CHROME + BAND_ROWS;
-
-/// 横带让位之后，账本至少要留下的行数（票 22 第 10 条：**高度不足时账本优先**）。
-///
-/// 矮终端上那三行是内容而不是读法：40×10 只有一行转录，那时横带整条不画，账本照旧在屏幕上。
-const MIN_LEDGER_ROWS: u16 = 3;
-
-/// 主列页签条花掉的行：标签行与它下面那条线（`.scratch/trace-in-main/spec.md` §1）。它比
-/// 左栏那条少一行 —— 主列顶上就是屏幕边缘，不需要再画一条线把它跟什么分开。
-const MAIN_TABS_ROWS: u16 = 2;
+/// `转录行 = 主列高 − CHROME − 输入行数`，这就是纵向算术的全部（spec §1、§2）。主列页签条
+/// 的两行在票 16 离开：顶部页签条（票 15，在**主列之外**）接替了它，所以这一条从 6 落到 4。
+const CHROME: u16 = 4;
 
 /// 顶部页签条占的行（票 15）：标签行 + 它下面那条虚线。
 ///
@@ -238,25 +212,11 @@ pub struct Regions {
     pub right_band: Option<Rect>,
     /// 右栏这一帧的横带退成了哪一档（右栏里只可能是 Compact 或 Empty）。
     pub right_band_kind: BandKind,
-    /// 主列页签条的标签行：`对话 ┆ 轨迹`（`.scratch/trace-in-main/spec.md` §1）。它上下各一条
-    /// 虚线，转录从它下面一行起 —— 与左栏那条页签条同一种画法，只是跨的是主列。
-    pub main_tabs: Rect,
     /// 转录的那些行：文字、滚动条与回合条合在一起。
     ///
-    /// 它是**对话页**的正文区。轨迹页比它矮顶上那条横带（[`Regions::band`]），两边靠
-    /// [`TRACE_CHROME`] 与它对齐，于是状态行、输入区与提示行两页同高（票 22）。
+    /// 票 16 之后主列只剩对话视图这一页；轨迹那一页在右栏里，自己的两块矩形是
+    /// [`Regions::right_band`] 与 [`Regions::right_trace`]。
     pub transcript: Rect,
-    /// 轨迹页顶上那条横带占的行：三行、降级后两行、整条让位时 `None`。
-    ///
-    /// 它是**固定区**，不随账本滚动（票 22 第 1 条）—— 位置在页签条那条线下面、账本上面。
-    pub band: Option<Rect>,
-    /// 这一帧横带退成了哪一档。画家按它画，绝不自比宽度：阶梯只有一个家。
-    pub band_kind: BandKind,
-    /// 轨迹页的正文区（账本）：它从横带下面起。
-    ///
-    /// 底边与 [`Regions::transcript`] 相同 —— 两页共用状态行、输入区与提示行，差的那几行
-    /// 正是横带。所以「滚动账本时横带不动」这件事，是**两块矩形**而不是一个偏置算式。
-    pub trace: Rect,
     /// 回合条的那一列，在转录的右缘。会话有没有单位放进去都画。
     pub rail: Rect,
     /// 状态行的内容行：`模型 … │ 模式 … │ 上下文 …%`。永远都画（spec §2、§5）。
@@ -303,16 +263,6 @@ impl Regions {
         )
     }
 
-    /// 轨迹页的文字区（账本）：与 [`Regions::transcript_text`] 同宽，行从横带下面起。
-    pub fn trace_text(&self) -> Rect {
-        Rect::new(
-            self.trace.x,
-            self.trace.y,
-            self.trace.width.saturating_sub(TRAILING_COLUMNS),
-            self.trace.height,
-        )
-    }
-
     /// 滚动条那一列，在回合条那一列的左边一格。
     pub fn scrollbar(&self) -> Rect {
         Rect::new(
@@ -320,17 +270,6 @@ impl Regions {
             self.transcript.y,
             TRAILING_COLUMNS - 1,
             self.transcript.height,
-        )
-    }
-
-    /// 轨迹页的滚动条：与 [`Regions::scrollbar`] 同一列，但跟着账本那几行高
-    /// （回合条只画在对话页上，所以轨迹页那一列空着）。
-    pub fn trace_scrollbar(&self) -> Rect {
-        Rect::new(
-            self.trace.x + self.trace.width.saturating_sub(TRAILING_COLUMNS),
-            self.trace.y,
-            TRAILING_COLUMNS - 1,
-            self.trace.height,
         )
     }
 
@@ -558,12 +497,6 @@ fn plan_with(
     // 对话页的转录：外壳那几行、输入区之外全是它的。
     let transcript_rows = main_height.saturating_sub(CHROME + input_rows);
     // 轨迹页比它多一条横带（票 22）：宽度那一档决定横带是几行，高度那一档决定它值不值当留。
-    let trace_band = band_kind(
-        main_height,
-        input_rows,
-        trace_axis_width(main_width(area.width, sidebar_wanted, right_wanted)),
-    );
-    let trace_rows = main_height.saturating_sub(CHROME + trace_band.rows() + input_rows);
 
     let sidebar = tier.map(|tier| {
         Rect::new(
@@ -585,28 +518,7 @@ fn plan_with(
     // 状态行**紧贴**转录的最后一行：它上方那条线已经不画了，省下的一行整行还给了转录
     // （spec §2）。它下面两条线各占一行 —— 而 `bottom()` 是排他的，所以那条线正好落在
     // `status.bottom()` / `input.bottom()` 自己那一行上，内容从下一行起。
-    //
-    // 主列顶上先让出页签条那两行（`.scratch/trace-in-main/spec.md` §1）：标签行就是屏幕第一
-    // 行，转录从它下面那条线之后再起。
-    //
-    // **横带那几行只从轨迹页扣**（票 22）：两块正文区的底边落在同一行上，于是状态行、输入区
-    // 与提示行两页同高 —— 切页不挪它们，而那三行也不从对话页白拿。
-    let main_tabs = Rect::new(main.x, main.y, main.width, 1);
-    let transcript = Rect::new(main.x, main.y + MAIN_TABS_ROWS, main.width, transcript_rows);
-    let band = (trace_band.rows() > 0).then(|| {
-        Rect::new(
-            main.x,
-            main.y + MAIN_TABS_ROWS,
-            main.width,
-            trace_band.rows(),
-        )
-    });
-    let trace = Rect::new(
-        main.x,
-        main.y + MAIN_TABS_ROWS + trace_band.rows(),
-        main.width,
-        trace_rows,
-    );
+    let transcript = Rect::new(main.x, main.y, main.width, transcript_rows);
     let status = Rect::new(main.x, transcript.bottom(), main.width, 1);
     let input = Rect::new(main.x, status.bottom() + 1, main.width, input_rows);
     // 提示行落在**主列**里：与输入区同列同宽、就在它正下方
@@ -659,11 +571,7 @@ fn plan_with(
         right_trace,
         right_band,
         right_band_kind,
-        main_tabs,
         transcript,
-        band,
-        band_kind: trace_band,
-        trace,
         rail,
         status,
         input,
@@ -694,32 +602,6 @@ fn plan_with(
         } else {
             area.y + area.height
         },
-    }
-}
-
-/// 横向铺满整个主列的轨迹正文区里，留给横轴的那几列（票 22 的宽度口径）。
-///
-/// 主列宽 → 扣滚动条与回合条那两列 → 扣行首九列时刻 → **正文 68 列** → 扣泳道标签五列
-/// → **横轴 63 列**。这两笔账与画家读的是同一个算式：宽度的档次因此在排版里就定了，画家
-/// 只问 [`Regions::band_kind`]。
-fn trace_axis_width(main_width: u16) -> u16 {
-    main_width
-        .saturating_sub(TRAILING_COLUMNS)
-        .saturating_sub(STAMP_COLUMNS + timeline::LABEL_COLUMNS)
-}
-
-/// 轨迹页这一帧的横带退成哪一档：先按**轴宽**退，再按**高度**让位。
-///
-/// 高度的判据是「账本还留得下 [`MIN_LEDGER_ROWS`] 行吗」——不让位的话，矮终端上横带会把
-/// 账本挤没，而那是拿内容换读法（票 22 第 10 条）。40×10 下这条判据把整条横带关掉，
-/// 于是那个尺寸与加横带之前逐字相同。
-fn band_kind(height: u16, input_rows: u16, axis_width: u16) -> BandKind {
-    let kind = BandKind::of_axis(axis_width);
-    let ledger = height.saturating_sub(TRACE_CHROME + input_rows);
-    if ledger >= MIN_LEDGER_ROWS {
-        kind
-    } else {
-        BandKind::Empty
     }
 }
 

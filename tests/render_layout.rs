@@ -136,10 +136,9 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
 }
 
 /// 转录的第一行。外框走了之后它曾经就是终端的第一行
-/// （`.scratch/tui-chrome/spec.md` §1）；2026-10-06 起主列顶上多了页签条那两行（标签行与它
-/// 下面那条线），转录从第三行起（`.scratch/trace-in-main/spec.md` §1）。票 15 又在整屏顶上
-/// 加了顶部页签条那两行，于是它再下移两行。
-const TRANSCRIPT_TOP: usize = 4;
+/// （`.scratch/tui-chrome/spec.md` §1）；后来主列顶上多了页签条那两行。票 16 删掉那条主列
+/// 页签条之后，转录直接长在顶部页签条（票 15）下面 —— 它从**第三行**（下标 2）起。
+const TRANSCRIPT_TOP: usize = 2;
 
 /// 一帧画出来之后转录占的那些行：第一条横线画在输入区上面，
 /// 而它和转录之间还夹着状态行那一行。
@@ -253,19 +252,9 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[9]
     );
 
-    // 主列的页签条：顶部页签条两行之后是标签行，它下面一条线，转录再下一行起
-    // （`.scratch/trace-in-main/spec.md` §1）。
-    assert!(
-        rows[2].contains("对话") && rows[2].contains("轨迹"),
-        "两个视图占主列标签行：{:?}",
-        rows[2]
-    );
-    assert!(rows[3].ends_with('┄'), "标签下面一条线：{:?}", rows[3]);
-
-    // 分隔线跑满屏幕的整个高度。24 行终端留给转录十五行：
-    // 三行归输入区的地板、六行归外壳 —— 页签条那两行也在这里
-    // （`.scratch/trace-in-main/spec.md` §1）。
-    assert_eq!(transcript_rows(&rows), 13, "120x24 给转录 13 行");
+    // 票 16 之后主列只剩对话视图：顶部条之下直接就是转录，没有第二条页签条。
+    // 24 行终端里转录拿十五行：三行归输入区的地板、四行归外壳。
+    assert_eq!(transcript_rows(&rows), 15, "120x24 给转录 15 行");
     assert!(
         !rows[16].contains('┄'),
         "状态行上方那条横线已经不画了：{:?}",
@@ -684,10 +673,9 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
             "第 {row} 行没有外框：{line:?}"
         );
     }
-    // 主子顶上的页签条花掉两行之后，40x10 的地板紧了一档：输入区仍拿满三行，转录只剩一
-    // 行（`.scratch/trace-in-main/spec.md` §1）。输入区是第 5 到 7 行，
-    // 它上面那条横线在第 4 行，提示行在第 9 行。
-    assert_eq!(transcript_rows(&rows), 1, "一行转录：{rows:#?}");
+    // 40x10 的地板：输入区拿满三行，转录还剩两行。输入区是第 5 到 7 行，它上面那条横线
+    // 在第 4 行，提示行在第 8 行。
+    assert_eq!(transcript_rows(&rows), 2, "两行转录：{rows:#?}");
     assert!(
         rows[6].trim().is_empty(),
         "输入区的第一行是一份空草稿：{:?}",
@@ -699,19 +687,19 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
         rows[7]
     );
     assert!(
-        rows[4].contains("询问 ┆") && rows[4].contains("上下文 —"),
+        rows[3].contains("询问 ┆") && rows[3].contains("上下文 —"),
         "在地板上状态行先让出模型：{:?}",
-        rows[4]
+        rows[3]
     );
     assert!(
-        !rows[4].contains("模型"),
+        !rows[3].contains("模型"),
         "模型是第一个让位的字段：{:?}",
-        rows[4]
+        rows[3]
     );
     assert!(
-        !rows[4].contains("claude-sonnet"),
+        !rows[3].contains("claude-sonnet"),
         "这是它丢掉的第一个东西：{:?}",
-        rows[4]
+        rows[3]
     );
     assert!(rows[9].contains("ctrl-d"), "提示行：{:?}", rows[9]);
     assert!(
@@ -835,8 +823,8 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         "忙碌只换出口那一段：{busy:?}"
     );
 
-    // 174 列能把除左栏开关之外的每条提示都放下。
-    let roomy = hint_items(174);
+    // 141 列提示行能把整份表放下 —— 120 列终端只给它 79 列，所以这一档要 182 列终端。
+    let roomy = hint_items(182);
     assert_eq!(roomy.first().unwrap(), "enter 发送", "{roomy:?}");
     assert!(
         roomy.contains(&"PgUp/PgDn 滚动".to_owned()),
@@ -846,26 +834,24 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         roomy.contains(&"ctrl-t 换模型".to_owned()),
         "换模型的快捷键在表里：{roomy:?}"
     );
-    // `ctrl-v 轨迹` 插在 `ctrl-o 左栏` 前面一格（两个都是纯视图手势，而翻页签更贴着手上的
-    // 事），于是整份表要 127 列提示行。出口那一段在票 23 之后短了九列（空闲只宣传 `ctrl-d`），
-    // 所以 174 列终端这一档放得下整份表 —— 差一列的那一档退到 167 列（126 列提示行）。
+    // 票 16 之后这张表是九条：整份要 141 列提示行，也就是 182 列终端（主列 141）。
     assert!(
-        roomy.contains(&"ctrl-v 轨迹".to_owned()),
-        "174 列那一档里新键已经看得见：{roomy:?}"
+        roomy.contains(&"ctrl-v 右栏".to_owned()),
+        "182 列那一档里新键已经看得见：{roomy:?}"
     );
     assert!(
         roomy.contains(&"ctrl-o 左栏".to_owned()),
         "整份表都在：{roomy:?}"
     );
     assert!(
-        !hint_items(167).contains(&"ctrl-o 左栏".to_owned()),
-        "167 列（126 列提示行）还差一列：{:?}",
-        hint_items(167)
+        !hint_items(181).contains(&"ctrl-o 左栏".to_owned()),
+        "181 列终端（140 列提示行）还差一列：{:?}",
+        hint_items(181)
     );
     assert!(
-        hint_items(168).contains(&"ctrl-o 左栏".to_owned()),
-        "168 列（127 列提示行）放下整份表：{:?}",
-        hint_items(168)
+        hint_items(182).contains(&"ctrl-o 左栏".to_owned()),
+        "182 列（141 列提示行）放下整份表：{:?}",
+        hint_items(182)
     );
     // 120 列下它已经被让掉 —— 窄终端先丢最后两条，而这一行还有更常用的键要放。
     assert!(
@@ -878,49 +864,6 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             .join("\n")
             .contains("shift+enter"),
         "任何宽度下都没有幽灵换行键"
-    );
-}
-
-/// 轨迹页有**自己的**一套提示（`.scratch/trace-shortcuts/spec.md` §2）：那里的 `enter` 是开
-/// 详情，所以 `enter 发送` 与 `shift+tab 模式` 不该在那一页上出现，而轨迹页自己的键位要在。
-#[test]
-fn the_trace_page_hints_at_its_own_keys() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    let row = hint_items_of(120, &mut state).join(" · ");
-    assert!(row.contains("↑↓/j/k 移动"), "{row}");
-    assert!(row.contains("enter 详情"), "{row}");
-    assert!(!row.contains("enter 发送"), "轨迹页不承诺发送：{row}");
-    assert!(!row.contains("shift+tab"), "那一页没有模式可切：{row}");
-    assert!(row.ends_with("ctrl-d 退出"), "出口照旧在末尾：{row}");
-
-    // 切回对话页，两套就换回来了 —— 这个状态里没有人在读行，于是换回来的是查看器那一套
-    // （那时 `enter 发送` 会是一个兑现不了的承诺，`.scratch/tui-feedback/spec.md` §6）。
-    // 票 14 之后 `Ctrl-V` 是右栏开关，不再是主列翻页，所以这里点页签。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let _ = screen(120, 24, &mut state);
-    let back = hint_items_of(120, &mut state).join(" · ");
-    assert!(back.contains("esc 取消"), "{back}");
-    assert!(back.contains("PgUp/PgDn 滚动"), "{back}");
-    assert!(!back.contains("↑↓/j/k 移动"), "{back}");
-
-    // 讨论会话里同样成立：一次 `discuss` 没有人在读行，而轨迹页那一页照旧是这一套 ——
-    // 判据排在「有没有人在读行」那个分叉之前。
-    let mut discussion = state_with_roster(&["kimi", "deepseek"]);
-    a_session_with_process_rows(&mut discussion);
-    open_trace_tab(&mut discussion, 120, 24);
-    let discussion_row = hint_items_of(120, &mut discussion).join(" · ");
-    assert!(discussion_row.contains("↑↓/j/k 移动"), "{discussion_row}");
-    assert!(
-        !discussion_row.contains("esc 取消") && !discussion_row.contains("PgUp/PgDn 滚动"),
-        "查看器那一套不该出现在轨迹页上：{discussion_row}"
     );
 }
 
@@ -1510,60 +1453,6 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     assert!(!text.contains("已复制"), "点一下不留回执：{text}");
 }
 
-/// 没拖动的按下-抬起仍是一次普通点击；**挪一格**就已经是拖了（门槛是一格 —— 真机试过两格之后
-/// 撤回，见 `.scratch/tui-feedback/spec.md` §9）。
-#[test]
-fn a_press_and_release_without_a_drag_is_still_a_click() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(message(1, "被点开的消息", None));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "被点开的消息").expect("轨迹页上那行消息");
-    state.mouse(press(column, row));
-    state.mouse(release(column, row));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains(MESSAGE_FACES), "没拖动就是一次点击：{text}");
-}
-
-/// 在主列页签上按住拖开、再松开：页签**不**切。
-///
-/// 页签那一行不是文本块，所以这一次按下没有所属区域、也就成不了拖选（票 05 的 `Drag.block`
-/// 是 `None`）—— 松开仍然按一次点击处理，只是落点是拖到的那一格，而不是原来的标签。
-#[test]
-fn a_drag_that_starts_on_a_tab_does_not_switch_the_page() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(message(1, "问题", None));
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_TRACE).expect("页签在屏幕上");
-    state.mouse(press(column, row));
-    state.mouse(drag_to(column + 6, row));
-    state.mouse(release(column + 6, row));
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(conversation.contains("问题"), "还在对话页：{conversation}");
-}
-
-/// 详情覆盖层里按住拖动：覆盖层**不**关 —— 框内的拖动是在选它的正文。
-#[test]
-fn a_drag_inside_the_detail_overlay_selects_instead_of_closing_it() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(message(1, "第一段正文\n第二段正文", None));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "第一段正文").expect("轨迹页上那行消息");
-    click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains(MESSAGE_FACES), "详情开着：{text}");
-
-    // 覆盖层里那一行正文：拖过两格。
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "第二段正文").expect("覆盖层里有全文");
-    state.mouse(press(column, row));
-    state.mouse(drag_to(column + 2, row));
-    state.mouse(release(column + 2, row));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains(MESSAGE_FACES), "覆盖层还开着：{text}");
-}
-
 #[test]
 fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // spec 的几何表覆盖的那张尺寸矩阵，每一行都按它进表的
@@ -1571,18 +1460,18 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // 以及外壳让出的转录行数（spec §1–§2）。
     let cases = [
         // 宽、高、左栏档位、身份、状态行上有没有模型、转录行数
-        // 输入区的地板是三行，所以每个档位给转录 `h - 2 - 6 - 3` —— 那 2 行是顶部页签条
-        // （票 15），6 行里含主列页签条的两行（`.scratch/trace-in-main/spec.md` §1）。
-        (40u16, 10u16, None, "", false, 1usize),
-        (40, 24, None, "", false, 13),
-        (60, 24, None, "", true, 13),
+        // 输入区的地板是三行，所以每个档位给转录 `h - 2 - 4 - 3` —— 那 2 行是顶部页签条
+        // （票 15），4 行是外壳（票 16 之后主列页签条已经离开）。
+        (40u16, 10u16, None, "", false, 2usize),
+        (40, 24, None, "", false, 15),
+        (60, 24, None, "", true, 15),
         // 80 列下状态行放不下「模型 + 档位」那一格了（2026-10-08：状态行多了一段档位，
         // `.scratch/model-switching/spec.md` §11），于是它在 100 列才回来。
-        (80, 14, Some(28u16), "heng", false, 4),
-        (80, 24, Some(28), "heng", false, 13),
-        (100, 24, Some(28), "heng", true, 13),
-        (120, 24, Some(40), "mark", true, 13),
-        (174, 50, Some(40), "mark", true, 39),
+        (80, 14, Some(28u16), "heng", false, 6),
+        (80, 24, Some(28), "heng", false, 15),
+        (100, 24, Some(28), "heng", true, 15),
+        (120, 24, Some(40), "mark", true, 15),
+        (174, 50, Some(40), "mark", true, 41),
     ];
     for (width, height, tier, identity, model, rows_expected) in cases {
         let rows = screen(width, height, &mut state());
@@ -1753,8 +1642,8 @@ fn the_tiny_terminal_keeps_its_text_identity() {
     let text = rows.join("\n");
     assert!(text.contains("heng"), "80×10 保住文字身份：{text}");
     assert!(
-        text.contains(wording::TAB_USAGE) && text.contains(wording::TAB_TRACE),
-        "页签条照旧：{text}"
+        text.contains(wording::TAB_USAGE) && text.contains(wording::TAB_FILES),
+        "左栏页签条照旧：{text}"
     );
 }
 
@@ -1826,7 +1715,7 @@ fn the_selected_tab_is_the_bright_one_and_the_others_are_dim() {
         frame[(column, row)].modifier.contains(Modifier::BOLD),
         "而且它是粗的"
     );
-    for label in ["轨迹", "文件"] {
+    for label in ["文件", "改动"] {
         let (column, row) = tab_cell(&frame, 120, 24, label);
         assert_eq!(
             frame[(column, row)].fg,
@@ -2612,40 +2501,6 @@ fn only_the_tab_labels_answer_a_click() {
 }
 
 #[test]
-fn a_question_keeps_the_tabs_from_answering() {
-    use heng::permissions::Answer;
-    use heng::render::wording;
-
-    // 一个问句独占了指针：点在页签条上会到达那个问句的
-    // 处理器，然后停在那儿。它不该切页，而且 —— 这个测试正是
-    // 为这个坑写的 —— 它也不该把问句关掉：画页签的那几帧
-    // 和覆盖层把各自的命中矩形记进同一张表，
-    // 所以点在页签上的点击是作为一个它并不拥有的动作到达问句的
-    // （spec §7、§9）。
-    let mut state = idle();
-    let (request, mut answer) = ask_permission();
-    state.request(request);
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
-    click(&mut state, column, row);
-
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("权限询问"), "问句还在：{text}");
-    assert!(
-        !text.contains(wording::files_loading()),
-        "它下面那一页也没有被切走：{text}"
-    );
-    assert!(answer.try_recv().is_err(), "而且没有人在读者背后作答");
-    // 它仍然答得了，这才是「还在」该有的意思。
-    state.key(Key::Char('y'));
-    assert_eq!(
-        answer.try_recv().unwrap(),
-        Answer::Allow,
-        "这个问句仍然答得了"
-    );
-}
-
-#[test]
 fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     use heng::render::wording;
 
@@ -2718,16 +2573,6 @@ fn at_event(
             speaker_id: heng::events::SpeakerId::System,
             payload,
         },
-    }
-}
-
-/// 轨迹页里一条块行去掉行首那个时间戳之后的样子 —— 它是定宽的一列，所以按列切。
-fn without_stamp(row: &str) -> &str {
-    let columns = heng::render::layout::STAMP_COLUMNS as usize;
-    if row.len() >= columns && row.is_char_boundary(columns) {
-        &row[columns..]
-    } else {
-        row
     }
 }
 
@@ -2922,43 +2767,6 @@ fn the_focus_is_the_unit_the_top_row_belongs_to() {
         "而且它不再是最新的：{shape}"
     );
     assert!(!question.is_empty(), "顶行上有文本：{question:?}");
-}
-
-#[test]
-fn clicking_a_rail_cell_jumps_to_that_turns_question() {
-    // 回合条存在就是为了这件事：点一格，落到你问过的那句问题
-    // 上 —— 顶端对齐，所以每次跳转都落在眼睛预期的地方（spec §4）。
-    let mut state = state();
-    turns(&mut state, 30);
-    let _ = screen(120, 24, &mut state);
-
-    // 窗口底端锚定在一个 `⋮` 下面：120x24 下转录是十五
-    // 行，所以一行是标记、十四行是格子 —— 单元 16 到 29，自上
-    // 而下。所以偏移 1 是单元 16，偏移 5 是单元 20。每一个都在
-    // 全新状态里点，因为跳转会移动视口 —— 也移动格子的窗口。
-    for (offset, unit) in [(1usize, 18u64), (5, 22)] {
-        let mut state = TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None);
-        turns(&mut state, 30);
-        let _ = screen(120, 24, &mut state);
-        let cells = turn_rail_cells(&mut state);
-        let mark = cells
-            .iter()
-            .position(|ch| *ch == '⋮')
-            .expect("这一列在顶端被裁");
-        click(
-            &mut state,
-            RAIL_AT_120,
-            (TRANSCRIPT_TOP + mark + offset) as u16,
-        );
-        // 名字独占一行，所以落点是名字那一行，话在它下面一行（2026-10-05 的排版修订）。
-        let rows = screen(120, 24, &mut state);
-        assert!(
-            rows[TRANSCRIPT_TOP].contains("[用户]")
-                && rows[TRANSCRIPT_TOP + 1].contains(&format!("问题 {unit}")),
-            "跳转落在那一个回合自己的问题上：{:?}",
-            &rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + 2]
-        );
-    }
 }
 
 #[test]
@@ -3167,25 +2975,6 @@ const MAIN_LEFT_AT_120: u16 = 41;
 const TRANSCRIPT_TEXT_RIGHT_AT_120: u16 = 118;
 const SCROLLBAR_AT_120: u16 = 118;
 const RAIL_AT_120: u16 = 119;
-
-/// 120x24 下转录的文本，每个显示行一个字符串。
-///
-/// 滚动条那一列**不**在里面：滚动条是按视口下面还有
-/// 多少行画出来的，所以详情覆盖层把窗格冻住时它还在动
-/// —— 比它就等于拿指示器比读者的
-/// 位置，而不是拿文本比文本。
-fn transcript_text(frame: &Buffer, rows: usize) -> Vec<String> {
-    (TRANSCRIPT_TOP..TRANSCRIPT_TOP + rows)
-        .map(|y| {
-            cells(
-                frame,
-                y as u16,
-                MAIN_LEFT_AT_120,
-                TRANSCRIPT_TEXT_RIGHT_AT_120,
-            )
-        })
-        .collect()
-}
 
 /// 屏幕上可见的第一条 `第 N 行` 提示的下标，如果有的话。
 fn first_notice(rows: &[String]) -> Option<usize> {
@@ -3443,7 +3232,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let mut state = state();
     let empty = screen(80, 24, &mut state);
     let rows = transcript_rows(&empty);
-    assert_eq!(rows, 13, "输入区三行给转录留下十三行：{empty:#?}");
+    assert_eq!(rows, 15, "输入区三行给转录留下十五行：{empty:#?}");
     // 转录下面依次是状态行与输入区上方那条横线，所以输入区
     // 从转录底往下数第三行开始。
     let input = TRANSCRIPT_TOP + rows + 2;
@@ -3465,7 +3254,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
-    assert_eq!(rows, 13, "三行草稿在地板之内，所以几何不动：{three:#?}");
+    assert_eq!(rows, 15, "三行草稿在地板之内，所以几何不动：{three:#?}");
     let input = TRANSCRIPT_TOP + rows + 2;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
     assert!(
@@ -3490,7 +3279,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let five = screen(80, 24, &mut state);
     assert_eq!(
         transcript_rows(&five),
-        11,
+        13,
         "超地板两行让转录少两行：{five:#?}"
     );
     assert!(
@@ -3814,7 +3603,7 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
-    assert_eq!(transcript_rows(&rows), 6, "草稿吃掉的是转录的行：{rows:#?}");
+    assert_eq!(transcript_rows(&rows), 8, "草稿吃掉的是转录的行：{rows:#?}");
     assert!(text.contains("上下文"), "左栏保住它的读数：{text}");
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
@@ -6403,56 +6192,6 @@ fn click(state: &mut TuiState, column: u16, row: u16) {
 }
 
 #[test]
-fn a_thinking_segment_opens_in_place_and_settles_in_place() {
-    // 从屏幕上看整个状态机：只有推理到了的时候出现 `正在思考`，
-    // 正文的第一个增量把同一行落定成 `思考完成`，不多加
-    // 一行，而完成的轨迹留着（票 02 §1）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(reasoning_delta("再看测试。"));
-    // 思考行只住在轨迹页上（票 10）。
-    open_trace_tab(&mut state, 120, 24);
-
-    let rows = screen(120, 24, &mut state);
-    let text = rows.join("\n");
-    assert!(
-        text.contains("[kimi] … 正在思考"),
-        "未落定的那行读起来是进行中：{text}"
-    );
-    assert!(!text.contains("思考完成"), "而且没有自称已完成：{text}");
-
-    state.apply(text_delta("答案是 42。"));
-    let rows = screen(120, 24, &mut state);
-    let text = rows.join("\n");
-    assert!(
-        text.contains("[kimi] ▸ ✓ 思考完成"),
-        "同一行原地落定：{text}"
-    );
-    assert!(
-        !text.contains("正在思考"),
-        "进行中那一行没了，没有被复制：{text}"
-    );
-    assert_eq!(
-        text.matches("思考完成").count(),
-        1,
-        "一段思考就是一行：{text}"
-    );
-
-    // 冻结之后正文仍然在流；完成的块把它换掉。
-    state.apply(message(2, "答案是 42。", Some("先看依赖，再看测试。")));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("[kimi] 答案是 42。") || text.contains("答案是 42。"),
-        "答案在转录里：{text}"
-    );
-    assert_eq!(
-        text.matches("思考完成").count(),
-        1,
-        "已记下的轨迹不会多添一行思考行：{text}"
-    );
-}
-
-#[test]
 fn a_turn_with_no_reasoning_adds_no_thinking_line() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "直接作答。", None));
@@ -6460,150 +6199,6 @@ fn a_turn_with_no_reasoning_adds_no_thinking_line() {
     assert!(
         !text.contains("思考") && !text.contains("正在思考"),
         "没有推理就没有思考行：{text}"
-    );
-}
-
-#[test]
-fn a_synthesizer_trace_streams_but_records_nothing() {
-    // 合成器发来推理增量，却写下 `reasoning: None`。这一行
-    // 仍然落定 —— 读者看见它在想 —— 而它的详情说整段文本
-    // 从没被记下（票 02 §1、票 04 §3）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("综合两边的意见。"));
-    state.apply(message(2, "结论。", None));
-    // 思考行是一条过程行，只在轨迹页上（票 10）。
-    open_trace_tab(&mut state, 120, 24);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("[kimi] ▸ ✓ 思考完成"),
-        "没有记下轨迹时这一行也落定：{text}"
-    );
-
-    click_row(&mut state, 120, 24, "✓ 思考完成");
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("本次未记录思考全文"),
-        "详情说这段文本没有被记下：{text}"
-    );
-}
-
-#[test]
-fn a_tool_result_is_folded_into_its_call_line() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "cargo test"}),
-    ));
-    state.apply(tool_completed(
-        2,
-        "call-1",
-        true,
-        Some("line one\nline two\nline three"),
-        None,
-    ));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("[kimi] ▸ 调用 bash 运行 cargo test"),
-        "调用行保住它的参数摘要，还多了一个记号：{text}"
-    );
-    assert!(
-        !text.contains("line one") && !text.contains("line two"),
-        "输出的正文被折起来了：{text}"
-    );
-
-    // 失败是同一行，末尾加 `失败` —— 绝不是第二行。
-    let mut failed = state_with_roster(&["kimi"]);
-    failed.apply(tool_started(
-        1,
-        "call-3",
-        "read_file",
-        serde_json::json!({"path": "missing.rs"}),
-    ));
-    failed.apply(tool_completed(
-        2,
-        "call-3",
-        false,
-        None,
-        Some("no such file"),
-    ));
-    open_trace_tab(&mut failed, 120, 24);
-    // 轨迹页正文收窄到 38 列之后这一行会折成两行，所以按行尾裁掉空白再拼起来看。
-    let page = trace_page(&mut failed, 120, 24);
-    let text: String = page.iter().map(|row| row.trim_end()).collect();
-    assert!(
-        text.contains("[kimi] ▸ 调用 read_file missing.rs 失败"),
-        "失败是调用行上的一个后缀：{text}"
-    );
-}
-
-#[test]
-fn a_failed_call_grows_one_row_with_the_first_line_of_its_error() {
-    // 错误正文仍然整段在详情里，而它的**首行**上屏：不点开也知道坏在哪
-    // （`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md` 第 5 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-3",
-        "read_file",
-        serde_json::json!({"path": "missing.rs"}),
-    ));
-    state.apply(tool_completed(
-        2,
-        "call-3",
-        false,
-        None,
-        Some("no such file\n后面那些行只在详情里"),
-    ));
-    open_trace_tab(&mut state, 120, 40);
-
-    let page = trace_page(&mut state, 120, 40);
-    let call = page
-        .iter()
-        .find(|row| row.contains("调用 read_file"))
-        .expect("调用行");
-    assert!(call.contains("失败"), "末尾那个红 `失败` 还在：{call}");
-    // 第二行从内容起点（第 9 列）起排：它没有自己的时刻戳。这块的账目（耗时、用量尾巴）
-    // 按既有规矩落在块的**最后一条**行尾，所以这一行后面可以有它们。
-    let error = page
-        .iter()
-        .find(|row| row.contains("no such file"))
-        .expect("错误首行");
-    assert!(
-        error.starts_with(&format!("{}no such file", " ".repeat(9))),
-        "错误首行从第 9 列起，只画一行：{error:?}"
-    );
-    assert!(
-        !page.iter().any(|row| row.contains("后面那些行")),
-        "第二行往后仍然只在详情里：{page:#?}"
-    );
-    assert!(
-        !page.iter().any(|row| row.contains('✗')),
-        "行首不加 `✗` —— 那要让全体行的内容宽降两列：{page:#?}"
-    );
-
-    // `ok = false` 而没有错误正文时，那一行不画 —— 没有可说的话就不占一格。
-    let mut mute = state_with_roster(&["kimi"]);
-    mute.apply(tool_started(
-        1,
-        "call-4",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    mute.apply(tool_completed(2, "call-4", false, None, None));
-    open_trace_tab(&mut mute, 120, 40);
-    let page = trace_page(&mut mute, 120, 40);
-    assert!(
-        page.iter()
-            .any(|row| row.contains("调用 bash") && row.contains("失败")),
-        "失败那一行还在：{page:#?}"
-    );
-    assert!(
-        !page.iter().any(|row| row.starts_with("         ")),
-        "没有错误正文就没有第二行：{page:#?}"
     );
 }
 
@@ -7714,49 +7309,6 @@ fn reasoning_never_joins_the_message_body() {
 }
 
 #[test]
-fn the_detail_overlay_freezes_the_transcript() {
-    // 打开了一行的读者会一直看着它：覆盖层起来时到来的
-    // 输出不许把窗格往下拽（票 02 §4）。
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(heng::render::RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 行"),
-        ));
-    }
-    // 打开方是**轨迹页**（今天唯一有入口的一页）：这条测试说的正是覆盖层把它背后的那一页冻住
-    // （票 13 把冻结收窄到打开方之后仍然成立）。
-    state.apply(message(41, "被点开的消息", None));
-    open_trace_tab(&mut state, 120, 24);
-
-    let _ = screen(120, 24, &mut state);
-    click_row(&mut state, 120, 24, "被点开的消息");
-    let before = screen(120, 24, &mut state);
-    assert!(before.join("\n").contains(MESSAGE_FACES), "覆盖层起来了");
-    let frozen = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&before));
-
-    // 覆盖层开着的时候有新输出到来。
-    for index in 40..60 {
-        state.apply(heng::render::RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 行"),
-        ));
-    }
-    let during = screen(120, 24, &mut state);
-    let after = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&during));
-    assert_eq!(after, frozen, "覆盖层后面的转录没有动");
-    // 到来的那些行也不算进读者的「新行」里：位置是
-    // 覆盖层在保的，所以「N 行新内容」会是在它底下数。
-    let counter = |rows: &[String]| {
-        rows.iter()
-            .find(|row| row.contains("行新内容"))
-            .cloned()
-            .unwrap_or_default()
-    };
-    assert_eq!(counter(&during), counter(&before), "而新行计数也被按住了");
-}
-
-#[test]
 fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
     // 问句不能画在覆盖层之上：底下那个模态会
     // 没法作答，因为拥有键盘的是覆盖层（票 02 §4）。
@@ -7819,35 +7371,6 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击回去了：{text}");
     assert!(answers.try_recv().is_err(), "翻页从不提交");
-}
-
-#[test]
-fn a_thinking_line_tints_its_speakers_name() {
-    // 思考提示带着一个 `speaker_label`，所以它的名字取讨论者的
-    // 颜色，而标记与状态词保持叙述灰
-    // （票 07 §2）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖。"));
-    state.apply(text_delta("答案。"));
-    open_trace_tab(&mut state, 120, 40);
-
-    let frame = buffer(120, 40, &mut state);
-    let Some((column, row)) = cell_of(&frame, 120, 40, "✓ 思考完成") else {
-        panic!("思考行在屏幕上");
-    };
-    // 名字正好坐在标记前面。
-    let name_x = column - text_columns("▸ ") as u16 - text_columns("[kimi] ") as u16;
-    assert_eq!(frame[(name_x, row)].symbol(), "[", "名字前缀在那儿");
-    assert_eq!(
-        frame[(name_x, row)].fg,
-        Color::LightCyan,
-        "这个名字取的是名册的第一个位置"
-    );
-    assert_eq!(
-        frame[(column, row)].fg,
-        Color::DarkGray,
-        "而状态词保持叙述灰"
-    );
 }
 
 #[test]
@@ -8312,129 +7835,6 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
     );
 }
 
-#[test]
-fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
-    // `调用 工具 描述`：读者看到这次调用*为的*是什么，而具体的
-    // 参数在详情里，一次点击之外（票 02 §2，2026-09-23 修正）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-60",
-        "bash",
-        serde_json::json!({"command": "find .scratch -type f"}),
-    ));
-    state.apply(tool_completed(2, "call-60", true, Some("out"), None));
-    open_trace_tab(&mut state, 120, 40);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("[kimi] ▸ 调用 bash 查询 .scratch"),
-        "这一行描述这次调用：{text}"
-    );
-    assert!(
-        !text.contains("find .scratch -type f"),
-        "而参数不印在上面：{text}"
-    );
-
-    // 问卷用问题自己的头部来描述自己。
-    let mut asked = state_with_roster(&["kimi"]);
-    asked.apply(tool_started(
-        1,
-        "call-61",
-        "ask_user_question",
-        serde_json::json!({"questions": [{"id": "q", "header": "下一步", "question": "接着做哪个？"}]}),
-    ));
-    asked.apply(tool_completed(2, "call-61", false, None, Some("declined")));
-    open_trace_tab(&mut asked, 120, 40);
-    let text = screen(120, 40, &mut asked).join("\n");
-    // 轨迹页只有 40 列，所以这一行会折成两行 —— 断言两段都在，而不是那一整句。
-    assert!(
-        text.contains("调用 ask_user_question 下一步") && text.contains("失败"),
-        "问题自己的摘要描述了这次调用：{text}"
-    );
-
-    // 参数还在详情里：打开就落在「参数」那一面。
-    click_row(&mut asked, 120, 40, "调用 ask_user_question");
-    let text = screen(120, 40, &mut asked).join("\n");
-    assert!(text.contains(TOOL_FACES), "参数那一面：{text}");
-    assert!(text.contains("下一步"), "而它带着具体的参数：{text}");
-}
-
-#[test]
-fn the_call_line_wears_the_narration_grey_after_its_speakers_name() {
-    // 描述是叙述，不是模型的答案，所以它穿和思考行
-    // 一样的灰；名字保持讨论者的颜色（2026-09-23）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-62",
-        "bash",
-        serde_json::json!({"command": "ls -la"}),
-    ));
-    state.apply(tool_completed(2, "call-62", true, Some("out"), None));
-    open_trace_tab(&mut state, 120, 40);
-    let frame = buffer(120, 40, &mut state);
-
-    let Some((name_x, row)) = cell_of(&frame, 120, 40, "[kimi]") else {
-        panic!("调用行在屏幕上");
-    };
-    let Some((call_x, _)) = cell_of(&frame, 120, 40, "调用 bash") else {
-        panic!("调用行在屏幕上");
-    };
-    assert_eq!(
-        frame[(name_x, row)].fg,
-        Color::LightCyan,
-        "名字保持讨论者的颜色"
-    );
-    assert_eq!(
-        frame[(call_x, row)].fg,
-        Color::DarkGray,
-        "而描述穿的是叙述灰"
-    );
-}
-
-#[test]
-fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
-    // 边框是讨论者的颜色 —— 还没读到一个字，你就知道
-    // 在读谁的那一行 —— 而字坐在边框里往里一格（2026-09-23）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(tool_started(
-        1,
-        "call-63",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(2, "call-63", true, Some("out"), None));
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "调用 bash");
-    let frame = buffer(120, 40, &mut state);
-
-    // 覆盖层的左上角：角是空的，所以认那条两端各一格空角的虚线。
-    let (x, y, _) = overlay_frame(&frame, 120, 40).expect("覆盖层的左上角");
-    assert_eq!(
-        frame[(x + 1, y)].fg,
-        palette::CHROME,
-        "边框归框架（`CHROME`）"
-    );
-    assert_eq!(
-        frame[(x + 2, y + 2)].fg,
-        Color::LightCyan,
-        "而「这是谁的行」退到标题行上，仍穿发言者的颜色"
-    );
-    assert_eq!(
-        (
-            frame[(x + 1, y + 1)].symbol(),
-            frame[(x + 2, y + 1)].symbol()
-        ),
-        (" ", " "),
-        "紧贴边框里面那几格是空气，两个轴上都是"
-    );
-    assert_eq!(
-        frame[(x + 2, y + 2)].symbol(),
-        "[",
-        "而标题在两个方向上都从边框往里一格开始"
-    );
-}
-
 /// 覆盖层在屏幕上画出来的框：它的左列与宽度。
 fn overlay_box(frame: &Buffer, width: u16, height: u16) -> Option<(u16, u16)> {
     overlay_frame(frame, width, height).map(|(x, _, box_width)| (x, box_width))
@@ -8520,64 +7920,6 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     assert_eq!(seen, total, "到底时页脚读的是最后一行：{seen}/{total}");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("第 200 行"), "而最后一行真的在屏幕上：{text}");
-}
-
-/// 一次针对 shell 命令的权限询问，按循环问它的样子。
-fn ask_bash(command: &str) -> heng::render::ConsoleRequest {
-    use heng::permissions::PermissionRequest;
-    use heng::render::AskRequest;
-    let (reply, _answer) = tokio::sync::oneshot::channel();
-    ConsoleRequest::Ask(AskRequest {
-        request: PermissionRequest {
-            escalation: None,
-            speaker: None,
-            request_id: "r-1".to_owned(),
-            tool_call_id: "c-1".to_owned(),
-            tool_name: "bash".to_owned(),
-            args: serde_json::json!({ "command": command }),
-            reason: "mode ask".to_owned(),
-        },
-        reply,
-    })
-}
-
-#[test]
-fn the_permission_question_describes_the_call_the_way_the_line_does() {
-    // 问句和它关于的那条折起行是**同一个**函数产出的，所以
-    // 它们不可能漂开 —— 而这次调用将怎么跑就留在它们下面，因为
-    // 批准的这一刻正是那条确切命令必须可读的时刻（2026-09-23，用户
-    // 要求：弹窗要读起来像那一行，两个都留着）。
-    let command = "head -5 README.md";
-    let mut state = state_with_roster(&["deepseek"]);
-    // 同一次调用，先折进转录……
-    state.apply(tool_started(
-        1,
-        "call-80",
-        "bash",
-        serde_json::json!({ "command": command }),
-    ));
-    state.apply(tool_completed(2, "call-80", true, Some("out"), None));
-    // 折起行住在轨迹页里（票 10），所以先把左栏切过去；问句随后立在主列上。
-    open_trace_tab(&mut state, 120, 40);
-    // ……然后被问起。
-    state.request(ask_bash(command));
-
-    let rows = screen(120, 40, &mut state);
-    let text = rows.join("\n");
-    assert_eq!(
-        text.matches("调用 bash 查看 README.md").count(),
-        2,
-        "折起行和问句带着同一句描述：{text}"
-    );
-    let description = rows
-        .iter()
-        .position(|row| row.contains("调用 bash 查看 README.md") && row.contains('┆'))
-        .expect("覆盖层里的描述行");
-    let call = rows
-        .iter()
-        .position(|row| row.contains("bash（command=head -5 README.md）"))
-        .expect("确切的那条调用还显示着");
-    assert!(description < call, "而确切的那条调用在它后面：{text}");
 }
 
 /// 一行里每一根表格竖线的显示列号 —— 一张表画的还是不是一张表，看这个。
@@ -8707,41 +8049,41 @@ fn wheel_at(column: u16, row: u16, up: bool) -> ratatui::crossterm::event::Mouse
     }
 }
 
-/// 主列轨迹页里的那些行：页签条、状态行、输入区与提示行都不算，左栏不算
-/// （`.scratch/trace-in-main/spec.md` §1、§3）。
+/// 右栏里轨迹的那些行（票 13 之后轨迹的家）：横带以下、右栏底部以上。
 ///
-/// **顶上那条固定横带也不算**（票 22）：那三行是刻度与两条泳道，而这里的断言说的几乎都是
+/// **顶上那条固定横带也不算**（票 22）：那两行是刻度与一行三态，而这里的断言说的几乎都是
 /// 账本。要看横带的用 [`trace_band_rows`]。
 fn trace_page_with_blanks(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
-    let rows = conversation_rows(state, width, height);
-    let height_of_page = transcript_rows(&rows);
-    let top = ledger_top(&rows);
-    rows[top..TRANSCRIPT_TOP + height_of_page].to_vec()
+    let panes = heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    );
+    let Some(trace) = panes.right_trace else {
+        return Vec::new();
+    };
+    let frame = buffer(width, height, state);
+    (trace.y..trace.y + trace.height)
+        .map(|y| cells(&frame, y, trace.x, trace.right()))
+        .collect()
 }
 
-/// 轨迹页的账本从哪一行起。
-///
-/// 横带那几行不属于账本。票 13 之后账本的行有三种开头：宽档的 `HH:MM:SS `、窄档没有
-/// 时刻的成员行（带 `[名字]`），以及**不带时刻的组头**（`回合 N` / `轮次 N`）。取第一个
-/// 满足其中一种的行 —— 于是组头那一行也在账本里（旧形状里它自己带时刻，天然被这个判据
-/// 收进来）。
-fn ledger_top(rows: &[String]) -> usize {
-    (TRANSCRIPT_TOP..rows.len())
-        .find(|index| {
-            let row = &rows[*index];
-            row.chars().nth(2) == Some(':')
-                || row.contains('[')
-                || row.contains("回合 ")
-                || row.contains("轮次 ")
-        })
-        .unwrap_or(TRANSCRIPT_TOP)
-}
-
-/// 轨迹页顶上那条固定横带的那几行（票 22）—— 刻度、模型泳道、工具泳道。
+/// 右栏顶上那条固定横带的那几行（票 22）—— 刻度与一行三态。
 fn trace_band_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
-    let rows = conversation_rows(state, width, height);
-    let top = ledger_top(&rows);
-    rows[TRANSCRIPT_TOP..top].to_vec()
+    let panes = heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    );
+    let Some(band) = panes.right_band else {
+        return Vec::new();
+    };
+    let frame = buffer(width, height, state);
+    (band.y..band.y + band.height)
+        .map(|y| cells(&frame, y, band.x, band.right()))
+        .collect()
 }
 
 /// 同上，但空行不占位置 —— 大多数断言只关心有字的那些。
@@ -8782,15 +8124,8 @@ fn divide_column(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
 /// 切换之后**再画一帧**：`trace_rect` 记的是上一帧真画出来的东西，指针分派就靠它
 /// （票 04 §1 的那条纪律）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
-    // 轨迹是主列页签条上的第二个标签（`.scratch/trace-in-main/spec.md` §2）：它画在屏幕第一
-    // 行上，而不是左栏那条页签条上。
-    click_in_row(
-        state,
-        width,
-        height,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
+    // 票 16 之后轨迹只在右栏里：打开右栏，再画一帧让 `trace_rect` 记上位置。
+    state.set_right_rail(true);
     let _ = screen(width, height, state);
 }
 
@@ -8814,64 +8149,6 @@ fn the_trace_page_carries_the_transcript_and_sits_at_the_bottom() {
         !page.iter().any(|row| row.contains("第 0 句话")),
         "更老的那些被滚出了页区：{page:#?}"
     );
-}
-
-/// 滚轮滚**当前显示的那一页**，而两个视口的滚动位置互不打扰
-/// （`.scratch/trace-in-main/spec.md` §4，推翻 `trace-tab` §5 那条按指针位置的分派）。
-#[test]
-fn the_wheel_scrolls_the_page_on_screen_and_leaves_the_other_alone() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    let page_before = trace_page(&mut state, 120, 24);
-    // 指针停在哪儿都一样：屏幕上只有轨迹这一页。
-    state.mouse(wheel_at(10, 12, true));
-    let page = trace_page(&mut state, 120, 24);
-    assert_ne!(page, page_before, "轨迹页往上滚了：{page:#?}");
-    assert!(
-        !page.iter().any(|row| row.contains("第 39 句话")),
-        "它离开了底部：{page:#?}"
-    );
-
-    // 切到对话页：它仍在底部，一个字没动 —— 两个视口各记各的。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let conversation_before = conversation_rows(&mut state, 120, 24);
-    assert!(
-        conversation_before
-            .iter()
-            .any(|row| row.contains("第 39 句话")),
-        "对话视图仍在底部：{conversation_before:#?}"
-    );
-
-    // 在对话页上滚一格：动的是对话。
-    state.mouse(wheel_at(90, 12, true));
-    assert!(
-        !conversation_rows(&mut state, 120, 24)
-            .iter()
-            .any(|row| row.contains("第 39 句话")),
-        "对话跟着滚了"
-    );
-
-    // 切回轨迹页：它留在刚才放下的地方。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
-    assert_eq!(trace_page(&mut state, 120, 24), page, "轨迹页留在原处");
 }
 
 /// 轨迹页离开底部之后也画「N 条新行」，而且那个块点得动。
@@ -8898,43 +8175,6 @@ fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
     assert!(
         page.iter().any(|row| row.contains("第 39 句话")),
         "点它回到了最新：{page:#?}"
-    );
-}
-
-/// 切页不丢阅读进度：轨迹页的位置在切走再切回之后还在（票 09 验证 1）。
-#[test]
-fn the_trace_page_keeps_its_place_across_a_tab_switch() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    state.mouse(wheel_at(10, 12, true));
-    let before = trace_page(&mut state, 120, 24);
-    let top_before = before.first().cloned().expect("轨迹页有内容");
-
-    // 切到对话页，再切回来：轨迹页的位置还在（主列页签条在屏幕第一行）。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let conversation = conversation_rows(&mut state, 120, 24);
-    assert!(
-        conversation.iter().any(|row| row.contains("第 39 句话")),
-        "对话页在它的底部"
-    );
-    open_trace_tab(&mut state, 120, 24);
-    let after = trace_page(&mut state, 120, 24);
-    assert_eq!(
-        after.first().cloned(),
-        Some(top_before),
-        "位置还在：{after:#?}"
     );
 }
 
@@ -8982,57 +8222,6 @@ fn a_message_in_the_trace_page_is_one_line_that_opens_its_full_text() {
     click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("第二行在那里"), "详情里有全文：{text}");
-}
-
-/// 轨迹页在主列里，而主列最小 40 列 —— 所以前缀**总是**带方括号
-/// （`.scratch/trace-in-main/spec.md` §3）。去括号那一支还留在代码里（它与共享渲染那条路径
-/// 共用签名），但屏幕上到不了。
-#[test]
-fn the_trace_page_keeps_the_brackets_around_the_prefix() {
-    for width in [80u16, 120] {
-        let mut state = state_with_roster(&["kimi"]);
-        state.apply(user_message(1, "问题"));
-        open_trace_tab(&mut state, width, 24);
-        let page = trace_page(&mut state, width, 24);
-        assert!(
-            page.iter()
-                .any(|row| without_stamp(row).starts_with("[用户] ")),
-            "{width} 列下前缀带方括号：{page:#?}"
-        );
-    }
-}
-
-/// 宽度变化按目标掩码重放：两个视口都按新宽度重建，且共享源只被放一遍
-/// （票 09 验证 4 走的就是这条 `emit_painted` 路径 —— `--continue` 的重放与实时
-/// 共用它）。
-#[test]
-fn a_width_change_replays_the_trace_page_too() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    let _ = screen(120, 24, &mut state);
-
-    // 缩到 80 列：左栏从 40 变 28，两个视口的源行都得按新宽度重排。
-    let page = trace_page(&mut state, 80, 24);
-    assert!(
-        page.iter().any(|row| row.contains("第 39 句话")),
-        "重放之后轨迹页仍贴底：{page:#?}"
-    );
-    let conversation = conversation_rows(&mut state, 80, 24);
-    assert!(
-        conversation.iter().any(|row| row.contains("第 39 句话")),
-        "对话视图也还在：{conversation:#?}"
-    );
-    let lines = conversation
-        .iter()
-        .filter(|row| row.contains("句话"))
-        .count();
-    assert!(lines <= 24, "对话视图没有被推第二遍：{conversation:#?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -9457,156 +8646,6 @@ fn the_trace_page_opens_each_turn_with_a_header() {
     }
 }
 
-/// 组头放不下时**丢字段，而不是被窗格折成两行**：先丢直方图的尾部，第一项留着
-/// （`spec.md` §5、票 16 第 5 条、用户故事 6）。
-///
-/// 判据看屏上两件事：组头那一行少了哪些字段，以及它**后面紧接着的又是一条成员行**
-/// —— 折成两行时那一位置会是它的续行。
-#[test]
-fn a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(user_message(1, "把这几样都跑一遍"));
-    state.apply(turn_started(2));
-    for (offset, tool) in ["bash", "read", "edit", "web_search", "web_fetch", "task"]
-        .into_iter()
-        .enumerate()
-    {
-        let seq = 3 + offset as u64 * 2;
-        let id = format!("c-{offset}");
-        state.apply(tool_started(
-            seq,
-            &id,
-            tool,
-            serde_json::json!({"command": tool}),
-        ));
-        state.apply(tool_completed(seq + 1, &id, true, Some("body"), None));
-    }
-    open_trace_tab(&mut state, 120, 40);
-
-    // 宽档（120 列 → 主列 79）：组头的字段全放得下，而且它只占一行。
-    let wide = trace_page(&mut state, 120, 40);
-    let header = wide
-        .iter()
-        .position(|row| row.contains("回合 1"))
-        .expect("组头在屏幕上");
-    assert!(
-        wide[header].contains("bash×1"),
-        "第一项在：{}",
-        wide[header]
-    );
-    assert!(
-        wide[header].contains("task×1"),
-        "宽档放得下最后一项：{}",
-        wide[header]
-    );
-    assert!(
-        wide[header + 1].contains("回合开始"),
-        "组头只占一行：{:#?}",
-        &wide[header..=header + 1]
-    );
-
-    // 窄档（70 列 → 主列 41）：从右往左丢尾部，而**第一项仍在**。
-    let narrow = trace_page(&mut state, 70, 40);
-    let header = narrow
-        .iter()
-        .position(|row| row.contains("回合 1"))
-        .expect("组头在屏幕上");
-    assert!(
-        narrow[header].contains("bash×1"),
-        "第一项还在：{}",
-        narrow[header]
-    );
-    assert!(
-        narrow[header].matches('×').count() < wide[header].matches('×').count(),
-        "窄档丢的比宽档更多：宽 {} / 窄 {}",
-        wide[header],
-        narrow[header]
-    );
-    assert!(
-        narrow[header + 1].contains("回合开始"),
-        "组头只占一行：{:#?}",
-        &narrow[header..=header + 1]
-    );
-}
-
-/// 轨迹页补了滚动条，画在**最右列**，正文因此 38 / 26 列
-/// （`.scratch/tui-visual-language/issues/07` 决定 2）。
-#[test]
-fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
-    // 主列内容宽 79 列、正文 77 列（滚动条与回合条那两列永远留着）：77 个字一句话一行放得下，
-    // 78 个就折（`.scratch/trace-in-main/spec.md` §3、§4）。
-    let mut state = state_with_roster(&["kimi"]);
-    // 主列内容 77 列里，行首 9 列归时间戳（`.scratch/trace-in-main/spec.md` §5），所以正文
-    // 拿到 68 列。
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "x".repeat(68),
-    ));
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "y".repeat(69),
-    ));
-    open_trace_tab(&mut state, 120, 24);
-    let page = trace_page(&mut state, 120, 24);
-    assert_eq!(
-        page.iter().filter(|row| row.contains('x')).count(),
-        1,
-        "68 列一句话一行：{page:#?}"
-    );
-    assert_eq!(
-        page.iter().filter(|row| row.contains('y')).count(),
-        2,
-        "69 列一句话折成两行：{page:#?}"
-    );
-
-    // 有东西可读时主列右缘那一列（x = 118）出现滑块。
-    for index in 0..20 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    let frame = buffer(120, 24, &mut state);
-    assert!(
-        (TRANSCRIPT_TOP as u16..24).any(|y| frame[(SCROLLBAR_AT_120, y)].symbol() == "█"),
-        "主列右缘那一列是滚动条"
-    );
-
-    // 窄档（80 列）也一样：左栏让出 29 列，主列内容因此 51 列、正文 49 列，滚动条在 x = 78。
-    let mut narrow = state_with_roster(&["kimi"]);
-    narrow.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "z".repeat(40),
-    ));
-    narrow.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "w".repeat(41),
-    ));
-    open_trace_tab(&mut narrow, 80, 24);
-    let page = trace_page(&mut narrow, 80, 24);
-    assert_eq!(
-        page.iter().filter(|row| row.contains('z')).count(),
-        1,
-        "40 列一句话一行：{page:#?}"
-    );
-    assert_eq!(
-        page.iter().filter(|row| row.contains('w')).count(),
-        2,
-        "41 列一句话折成两行：{page:#?}"
-    );
-    for index in 0..20 {
-        narrow.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句"),
-        ));
-    }
-    let frame = buffer(80, 24, &mut narrow);
-    assert!(
-        (TRANSCRIPT_TOP as u16..24).any(|y| frame[(78, y)].symbol() == "█"),
-        "窄档的滚动条在 x = 78"
-    );
-}
-
 /// 轨迹页与主列都不铺底：区分轮次的是那条线，不是色块（票 12 的修订）。
 #[test]
 fn neither_view_paints_a_stripe_background() {
@@ -9624,177 +8663,9 @@ fn neither_view_paints_a_stripe_background() {
 // 主列页签条与轨迹视图的归属（`.scratch/trace-in-main/spec.md` §2、§3、§4）
 // ---------------------------------------------------------------------------
 
-/// 主列页签条上的两个标签切换主列那一页，默认是对话。
-#[test]
-fn clicking_the_main_tab_switches_the_page_in_the_main_column() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(user_message(1, "问题"));
-    state.apply(tool_started(
-        2,
-        "c1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(3, "c1", true, Some("out"), None));
-
-    // 起步是对话页：过程行不在上面。
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(conversation.contains("问题"), "{conversation}");
-    assert!(
-        !conversation.contains("调用 bash"),
-        "过程行不进对话：{conversation}"
-    );
-
-    // 点 `轨迹`：主列换成轨迹页，而它是全量。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
-    let page = trace_page(&mut state, 120, 24).join("\n");
-    assert!(page.contains("调用 bash"), "轨迹页画全量块：{page}");
-
-    // 点 `对话` 回来。
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(conversation.contains("问题"), "{conversation}");
-    assert!(
-        !conversation.contains("调用 bash"),
-        "过程行仍不进对话：{conversation}"
-    );
-}
-
-/// 轨迹页在主列的页签上，所以 `Ctrl-O` 收起左栏、终端窄到 60 列时它照样可达
-/// （`.scratch/trace-in-main/spec.md` §4，推翻 `trace-tab` §6 那条「过程行暂时看不到」）。
-#[test]
-fn the_trace_page_is_reachable_however_narrow_the_terminal_is() {
-    for (width, hide) in [(120u16, true), (60, false)] {
-        let mut state = state_with_roster(&["kimi"]);
-        a_session_with_process_rows(&mut state);
-        if hide {
-            state.key(Key::CtrlO);
-        }
-        open_trace_tab(&mut state, width, 24);
-        let page = trace_page(&mut state, width, 24).join("\n");
-        assert!(
-            page.contains("调用 bash"),
-            "{width} 列（收起左栏 = {hide}）下轨迹页画着过程行：{page}"
-        );
-    }
-}
-
-/// 回合条只画在对话页上：它量的是对话视口的单位位置，画在轨迹页上会指着另一个视口
-/// （`.scratch/trace-in-main/spec.md` §4）。
-#[test]
-fn the_turn_rail_is_only_on_the_conversation_page() {
-    let mut state = state_with_roster(&["kimi"]);
-    turns(&mut state, 3);
-    let _ = screen(120, 24, &mut state);
-    assert!(!turn_rail_shape(&mut state).is_empty(), "对话页上有格子");
-    open_trace_tab(&mut state, 120, 24);
-    assert_eq!(turn_rail_shape(&mut state), "", "轨迹页那一列是空的");
-}
-
-/// 键盘三键归**当前显示的那一页**（`.scratch/trace-in-main/spec.md` §4，推翻
-/// `trace-tab` 用户故事 32 那条「轨迹只吃滚轮」）。
-#[test]
-fn the_page_keys_follow_the_page_on_screen() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    let before = trace_page(&mut state, 120, 24);
-    state.key(Key::PageUp);
-    let page = trace_page(&mut state, 120, 24);
-    assert_ne!(page, before, "轨迹页翻了一页：{page:#?}");
-    state.key(Key::CtrlG);
-    assert!(
-        trace_page(&mut state, 120, 24)
-            .iter()
-            .any(|row| row.contains("第 39 句话")),
-        "回底键把它带回最新"
-    );
-
-    // 切到对话页：同一批键动的是对话，而轨迹页停在它被放下的地方。
-    let page_left = trace_page(&mut state, 120, 24);
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    state.key(Key::PageUp);
-    assert!(
-        !conversation_rows(&mut state, 120, 24)
-            .iter()
-            .any(|row| row.contains("第 39 句话")),
-        "对话被翻走了"
-    );
-    state.key(Key::CtrlG);
-    click_in_row(
-        &mut state,
-        120,
-        24,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
-    assert_eq!(trace_page(&mut state, 120, 24), page_left, "轨迹页留在原处");
-}
-
 // ---------------------------------------------------------------------------
 // 轨迹行的时间戳（`.scratch/trace-in-main/spec.md` §5）
 // ---------------------------------------------------------------------------
-
-/// 轨迹页里每个块的开头都是**产生它的那一刻**：不同事件的两个块读起来就是两个时刻。
-#[test]
-fn every_block_on_the_trace_page_opens_with_its_own_time() {
-    use heng::events::{EventPayload, SpeakerId, StopReason};
-
-    let mut state = state_with_roster(&["kimi"]);
-    let early = fixed_at(4, 16, 53);
-    let late = fixed_at(9, 5, 1);
-    state.apply(at_event(
-        1,
-        early,
-        EventPayload::TurnStarted {
-            agent: SpeakerId::Debater("kimi".into()),
-            iteration: 1,
-        },
-    ));
-    state.apply(at_event(
-        2,
-        late,
-        EventPayload::TurnEnded {
-            reason: StopReason::Completed,
-        },
-    ));
-    open_trace_tab(&mut state, 120, 24);
-    let page = trace_page(&mut state, 120, 24);
-    let first = wording::stamp(early);
-    let second = wording::stamp(late);
-    assert_ne!(first, second, "两个时刻读起来不同");
-    assert!(
-        page.iter().any(|row| row.starts_with(&first)),
-        "回合开始那一行带着它自己的时刻（{first}）：{page:#?}"
-    );
-    assert!(
-        page.iter().any(|row| row.starts_with(&second)),
-        "回合结束那一行带着它自己的时刻（{second}）：{page:#?}"
-    );
-}
 
 /// 对话视图里**没有**时间戳：时刻只长在轨迹页上（`.scratch/trace-in-main/spec.md` §5）。
 #[test]
@@ -9822,198 +8693,9 @@ fn the_conversation_page_carries_no_stamps() {
     );
 }
 
-/// 一个折成两行的块：只有首行顶着它的时刻，折出来的续行从第 0 列起 —— 时刻是**块**的属性，
-/// 不是每一行的（`.scratch/trace-in-main/spec.md` §5）。
-#[test]
-fn a_wrapped_block_carries_its_stamp_on_the_first_line_only() {
-    let at = fixed_at(4, 16, 53);
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(RenderEvent::Notice {
-        session: heng::events::SessionId::new("01J8ZQ4K7M"),
-        at,
-        message: "字".repeat(80),
-    });
-    open_trace_tab(&mut state, 120, 24);
-    let page = trace_page(&mut state, 120, 24);
-    let rows: Vec<&String> = page.iter().filter(|row| row.contains('字')).collect();
-    assert!(rows.len() >= 2, "一句话折成两行：{page:#?}");
-    assert!(
-        rows[0].starts_with(&wording::stamp(at)),
-        "首行带时刻：{:?}",
-        rows[0]
-    );
-    assert!(
-        !rows[1].starts_with(&wording::stamp(at)),
-        "续行不再重复时刻：{:?}",
-        rows[1]
-    );
-    assert!(
-        rows[1].starts_with('字'),
-        "续行从第 0 列接着上一行的话：{:?}",
-        rows[1]
-    );
-    assert_eq!(
-        text_columns(&rows[0][..heng::render::layout::STAMP_COLUMNS as usize]),
-        heng::render::layout::STAMP_COLUMNS as usize,
-        "时刻列宽就是那个常数"
-    );
-}
-
-/// 一个 `HH:MM:SS ` 戳的形状：不读真时钟，因为推理增量没有信封，开着的行的时刻只能是
-/// 「收到它的那一刻」（`.scratch/trace-thought-stamp/spec.md` §1）。
-fn looks_like_a_stamp(text: &str) -> bool {
-    let columns = heng::render::layout::STAMP_COLUMNS as usize;
-    let bytes = text.as_bytes();
-    bytes.len() >= columns
-        && bytes[..columns - 1]
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| match index {
-                2 | 5 => *byte == b':',
-                _ => byte.is_ascii_digit(),
-            })
-        && bytes[columns - 1] == b' '
-}
-
-/// 还开着的那一行也有时刻：**思考开始**那一刻（`.scratch/trace-thought-stamp/spec.md` §1，
-/// 推翻 `trace-in-main` 用户故事 21 的后半句）。
-#[test]
-fn an_open_thinking_line_carries_the_moment_its_thinking_started() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖，"));
-    open_trace_tab(&mut state, 120, 24);
-
-    let page = trace_page(&mut state, 120, 24);
-    let row = page
-        .iter()
-        .find(|row| row.contains("… 正在思考"))
-        .expect("思考行在轨迹页上");
-    assert!(looks_like_a_stamp(row), "行首是一个时刻：{row:?}");
-    assert_eq!(
-        without_stamp(row).trim_end(),
-        "[kimi] … 正在思考",
-        "戳只占行首那几列"
-    );
-}
-
-/// 定稿时同一行的时间戳跳成完成那一刻（`.scratch/trace-thought-stamp/spec.md` §2）。
-#[test]
-fn a_settling_thinking_line_jumps_to_the_moment_it_finished() {
-    use heng::events::{EventPayload, Role};
-
-    let done = fixed_at(4, 16, 53);
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖，"));
-    state.apply(at_event(
-        2,
-        done,
-        EventPayload::MessageCompleted {
-            role: Role::Assistant,
-            text: "答案是 42。".to_owned(),
-            reasoning: Some("先看依赖，".to_owned()),
-
-            first_token_ms: None,
-        },
-    ));
-    open_trace_tab(&mut state, 120, 24);
-
-    let page = trace_page(&mut state, 120, 24);
-    let row = page
-        .iter()
-        .find(|row| row.contains("思考完成"))
-        .expect("定稿的那一行");
-    assert!(
-        row.starts_with(&wording::stamp(done)),
-        "定稿后写的是完成那一刻（{}）：{row:?}",
-        wording::stamp(done)
-    );
-}
-
-/// 宽度变化会把轨迹页整批重放，重放出来的那一行带着同一个戳
-/// （`.scratch/trace-thought-stamp/spec.md` §3）。
-#[test]
-fn a_replayed_open_thinking_line_keeps_its_stamp() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖，"));
-    open_trace_tab(&mut state, 120, 24);
-    let before = trace_page(&mut state, 120, 24)
-        .into_iter()
-        .find(|row| row.contains("… 正在思考"))
-        .expect("思考行在轨迹页上");
-
-    let page = trace_page(&mut state, 100, 24);
-    let after = page
-        .iter()
-        .find(|row| row.contains("… 正在思考"))
-        .expect("重放出来的思考行");
-    assert!(looks_like_a_stamp(after), "重放出来的行也有戳：{after:?}");
-    assert_eq!(
-        without_stamp(after).trim_end(),
-        without_stamp(&before).trim_end(),
-        "重放不改变这一行的内容"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // 详情按视图还原（`.scratch/trace-tab/spec.md` §5；票 13）
 // ---------------------------------------------------------------------------
-
-/// 主列里含 `needle` 的那一屏行（轨迹视图的那些行住在这里）。
-fn main_row_of(state: &mut TuiState, needle: &str) -> u16 {
-    let frame = buffer(120, 24, state);
-    (0..24)
-        .find(|y| {
-            cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120).contains(needle)
-        })
-        .unwrap_or_else(|| panic!("主列里没有含 {needle:?} 的行"))
-}
-
-/// 从轨迹页打开的详情，关掉之后回到轨迹页打开前的位置，而对话视图一个字没动
-/// （票 13 验证 2）。
-#[test]
-fn closing_a_trace_detail_returns_to_where_it_was_opened() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..10 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    state.apply(message(11, "被点开的消息", None));
-    for index in 0..10 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("后 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    let _ = screen(120, 24, &mut state);
-    // 往上滚一格，进入回看态。
-    state.mouse(wheel_at(10, 12, true));
-    let page_before = trace_page(&mut state, 120, 24);
-    let conversation_before = conversation_rows(&mut state, 120, 24);
-    assert!(
-        page_before.iter().any(|row| row.contains("被点开的消息")),
-        "那条消息还在页上：{page_before:#?}"
-    );
-
-    let row = main_row_of(&mut state, "被点开的消息");
-    click(&mut state, MAIN_LEFT_AT_120, row);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains(MESSAGE_FACES), "详情开着：{text}");
-
-    state.key(Key::Esc);
-    assert_eq!(
-        trace_page(&mut state, 120, 24),
-        page_before,
-        "轨迹页回到打开前的位置"
-    );
-    assert_eq!(
-        conversation_rows(&mut state, 120, 24),
-        conversation_before,
-        "对话视图没动"
-    );
-}
 
 /// 指针在左栏、但显示的不是轨迹页时，滚轮仍归转录：轨迹 pane 这一帧没被画出来，滚它会
 /// 算出错的落点。判据是「轨迹页在不在屏幕上」，不是「指针在不在左栏」。
@@ -10410,36 +9092,6 @@ fn the_receipt_of_an_open_lands_in_the_hint_row() {
 // 用量尾巴与回合合计
 // （ADR 0016、.scratch/trace-usage-tail/spec.md）
 // ---------------------------------------------------------------------------
-
-/// 一条 `TurnStarted`，迭代号由调用方给 —— 工具循环里的第二次调用就是 `iteration: 2`。
-fn turn_started_at(seq: u64, iteration: u32) -> heng::render::RenderEvent {
-    use heng::events::{Event, EventPayload, SpeakerId};
-    heng::render::RenderEvent::Logged {
-        session: heng::events::SessionId::new("01J8ZQ4K7M"),
-        event: Event::new(
-            seq,
-            SpeakerId::Debater("kimi".into()),
-            EventPayload::TurnStarted {
-                agent: SpeakerId::Debater("kimi".into()),
-                iteration,
-            },
-        ),
-    }
-}
-
-#[test]
-fn a_synthesizer_usage_keeps_its_own_row() {
-    // 合成器那次调用不属于任何回合，没有可承载的宿主 —— 它照旧自己占一行（§4）。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(usage(1, 10, 2, 6, 4));
-    open_trace_tab(&mut state, 120, 24);
-
-    let text = trace_page(&mut state, 120, 24).join("\n");
-    assert!(
-        text.contains("用量 in=10 out=2 cached=6 miss=4"),
-        "合成器那笔仍是独立一行：{text}"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // 会话中途换模型与思考强度（`.scratch/model-switching/spec.md`）
@@ -11160,187 +9812,6 @@ fn a_call_start() -> chrono::DateTime<chrono::Utc> {
     fixed_at(9, 12, 11)
 }
 
-/// 一次模型调用：起点、一笔用量、一条带首 token 时刻的完成 —— 8 秒前开始、8 秒后完成，
-/// 首 token 等了 7.4 秒，报出来 222 个输出 token。
-fn a_call_with_a_first_token(state: &mut TuiState) {
-    use heng::events::{EventPayload, Role, Usage};
-    let start = a_call_start();
-    state.apply(at_event(
-        1,
-        start,
-        EventPayload::TurnStarted {
-            agent: kimi(),
-            iteration: 1,
-        },
-    ));
-    state.apply(at_event(
-        2,
-        start + chrono::Duration::milliseconds(200),
-        EventPayload::UsageRecorded {
-            usage: Usage {
-                input_tokens: 12_000,
-                output_tokens: 222,
-                cached_tokens: 0,
-                miss_tokens: 0,
-                reasoning_tokens: None,
-            },
-        },
-    ));
-    state.apply(at_event(
-        3,
-        start + chrono::Duration::milliseconds(8_000),
-        EventPayload::MessageCompleted {
-            role: Role::Assistant,
-            text: "答案是 42。".to_owned(),
-            reasoning: None,
-            first_token_ms: Some(7_400),
-        },
-    ));
-}
-
-/// 切到「计时」那一面：打开时落在正文上，`Tab` 走过**用量**那一面。
-fn tab_to_timing(state: &mut TuiState) {
-    next_face(state); // 正文 → 用量
-    next_face(state); // 用量 → 计时
-}
-
-#[test]
-fn a_message_detail_walks_its_faces_with_the_tab_key() {
-    // 一份消息详情有四个面：正文（默认面）、用量（票 15）、计时、概述。`Tab` 一路走，
-    // `Shift+Tab` 走回来，而标签条上写着现在在哪一面、有哪几面（票 13 第 3 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    a_call_with_a_first_token(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "答案是 42。");
-
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains(MESSAGE_FACES), "顶上那条标签条：{text}");
-    assert!(text.contains("答案是 42。"), "打开时落在正文上：{text}");
-
-    next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains(wording::usage_ledger_note()),
-        "第二面是用量：{text}"
-    );
-    // 正文那一面换掉了：整屏只剩**底下那条转录行**里的那一处 —— 覆盖层不再画它。这里数
-    // 次数而不是问「有没有」，因为底下的行本来就写着同一句话，一句 `!contains` 证明不了
-    // 这一面换了。
-    assert_eq!(
-        text.matches("答案是 42。").count(),
-        1,
-        "这一面换了，正文只剩底下那条转录行：{text}"
-    );
-
-    next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("开始时刻"), "第三面是计时：{text}");
-
-    next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("一条消息"), "第四面是概述：{text}");
-
-    // `Tab` 是环形的：再走一格回到正文。
-    next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("答案是 42。"), "绕过末尾回到第一面：{text}");
-
-    // `Shift+Tab` 往回走一格：正文 → 概述（最后一面）。
-    state.key(Key::BackTab);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("一条消息"), "往回的 `Tab`：{text}");
-}
-
-#[test]
-fn the_timing_face_reads_the_numbers_off_this_call() {
-    // 计时面给的是**精确值**（与时间轴那个「给形状」的分工）：开始时刻 / 总时长 /
-    // 首 token / 生成 / 吞吐，末行写清是哪两个时刻相减（票 13 第 6 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    a_call_with_a_first_token(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "答案是 42。");
-    tab_to_timing(&mut state);
-
-    let text = screen(120, 40, &mut state).join("\n");
-    for needle in ["开始时刻", "总时长", "首 token", "生成", "吞吐", "计时来源"] {
-        assert!(text.contains(needle), "计时面读得到「{needle}」：{text}");
-    }
-    assert!(text.contains("8.0 s"), "总时长 = 完成 − 起点：{text}");
-    assert!(text.contains("7.4 s"), "首 token 是流上那一笔：{text}");
-    assert!(text.contains("0.6 s"), "生成 = 总时长 − 首 token：{text}");
-    assert!(
-        text.contains("370 token/s") && text.contains("输出 222"),
-        "吞吐 = 输出 token ÷ 生成时长：{text}"
-    );
-    assert!(
-        text.contains("TurnStarted.at → MessageCompleted.at"),
-        "末行写清哪两个时刻相减：{text}"
-    );
-    assert!(
-        !text.contains(wording::UNAVAILABLE),
-        "这一面的数一个不缺：{text}"
-    );
-}
-
-#[test]
-fn an_old_stream_reports_the_three_numbers_as_unavailable() {
-    // 老流上没有 `first_token_ms`：首 token / 生成 / 吞吐三项**不存在**，写 `不可用` 并把
-    // 原因写进同一行的计时来源 —— 不填 0、不写占位符（票 13 第 6 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    let start = a_call_start();
-    use heng::events::{EventPayload, Role};
-    state.apply(at_event(
-        1,
-        start,
-        EventPayload::TurnStarted {
-            agent: kimi(),
-            iteration: 1,
-        },
-    ));
-    state.apply(at_event(
-        2,
-        start + chrono::Duration::milliseconds(8_000),
-        EventPayload::MessageCompleted {
-            role: Role::Assistant,
-            text: "答案是 42。".to_owned(),
-            reasoning: None,
-            first_token_ms: None,
-        },
-    ));
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "答案是 42。");
-    tab_to_timing(&mut state);
-
-    let rows = screen(120, 40, &mut state);
-    let text = rows.join("\n");
-    // 三项**各自那一行**都以「不可用」收尾 —— 不是数整屏出现几次：末尾那条计时来源里也写着
-    // 这两个字（「首 token / 生成 / 吞吐 不可用」），数次数只会把那一句也算进去。
-    for label in [
-        wording::TIMING_FIRST_TOKEN,
-        wording::TIMING_GENERATED,
-        wording::TIMING_THROUGHPUT,
-    ] {
-        let row = rows
-            .iter()
-            .find(|row| row.contains(label) && !row.contains(wording::TIMING_SOURCE))
-            .unwrap_or_else(|| panic!("计时面上有「{label}」那一行：{text}"));
-        assert!(
-            row.trim_end()
-                .trim_end_matches('┆')
-                .trim_end()
-                .ends_with(wording::UNAVAILABLE),
-            "「{label}」那一行的值写「{}」—— 不填 0、不写占位符：{text}",
-            wording::UNAVAILABLE
-        );
-    }
-    assert!(text.contains("8.0 s"), "拿得到的那个照旧写着：{text}");
-    assert!(!text.contains("0.0 s"), "不拿 0 顶上去：{text}");
-    assert!(
-        text.contains("first_token_ms"),
-        "原因与它写在同一行：{text}"
-    );
-}
-
 #[test]
 fn a_tool_timing_face_only_shows_the_section_it_can_prove() {
     // 工具行属于哪次模型调用今天没有记账，于是这一面只出现「这次工具调用」那一节 ——
@@ -11561,123 +10032,6 @@ fn a_detail_with_one_face_draws_no_bar_at_all() {
     assert!(text.contains("一件事"), "{text}");
 }
 
-/// 一次迭代：一个回合里的第几次模型调用 —— 组头编号与「上面那条迭代的回复」那一环都看它。
-fn iteration(state: &mut TuiState, seq: u64, at: chrono::DateTime<chrono::Utc>, ordinal: u32) {
-    use heng::events::EventPayload;
-    state.apply(at_event(
-        seq,
-        at,
-        EventPayload::TurnStarted {
-            agent: kimi(),
-            iteration: ordinal,
-        },
-    ));
-}
-
-/// 一次模型调用的完成：助手说的那一段。来源面那条链上「一次迭代的回复」就是它。
-fn assistant_says(state: &mut TuiState, seq: u64, at: chrono::DateTime<chrono::Utc>, text: &str) {
-    use heng::events::{EventPayload, Role};
-    state.apply(at_event(
-        seq,
-        at,
-        EventPayload::MessageCompleted {
-            role: Role::Assistant,
-            text: text.to_owned(),
-            reasoning: None,
-            first_token_ms: None,
-        },
-    ));
-}
-
-#[test]
-fn a_tool_detail_reads_the_read_only_chain_that_carried_this_row() {
-    // 来源面：一条**只读的祖先链** —— 本行 → 上面那条迭代的回复 → 那一回合 → 上面那条用户
-    // 消息，每一环带着行首文字与它在账本上的位置（票 14 第 1 条）。
-    //
-    // 这一次调用落在**第三次迭代**里，所以链上头还有更早的迭代 —— 链固定截到三环，更深的
-    // 那些不再展开：一个几百次迭代的回合不会画出一长串（票 14 第 1 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    let start = a_call_start();
-    state.apply(user_message(1, "把 grep 的输出截断修一下"));
-    iteration(&mut state, 2, start, 1);
-    assistant_says(
-        &mut state,
-        3,
-        start + chrono::Duration::milliseconds(500),
-        "先看一眼那次调用。",
-    );
-    state.apply(tool_started(
-        4,
-        "call-first",
-        "grep",
-        serde_json::json!({"pattern": "截断"}),
-    ));
-    state.apply(tool_completed(5, "call-first", true, Some("out"), None));
-    iteration(&mut state, 6, start + chrono::Duration::seconds(1), 2);
-    assistant_says(
-        &mut state,
-        7,
-        start + chrono::Duration::seconds(2),
-        "头尾都留住了，省掉多少也写清楚了。",
-    );
-    state.apply(tool_started(
-        8,
-        "call-second",
-        "bash",
-        serde_json::json!({"command": "cargo test"}),
-    ));
-    state.apply(tool_completed(9, "call-second", true, Some("out"), None));
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "调用 bash");
-    next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → Schema
-    next_face(&mut state); // Schema → 计时
-    next_face(&mut state); // 计时 → 来源
-
-    let rows = screen(120, 40, &mut state);
-    let text = rows.join("\n");
-    for (label, hint) in [
-        (wording::chain_here(), "本行"),
-        (wording::chain_reply(), "上面那条迭代的回复"),
-        (wording::chain_unit(), "那一回合"),
-        (wording::chain_user(), "上面那条用户消息"),
-    ] {
-        assert!(text.contains(label), "链上有{hint}：{text}");
-    }
-    assert!(
-        text.contains("头尾都留住了，省掉多少也写清楚了。"),
-        "回复那一环的行首文字是它上面最近的那一条：{text}"
-    );
-    assert!(
-        text.contains("把 grep 的输出截断修一下"),
-        "用户消息那一环的行首文字：{text}"
-    );
-    assert_eq!(
-        text.matches(wording::chain_arrow()).count(),
-        3,
-        "四环连成一条：本行之外那三环各带一个「往上」的记号，一个不多一个不少：{text}"
-    );
-    assert_eq!(
-        text.matches(wording::chain_reply()).count(),
-        1,
-        "更早的迭代不再展开：链只有那一条回复：{text}"
-    );
-    assert!(
-        text.contains(wording::chain_deeper()),
-        "而它写清了截到三环：{text}"
-    );
-    // 每一环都带着它在账本上的位置（`第 N 行`）。
-    for row in rows
-        .iter()
-        .filter(|row| row.contains(wording::chain_arrow()) || row.contains(wording::chain_here()))
-    {
-        assert!(
-            row.contains("第 ") && row.contains(" 行"),
-            "这一环带着位置：{row:?}"
-        );
-    }
-}
-
 #[test]
 fn a_chain_that_breaks_ends_there_instead_of_a_placeholder() {
     // 开场段落里的一次调用：它上面既没有迭代的回复、也没有回合与用户消息 —— 链在某一环自然
@@ -11764,172 +10118,6 @@ fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
 // 用量面（票 15）
 // ---------------------------------------------------------------------------
 
-/// 一个回合里第 `iteration` 次迭代：开始、一笔用量、一条答复 —— 跨多次调用的那一条消息就是
-/// 这样长出来的。`usage` 是（输入 / 输出 / 缓存读 / 未命中）。
-fn a_call(
-    state: &mut TuiState,
-    seq: u64,
-    iteration: u32,
-    (input, output, cached, miss): (u64, u64, u64, u64),
-    text: &str,
-) {
-    state.apply(turn_started_at(seq, iteration));
-    state.apply(usage(seq + 1, input, output, cached, miss));
-    state.apply(message(seq + 2, text, None));
-}
-
-#[test]
-fn a_message_detail_reads_its_usage_in_two_sections() {
-    // 用量面：两节各五行（输入 / 缓存读 / 未命中 / 输出 / 推理），末尾一句口径逐字在位
-    // （票 15 第 1、2 条）。
-    //
-    // 「本次」是这条消息所属**那次发言**的各次调用之和 —— 与行尾那个 `合计` 同一个数；
-    // 「这一趟会话」是到这条记录为止的会话累计，所以它比「本次」大（票 15 第 3 条）。
-    let mut state = state_with_roster(&["kimi"]);
-    // 第一个回合：两次迭代，各一笔用量。
-    state.apply(user_message(1, "把 grep 的输出截断修一下"));
-    a_call(
-        &mut state,
-        2,
-        1,
-        (12_000, 222, 11_000, 1_000),
-        "先看一眼那次调用。",
-    );
-    a_call(&mut state, 5, 2, (300, 8, 0, 300), "头尾都留住了。");
-    state.apply(turn_ended(8));
-    // 第二个回合：也是两次调用 —— 它让「这一趟会话」比「本次」大。
-    state.apply(user_message(9, "再跑一遍测试"));
-    a_call(&mut state, 10, 1, (5_000, 50, 0, 5_000), "先看一眼。");
-    a_call(&mut state, 13, 2, (200, 10, 0, 200), "跑完了。");
-    state.apply(turn_ended(16));
-
-    open_trace_tab(&mut state, 120, 40);
-    let this_turn = heng::events::Usage {
-        input_tokens: 5_200,
-        output_tokens: 60,
-        cached_tokens: 0,
-        miss_tokens: 5_200,
-        reasoning_tokens: None,
-    };
-    // 票 13 起轨迹行尾**不再挂用量**（40 档弃行尾用量、28 档连时刻都不画）：那笔合计
-    // 只在详情面的「本次」一节里读，于是这里不再有一行关于它。
-    let before = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !before.contains(&wording::total_tail(&this_turn)),
-        "轨迹行尾没有用量：{before}"
-    );
-
-    // 点的是**第二个回合**里那条消息：「本次」就是它那一次发言，「这一趟会话」多算了第一个
-    // 回合 —— 两节这才分得开。
-    click_row(&mut state, 120, 40, "跑完了。");
-    next_face(&mut state); // 正文 → 用量
-
-    let rows = screen(120, 40, &mut state);
-    let text = rows.join("\n");
-    let style = wording::NumberStyle::default();
-    // 这一趟会话到这条记录为止：第一个回合那两次调用也在里面。
-    let session = heng::events::Usage {
-        input_tokens: 17_500,
-        output_tokens: 290,
-        cached_tokens: 11_000,
-        miss_tokens: 6_500,
-        reasoning_tokens: None,
-    };
-    // 用量面那一片：从「本次」那一节的小标题到末尾那句口径。
-    let start = rows
-        .iter()
-        .position(|row| row.contains(wording::usage_this_section()))
-        .unwrap_or_else(|| panic!("「本次」那一节：{text}"));
-    let end = rows
-        .iter()
-        .position(|row| row.contains(wording::usage_ledger_note()))
-        .unwrap_or_else(|| panic!("末尾那句口径：{text}"));
-    assert!(start < end, "两节在口径句上面：{text}");
-    let face = rows[start..=end].join("\n");
-    for label in [
-        wording::USAGE_INPUT,
-        wording::USAGE_CACHED,
-        wording::USAGE_MISS,
-        wording::USAGE_OUTPUT,
-        wording::USAGE_REASONING,
-    ] {
-        assert!(
-            face.matches(label).count() >= 2,
-            "两节各一行「{label}」：{face}"
-        );
-    }
-    assert_eq!(
-        face.matches(wording::usage_session_section()).count(),
-        1,
-        "第二节的小标题写清是「这一趟会话」：{face}"
-    );
-    assert!(
-        face.contains(wording::usage_ledger_note()),
-        "末尾那句口径**逐字**在位：{face}"
-    );
-
-    // 「本次」那节的四个数与行尾那个合计相等（同源同口径）；「这一趟」比它大。
-    assert!(
-        face.contains(&wording::compact(this_turn.input_tokens, style))
-            && face.contains(&wording::compact(this_turn.output_tokens, style)),
-        "「本次」的输入与输出就是那个合计的两个数：{face}"
-    );
-    assert!(
-        face.contains(&wording::compact(session.input_tokens, style)),
-        "「这一趟会话」到这条记录为止：{face}"
-    );
-    assert_ne!(
-        this_turn.input_tokens, session.input_tokens,
-        "两节不是同一个数"
-    );
-
-    // 这一面的数字与左栏用量面板对同一段会话给出同一个累计值：面板那一行的「输入」，
-    // 与这一面「这一趟会话」的输入格，是同一个 compact 值（票 15 的验收）。
-    let total = wording::compact(session.input_tokens, style);
-    assert!(
-        before.contains(&total),
-        "面板那一行的累计：{total} —— {before}"
-    );
-    assert!(face.contains(&total), "而这一面也是它：{face}");
-}
-
-#[test]
-fn a_reasoning_count_the_provider_never_reported_draws_no_bar() {
-    // 推理为 `None` 时那一格写 `—（供应商未报）` 且**不画条形** —— 没有分母的条就是骗人
-    // （票 15 第 4 条）。同一面里拿得到的那四行照旧画条。
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(usage(2, 12_000, 222, 11_000, 1_000));
-    state.apply(message(3, "答案是 42。", None));
-    open_trace_tab(&mut state, 120, 40);
-    click_row(&mut state, 120, 40, "答案是 42。");
-    next_face(&mut state); // 正文 → 用量
-
-    let rows = screen(120, 40, &mut state);
-    let reasoning: Vec<&String> = rows
-        .iter()
-        .filter(|row| row.contains(wording::usage_reasoning_missing()))
-        .collect();
-    assert_eq!(reasoning.len(), 2, "两节各一行推理：{}", rows.join("\n"));
-    for row in reasoning {
-        assert!(
-            row.contains(wording::usage_reasoning_missing()),
-            "那一格写「{}」：{row}",
-            wording::usage_reasoning_missing()
-        );
-        assert!(
-            !row.contains(wording::BAR_FULL) && !row.contains(wording::BAR_EMPTY),
-            "没有分母的条不画：{row}"
-        );
-    }
-    assert!(
-        rows.iter()
-            .any(|row| row.contains(wording::USAGE_INPUT) && row.contains(wording::BAR_FULL)),
-        "拿得到的那几行照旧画条：{}",
-        rows.join("\n")
-    );
-}
-
 #[test]
 fn a_tool_detail_has_no_usage_face() {
     // 工具调用**没有用量**：用量事件带发言者、不带工具调用 id，所以这一面不挂工具详情
@@ -11961,486 +10149,6 @@ fn a_tool_detail_has_no_usage_face() {
 // 记号菜单之上。这一层不画反显 —— 选中行自己就是「键盘在这」的锚点
 // （`.scratch/trace-ledger/spec.md` §4、§9）。
 // ---------------------------------------------------------------------------
-
-/// 一屏格子里画成「常驻选中」那一档的（`ACCENT` + `BOLD`，与左栏两页、页签条同一档）。
-fn is_focus_cell(cell: &ratatui::buffer::Cell) -> bool {
-    cell.fg == palette::ACCENT && cell.modifier.contains(Modifier::BOLD)
-}
-
-/// 主列里画成**选中**的那些屏幕行：判据是这一行的文字格子**全都**是那一档（空格不算，
-/// 它们没有字可亮）。整行亮是这一层的画法，所以这里数的正是它。
-fn selected_rows(frame: &Buffer, width: u16, height: u16, left: u16) -> Vec<u16> {
-    (0..height)
-        .filter(|y| {
-            // 右边两列不算：滚动条那一列有自己的颜色（选中行的滑块也在那儿），而它不是
-            // 这一行的文字。
-            let ink: Vec<&ratatui::buffer::Cell> = (left..width - 2)
-                .map(|x| &frame[(x, *y)])
-                .filter(|cell| cell.symbol() != " ")
-                .collect();
-            !ink.is_empty() && ink.iter().all(|cell| is_focus_cell(cell))
-        })
-        .collect()
-}
-
-/// 主列里画成选中的那些行的文本 —— 左栏那一段不算（它有自己的选中行）。
-fn selected_rows_text(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
-    let frame = buffer(width, height, state);
-    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
-    selected_rows(&frame, width, height, left)
-        .into_iter()
-        .map(|y| cells(&frame, y, left, width - 2))
-        .collect()
-}
-
-/// 一个会话四个块、其中一次调用失败（错误正文首行是它的**附属行**）的会话。
-///
-/// 失败那一次调用的两条源行共享一个身份，正是「选中的粒度是块」要跳过的那种落点。
-fn a_ledger_with_a_failed_call(state: &mut TuiState) {
-    state.apply(user_message(1, "第一步的问题"));
-    state.apply(turn_started(2));
-    state.apply(message(3, "第一步的回答", None));
-    state.apply(tool_started(
-        4,
-        "call-ok",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(5, "call-ok", true, Some("out"), None));
-    state.apply(tool_started(
-        6,
-        "call-bad",
-        "read_file",
-        serde_json::json!({"path": "missing.rs"}),
-    ));
-    state.apply(tool_completed(
-        7,
-        "call-bad",
-        false,
-        None,
-        Some("no such file\n后面那些行只在详情里"),
-    ));
-    state.apply(turn_ended(8));
-}
-
-/// 一直 `↓`，直到选中的那一块含 `needle`；走到了返回 `true`。
-fn walk_down_to(state: &mut TuiState, width: u16, height: u16, needle: &str) -> bool {
-    for _ in 0..20 {
-        let rows = selected_rows_text(state, width, height);
-        if rows.iter().any(|row| row.contains(needle)) {
-            return true;
-        }
-        state.key(Key::Down);
-    }
-    false
-}
-
-/// 轨迹页是当前显示页时 `↑` / `↓`（或 `j` / `k`）移动选中，`Enter` 开那一块的详情。
-#[test]
-fn the_arrows_walk_the_blocks_and_enter_opens_the_selected_one() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(
-        selected_rows_text(&mut state, 120, 40).is_empty(),
-        "刚上轨迹页时没有选中：位置还没有被放下"
-    );
-
-    // `↓` 落在一块上，而且那一行整行亮着。
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "一次只有一个落点"
-    );
-
-    // 从第一条行一路走到最新：每一步都换一块；走到头那一步停在原地。
-    state.key(Key::Char('g'));
-    let mut visited = Vec::new();
-    for _ in 0..16 {
-        let row = selected_rows_text(&mut state, 120, 40);
-        assert!(
-            (1..=2).contains(&row.len()),
-            "每一步正好一块（块最多两条源行）：{row:#?}"
-        );
-        if visited.last() == Some(&row) {
-            break;
-        }
-        visited.push(row);
-        state.key(Key::Down);
-    }
-    assert_eq!(
-        visited.len(),
-        7,
-        "账本上正好七块（用户那句话、一级组头、回合开始、一次回答、两次调用、回合一收）：\
-         {visited:#?}"
-    );
-
-    // `↑` / `k` 原路回去。
-    state.key(Key::Up);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        visited[visited.len() - 2],
-        "`↑` 往回走一块"
-    );
-    state.key(Key::Char('k'));
-    state.key(Key::Char('k'));
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        visited[visited.len() - 4],
-        "`k` 与 `↑` 同一条"
-    );
-
-    // `Enter` 开选中那一块的详情，`Esc` 关掉它。
-    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
-    state.key(Key::Enter);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains(TOOL_FACES),
-        "`Enter` 兑现「点一行开详情」：{text}"
-    );
-    state.key(Key::Esc);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains(TOOL_FACES), "关掉之后回到账本：{text}");
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        2,
-        "开一趟详情不改选中：失败那一块的两条源行还亮着"
-    );
-}
-
-/// 选中的是**一个块**：附属行（失败正文那行）跟着所属块一起亮，而 `↓` 跳过它，不会误停。
-#[test]
-fn a_block_is_the_unit_so_its_extra_row_is_never_a_landing_point() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    // 从第一条行一路走到底，每一步都看一眼：`no such file` 那一行**从来不会单独亮**。
-    state.key(Key::Char('g'));
-    let mut seen_extra_row = false;
-    for step in 0..10 {
-        let texts = selected_rows_text(&mut state, 120, 40);
-        assert!(!texts.is_empty(), "第 {step} 步有落点");
-        if texts.iter().any(|row| row.contains("no such file")) {
-            seen_extra_row = true;
-            assert!(
-                texts.iter().any(|row| row.contains("调用 read_file")),
-                "附属行只跟着它所属的那一块一起亮，绝不单独成为落点：{texts:#?}"
-            );
-            assert_eq!(texts.len(), 2, "那一块正好两条源行：{texts:#?}");
-        }
-        state.key(Key::Down);
-    }
-    assert!(
-        seen_extra_row,
-        "这一趟里它亮过 —— 否则上面那条断言什么都没验"
-    );
-}
-
-/// 选中行整行是 `ACCENT` + `BOLD`，而**账本里没有反显** —— 全屏唯一的反显仍只给问卷与
-/// `/`·`@` 菜单（票 18 第 5、6 条）。
-#[test]
-fn the_selected_row_goes_accent_and_bold_and_nothing_is_reversed() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
-
-    let frame = buffer(120, 40, &mut state);
-    let rows = selected_rows(&frame, 120, 40, MAIN_LEFT_AT_120);
-    assert_eq!(rows.len(), 2, "失败那一块的两条源行：{rows:?}");
-    // 整行：从行首那个时刻戳到这一行的最后一个非空格，每一格都是那一档。
-    for y in &rows {
-        let ink: Vec<(u16, &ratatui::buffer::Cell)> = (MAIN_LEFT_AT_120
-            ..TRANSCRIPT_TEXT_RIGHT_AT_120)
-            .map(|x| (x, &frame[(x, *y)]))
-            .filter(|(_, cell)| cell.symbol() != " ")
-            .collect();
-        assert!(!ink.is_empty(), "有字才谈得上整行");
-        for (x, cell) in &ink {
-            assert!(
-                is_focus_cell(cell),
-                "第 {y} 行第 {x} 格不是选中那一档：{:?} {:?}",
-                cell.fg,
-                cell.modifier
-            );
-        }
-        let stamped =
-            (MAIN_LEFT_AT_120..MAIN_LEFT_AT_120 + 9).any(|x| frame[(x, *y)].symbol() != " ");
-        assert_eq!(
-            stamped,
-            cells(&frame, *y, MAIN_LEFT_AT_120, 120).contains("调用 read_file"),
-            "时刻戳只长在块的主行上，附属行从第 9 列起排：{:?}",
-            cells(&frame, *y, MAIN_LEFT_AT_120, 120)
-        );
-    }
-
-    // 没有反显：这一屏里没有一格带 `REVERSED`。
-    let reversed: Vec<(u16, u16)> = (0..40u16)
-        .flat_map(|y| (0..120u16).map(move |x| (x, y)))
-        .filter(|(x, y)| frame[(*x, *y)].modifier.contains(Modifier::REVERSED))
-        .collect();
-    assert!(
-        reversed.is_empty(),
-        "账本（以及这一屏别处）没有反显：{reversed:?}"
-    );
-}
-
-/// 覆盖层立着时它持有键盘，而轨迹页那一层**不生效**；关掉之后恢复原来的持有状态
-/// （票 18 第 2 条）。
-#[test]
-fn the_detail_overlay_holds_the_keyboard_and_hands_the_page_back_untouched() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
-    let before = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(before.len(), 2);
-
-    // 点一行开详情（点一行 = 拿回 + 开详情，而它**不改选中**）。
-    click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains(TOOL_FACES), "详情开着：{text}");
-
-    // 覆盖层立着时轨迹页那一层不生效：那几个键滚的是覆盖层，选中一块都不动。
-    state.key(Key::Down);
-    state.key(Key::Up);
-    state.key(Key::Char('j'));
-    state.key(Key::Enter);
-    state.key(Key::Esc);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "关掉之后选中原样回来（这一路上那几个键都归覆盖层）"
-    );
-    assert!(
-        !screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
-        "`Esc` 关掉的是覆盖层那一层"
-    );
-
-    // 而键盘也确实回到轨迹页手里了：`↑` 走的是账本。
-    state.key(Key::Up);
-    assert_ne!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "还是归轨迹页"
-    );
-}
-
-/// `Esc` 的层序：有选中则清选中 → 把键盘交还给输入区 → 之后那一下才轮到取消回合那一档。
-/// 一次手势一层，退完没有第五层。交还之后 `↑` / `↓` 回到输入区移光标。
-#[test]
-fn escape_clears_the_selection_then_hands_the_keyboard_back() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    // 一份两行的草稿：交还之后 `↑` / `↓` 有没有回到输入区，看光标落在哪一行就知道了。
-    for ch in "甲乙".chars() {
-        state.key(Key::Char(ch));
-    }
-    state.key(Key::Newline);
-    state.key(Key::Char('丙'));
-    let (_, cursor) = frame_and_cursor(120, 40, &mut state);
-    let cursor = cursor.expect("草稿里那个光标在");
-
-    state.key(Key::Down);
-    assert_eq!(selected_rows_text(&mut state, 120, 40).len(), 1, "先有选中");
-
-    // 第一下：清选中，而键盘**还在轨迹页手里** —— 再按一下 `↓`，它落在账本上，不是草稿上。
-    state.key(Key::Esc);
-    assert!(
-        selected_rows_text(&mut state, 120, 40).is_empty(),
-        "第一下只清选中"
-    );
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "键盘还在轨迹页手里，所以 `↓` 又落了一块"
-    );
-    let (_, still) = frame_and_cursor(120, 40, &mut state);
-    assert_eq!(
-        still.expect("光标还在").1,
-        cursor.1,
-        "`↓` 一次都没有落到草稿上"
-    );
-
-    // 第二下清掉刚落的这一块、第三下交还键盘：此后 `↑` 才回到输入区移光标。
-    state.key(Key::Esc);
-    state.key(Key::Esc);
-    state.key(Key::Up);
-    let (_, up) = frame_and_cursor(120, 40, &mut state);
-    assert_eq!(
-        up.expect("光标还在").1,
-        cursor.1 - 1,
-        "`↑` 把光标带到草稿的上一行"
-    );
-    state.key(Key::Down);
-    let (_, down) = frame_and_cursor(120, 40, &mut state);
-    assert_eq!(down, Some(cursor), "`↓` 把它带回原来那一行");
-    assert!(
-        selected_rows_text(&mut state, 120, 40).is_empty(),
-        "交还之后那两个键不再选任何一块"
-    );
-
-    // 而 `j` 又只是一段文字：它落进草稿，不落进账本。
-    state.key(Key::Char('j'));
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("丙j"), "`j` 落进了草稿：{text}");
-}
-
-/// 交还之后**点账本任何位置**都能把键盘拿回来：点一行 = 拿回 + 开详情（不顺手选中）。
-#[test]
-fn clicking_the_ledger_takes_the_keyboard_back() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Esc); // 交还
-    state.key(Key::Down);
-    assert!(selected_rows_text(&mut state, 120, 40).is_empty());
-
-    // 点一行：拿回 + 开详情，**不顺手选中**。
-    click_row(&mut state, 120, 40, "调用 read_file");
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains(TOOL_FACES), "详情开着：{text}");
-    state.key(Key::Esc);
-    assert!(
-        selected_rows_text(&mut state, 120, 40).is_empty(),
-        "点一行不顺手留下高亮"
-    );
-
-    // 拿回来了：`↓` 又落在账本上。
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "键盘回来了"
-    );
-}
-
-/// 点**空白**（这里点的是组头那一行，它没有可点开的东西）也拿回键盘，并把选中清掉。
-#[test]
-fn clicking_a_blank_spot_in_the_ledger_clears_the_selection() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Down);
-    assert_eq!(selected_rows_text(&mut state, 120, 40).len(), 1);
-
-    // 一条通知行：它既没有详情入口、也不是折叠把手，所以这一下就是「点空白」
-    // （票 21 之后组头那一行不再是空白 —— 它成了折 / 展的把手）。
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "命令回执".to_owned(),
-    ));
-    click_text(&mut state, 120, 40, "命令回执");
-    assert!(
-        selected_rows_text(&mut state, 120, 40).is_empty(),
-        "点空白清掉选中"
-    );
-
-    // 交还之后点它一样拿回键盘。
-    state.key(Key::Esc);
-    click_text(&mut state, 120, 40, "命令回执");
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "点空白把键盘拿回来了"
-    );
-}
-
-/// 点回输入区 = 「我要打字」：键盘还给输入区，而**选中留在账本上**（左栏两页的焦点行同一
-/// 条纪律：换的是键盘在谁那里，不是读者放下的位置）。
-#[test]
-fn clicking_the_input_area_takes_the_keyboard_back_from_the_trace_page() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Down);
-    let before = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(before.len(), 1);
-
-    let (column, row) = input_corner(120, 40);
-    click(&mut state, column, row);
-    // 键盘回去了：`j` 落进草稿，而选中的那一块一个字节都没动。
-    state.key(Key::Char('j'));
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "`j` 不再动选中"
-    );
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("j"), "`j` 落进了草稿：{text}");
-}
-
-/// 重新成为当前显示页时**自动回到持有**，不必再点一次。
-#[test]
-fn the_trace_page_takes_the_keyboard_back_when_it_becomes_the_current_page() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Esc); // 交还
-    state.key(Key::Down);
-    assert!(selected_rows_text(&mut state, 120, 40).is_empty());
-
-    // 切到对话页再切回来。
-    click_in_row(
-        &mut state,
-        120,
-        40,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let _ = screen(120, 40, &mut state);
-    click_in_row(
-        &mut state,
-        120,
-        40,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "切回来就自动持有，不必再点一次"
-    );
-}
-
-/// 切主页签**不动选中**：切走再切回来，同一块还亮着（它在 `TuiState` 侧按块身份记）。
-#[test]
-fn switching_the_main_tab_keeps_the_selection() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Down);
-    state.key(Key::Down);
-    let before = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(before.len(), 1);
-
-    click_in_row(
-        &mut state,
-        120,
-        40,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_CONVERSATION,
-    );
-    let _ = screen(120, 40, &mut state);
-    click_in_row(
-        &mut state,
-        120,
-        40,
-        TRANSCRIPT_TOP as u16 - 2,
-        wording::TAB_TRACE,
-    );
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "切走再切回来，同一块还亮着"
-    );
-}
 
 /// `Ctrl-V` 在主列两页之间翻一个来回（`.scratch/trace-shortcuts/spec.md` §1）：与点页签走
 /// **同一条路**，所以切到轨迹页时那一层照票 18 第 3 条自动回到持有。
@@ -12487,342 +10195,12 @@ fn a_rebuild_hands_the_preamble_back_so_a_later_block_never_reopens_it() {
     );
 }
 
-/// 重放之后**分组进度整体**接着往下走 —— 新回合的序号与还在跑的回合的工具都算数。
-///
-/// 与开场那一条同源：重放清掉的是整份账，而「开过哪几个组、当前开着哪一个」是它的一份
-/// 进度，不是可以从窗格那几行读回来的东西。
-#[test]
-fn a_rebuild_keeps_the_group_progress_carrying_on() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "c1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(3, "c1", true, Some("out"), None));
-    // 第一帧：整本账重推一遍，而此刻这个回合还开着。
-    open_trace_tab(&mut state, 120, 40);
-    state.apply(tool_started(
-        4,
-        "c2",
-        "read_file",
-        serde_json::json!({"path": "a.rs"}),
-    ));
-    state.apply(tool_completed(5, "c2", true, Some("out"), None));
-
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        page.contains("read_file×1"),
-        "重放之后那次调用照样算进这个回合的组头：{page}"
-    );
-
-    // 同一本账里再开一个回合：它是**第二个**，不是从头数的那一个。
-    state.apply(turn_ended(6));
-    state.apply(turn_started(7));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        page.contains(&wording::header_unit(2, false)),
-        "序号接着账本往下数：{page}"
-    );
-    assert_eq!(
-        page.matches(&wording::header_unit(1, false)).count(),
-        1,
-        "「回合 1」还是只有那一条：{page}"
-    );
-}
-
-/// 改宽度（触发整批重放）之后选中**仍在原来那一块** —— 它认块不认位置。
-#[test]
-fn a_rebuild_after_a_width_change_keeps_the_selected_block() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
-    let before = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(before.len(), 2, "{before:#?}");
-
-    // 换个宽度重画：主列窄了一档，整本账按新宽度重推一遍。
-    let _ = screen(100, 40, &mut state);
-    let after = selected_rows_text(&mut state, 100, 40);
-    assert_eq!(after.len(), 2, "重放之后仍然正好那两条源行：{after:#?}");
-    assert!(
-        after.iter().any(|row| row.contains("调用 read_file")),
-        "还是原来那一块：{before:#?} → {after:#?}"
-    );
-    assert!(
-        after.iter().any(|row| row.contains("no such file")),
-        "附属行也跟着它：{after:#?}"
-    );
-}
-
-/// 翻页与滚轮**不动选中**；新块到达时视口照跟随走、选中留在原地
-/// （票 18 第 8 条；`.scratch/trace-ledger/spec.md` §9 的「粘性」）。
-#[test]
-fn paging_wheeling_and_new_blocks_leave_the_selection_alone() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-
-    // `G` 落在最新那一块上并恢复跟随 —— 从那以后，选中就是「第 39 句话」那一块。
-    state.key(Key::Char('G'));
-    let landed = selected_rows_text(&mut state, 120, 24);
-    assert_eq!(landed.len(), 1);
-    assert!(landed[0].contains("第 39 句话"), "{landed:#?}");
-
-    // 翻页与滚轮：视口动，而选中不动 —— 于是往回走一块正好是第 38 句，而不是从翻页那一处
-    // 再往回数。
-    state.key(Key::PageUp);
-    state.key(Key::PageUp);
-    state.mouse(wheel_at(60, TRANSCRIPT_TOP as u16, true));
-    state.key(Key::Up);
-    let walked_back = selected_rows_text(&mut state, 120, 24);
-    assert_eq!(
-        walked_back.len(),
-        1,
-        "`↑` 把选中的那一块带回了视口：{walked_back:#?}"
-    );
-    assert!(
-        walked_back[0].contains("第 38 句话"),
-        "翻页与滚轮一次都没有推动选中：{walked_back:#?}"
-    );
-
-    // 新块到达：视口照跟随走，而选中留在原地。
-    state.key(Key::Char('G'));
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "最新那一句".to_owned(),
-    ));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        page.iter().any(|row| row.contains("最新那一句")),
-        "视口照跟随走：{page:#?}"
-    );
-    let stayed = selected_rows_text(&mut state, 120, 24);
-    assert_eq!(stayed.len(), 1, "{stayed:#?}");
-    assert!(
-        stayed[0].contains("第 39 句话"),
-        "新块到达不推动选中：{stayed:#?}"
-    );
-}
-
-/// `g` 到第一条行、`G` 到最新**并恢复跟随**（票 18 第 7 条）。
-#[test]
-fn g_and_shift_g_are_the_two_ends_of_the_ledger() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(
-            heng::events::SessionId::new("01J8ZQ4K7M"),
-            format!("第 {index} 句话"),
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-
-    // `g` 把读者带到头，并把选中放在**第一条**那一块上。
-    state.key(Key::Char('g'));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        page.iter().any(|row| row.contains("第 0 句话")),
-        "`g` 到账本第一条行：{page:#?}"
-    );
-    let first = selected_rows_text(&mut state, 120, 24);
-    assert_eq!(first.len(), 1);
-    assert!(
-        first[0].contains(wording::section_preamble()),
-        "`g` 也落一个选中 —— 账本第一条行是开场那一段的小标题：{first:#?}"
-    );
-
-    // `G`：回到最新，**并恢复跟随** —— 下一条新块到达时视口跟着走。
-    state.key(Key::Char('G'));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        page.iter().any(|row| row.contains("第 39 句话")),
-        "`G` 到最新：{page:#?}"
-    );
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "又一句".to_owned(),
-    ));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        page.iter().any(|row| row.contains("又一句")),
-        "`G` 恢复了跟随，所以新块把视口带下去：{page:#?}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // 层级跳转：两个括号键（票 19）
 //
 // `[` 到所属组头（**最近的那一级**）、`]` 到该组的第一条成员行；跳转改变选中、视口跟着
 // 选中走，到头就到头，无主段落里两个键都不动（`.scratch/trace-ledger/spec.md` §9）。
 // ---------------------------------------------------------------------------
-
-/// 一本有两级分组、两次迭代、收尾之后还留着一段无主段落的账 —— 两个括号键要看的正是这些
-/// 边界。
-fn a_two_level_ledger(state: &mut TuiState) {
-    state.apply(user_message(1, "第一步的问题"));
-    state.apply(turn_started(2));
-    state.apply(tool_started(
-        3,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(4, "call-1", true, Some("out"), None));
-    state.apply(turn_started_at(5, 2));
-    state.apply(tool_started(
-        6,
-        "call-2",
-        "read_file",
-        serde_json::json!({"path": "x.rs"}),
-    ));
-    state.apply(tool_completed(7, "call-2", true, Some("out"), None));
-    state.apply(turn_ended(8));
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "回合收尾之后的一句".to_owned(),
-    ));
-}
-
-/// `[` 落到**最近的那一级**组头、`]` 进那一组的第一条成员（票 19 第 1、2 条、验收第 1–3 条）。
-#[test]
-fn the_brackets_climb_to_the_header_and_drop_into_its_members() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_two_level_ledger(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    // 第二次迭代里那条工具行按 `[`：落到它那一次迭代的**二级头**，不是一级头。
-    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
-    state.key(Key::Char('['));
-    let rows = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(rows.len(), 1, "组头占一行：{rows:#?}");
-    assert!(
-        rows[0].contains(&wording::header_iteration(2)),
-        "落到最近的那一级（二级头）：{rows:#?}"
-    );
-    assert!(
-        !rows[0].contains(&wording::header_unit(1, false)),
-        "不是一级头：{rows:#?}"
-    );
-
-    // `]`：进那一组的第一条成员 —— 二级头下面那一条。
-    state.key(Key::Char(']'));
-    let rows = selected_rows_text(&mut state, 120, 40);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains(&wording::turn_started(2))),
-        "`]` 进第一条成员：{rows:#?}"
-    );
-
-    // 从一级组头按 `]` 也是同一处进法：跳过二级头，落到它自己的第一条成员。
-    state.key(Key::Char('g'));
-    assert!(
-        walk_down_to(&mut state, 120, 40, "回合 1"),
-        "先落到一级组头"
-    );
-    state.key(Key::Char(']'));
-    let rows = selected_rows_text(&mut state, 120, 40);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains(&wording::turn_started(1))),
-        "一级组头按 `]` 跳过二级头进第一条成员：{rows:#?}"
-    );
-
-    // 第一次迭代那一段没有二级头，所以那里的成员按 `[` 落到一级头。
-    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
-    state.key(Key::Char('['));
-    let rows = selected_rows_text(&mut state, 120, 40);
-    assert!(
-        rows[0].contains(&wording::header_unit(1, false)),
-        "最近的那一级就是一级头：{rows:#?}"
-    );
-}
-
-/// 跳转**把视口带走**（票 19 第 3 条）：目标本来在视口之外时也要看见 —— 这条与「滚出视口
-/// 不拉回来」是同一件事的镜像。
-#[test]
-fn a_jump_brings_the_viewport_along() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    for index in 0..40u64 {
-        let id = format!("call-{index}");
-        state.apply(tool_started(
-            2 + index * 2,
-            &id,
-            "bash",
-            serde_json::json!({"command": "ls"}),
-        ));
-        state.apply(tool_completed(3 + index * 2, &id, true, Some("out"), None));
-    }
-    open_trace_tab(&mut state, 120, 24);
-
-    // 视口与选中都在账本末尾：那一个一级组头早已滚出屏幕。
-    state.key(Key::Char('G'));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        !page
-            .iter()
-            .any(|row| row.contains(&wording::header_unit(1, false))),
-        "组头本来在视口之外：{page:#?}"
-    );
-
-    state.key(Key::Char('['));
-    let page = trace_page(&mut state, 120, 24);
-    assert!(
-        page.iter()
-            .any(|row| row.contains(&wording::header_unit(1, false))),
-        "跳过去就该看见：{page:#?}"
-    );
-    let rows = selected_rows_text(&mut state, 120, 24);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains(&wording::header_unit(1, false))),
-        "选中与视口一起到了那里：{rows:#?}"
-    );
-}
-
-/// 无主段落里两个键都不动：收尾之后那一段的行**不编一个所属组**，也不进任何组
-/// （票 19 第 6 条）。
-#[test]
-fn an_unowned_row_answers_neither_bracket() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(3, "call-1", true, Some("out"), None));
-    state.apply(turn_ended(4));
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "收尾之后的一句".to_owned(),
-    ));
-    open_trace_tab(&mut state, 120, 40);
-
-    assert!(walk_down_to(&mut state, 120, 40, "收尾之后的一句"));
-    let before = selected_rows_text(&mut state, 120, 40);
-    assert_eq!(before.len(), 1, "{before:#?}");
-    state.key(Key::Char('['));
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "不编一个所属组"
-    );
-    state.key(Key::Char(']'));
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40),
-        before,
-        "也不进任何组"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // 搜索与过滤（票 20）
@@ -12868,96 +10246,6 @@ fn search_for(state: &mut TuiState, query: &str) {
     state.key(Key::Enter);
 }
 
-/// 输入区那一行画出来的文字（左栏与分隔列不算）。
-fn input_text(state: &mut TuiState, width: u16, height: u16) -> String {
-    let frame = buffer(width, height, state);
-    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
-    cells(&frame, input_corner(width, height).1, left, width)
-        .trim_end()
-        .to_owned()
-}
-
-/// 内容区右下角那个浮字位那一行画出来的文字。
-fn corner_text(state: &mut TuiState, width: u16, height: u16) -> String {
-    let frame = buffer(width, height, state);
-    let rows = transcript_rows(&conversation_rows(state, width, height));
-    let row = (TRANSCRIPT_TOP + rows - 1) as u16;
-    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
-    cells(&frame, row, left, width).trim_end().to_owned()
-}
-
-/// 打字时 `/` 仍然弹记号菜单，而轨迹页持有键盘时同一个键归搜索（票 20 第 1 条）。
-#[test]
-fn the_slash_goes_to_search_on_the_trace_page_and_to_the_menu_while_typing() {
-    let mut typing = idle();
-    install_catalog(&mut typing);
-    typing.key(Key::Char('/'));
-    let frame = buffer(120, 24, &mut typing);
-    let (_, top, _, _) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
-    assert!(top > 0, "打字时 `/` 弹的是记号菜单");
-
-    let mut state = state_with_roster(&["kimi"]);
-    install_catalog(&mut state);
-    two_turns_with_two_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    let _ = screen(120, 40, &mut state);
-    state.key(Key::Char('/'));
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("/undo"),
-        "轨迹页持有键盘时 `/` 进搜索，不弹菜单：\n{text}"
-    );
-    for ch in "第二个回答".chars() {
-        state.key(Key::Char(ch));
-    }
-    assert_eq!(
-        input_text(&mut state, 120, 40),
-        "第二个回答",
-        "查询串打在输入区"
-    );
-}
-
-/// 进搜索前的草稿**原样存着**、退出后**原样还原**；`Enter` 离开搜索模式但**不提交草稿**，
-/// `Esc` 取消并把查询与过滤一起丢掉（票 20 第 2、10 条）。
-#[test]
-fn the_query_is_typed_in_the_input_area_and_the_draft_comes_back_untouched() {
-    let mut state = state_with_roster(&["kimi"]);
-    two_turns_with_two_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    for ch in "半句话的草稿".chars() {
-        state.key(Key::Char(ch));
-    }
-    assert_eq!(input_text(&mut state, 120, 40), "半句话的草稿");
-
-    state.key(Key::Char('/'));
-    assert_eq!(input_text(&mut state, 120, 40), "", "搜索模式从空查询开始");
-    for ch in "第二个回答".chars() {
-        state.key(Key::Char(ch));
-    }
-    assert_eq!(input_text(&mut state, 120, 40), "第二个回答");
-
-    state.key(Key::Enter);
-    assert_eq!(
-        input_text(&mut state, 120, 40),
-        "半句话的草稿",
-        "草稿原样还原，而回车没有把它发出去"
-    );
-    let filtered = screen(120, 40, &mut state).join("\n");
-    assert!(filtered.contains("第二个回答"), "{filtered}");
-    assert!(
-        !filtered.contains("第一个回答"),
-        "过滤留着（接受的查询就是刚打进去的那条）：{filtered}"
-    );
-
-    // 再按一次 `/` 接着改那条查询、`Esc` 取消：查询与过滤一起丢掉。
-    state.key(Key::Char('/'));
-    assert_eq!(input_text(&mut state, 120, 40), "第二个回答");
-    state.key(Key::Esc);
-    assert_eq!(input_text(&mut state, 120, 40), "半句话的草稿");
-    let all = screen(120, 40, &mut state).join("\n");
-    assert!(all.contains("第一个回答"), "账本回到全量：{all}");
-}
-
 /// 真过滤：账本上只剩命中块，未命中块**一条源行都不占**；有命中成员的那个组头保留、
 /// 一个成员都没命中的那个收起来（票 20 第 7 条）。
 #[test]
@@ -12981,24 +10269,6 @@ fn a_filtered_ledger_keeps_only_the_blocks_that_hit() {
         !page.contains("回合 1"),
         "一个成员都没命中的那个收起来：{page}"
     );
-}
-
-/// 一块命中，它那几行**一起**进过滤视图 —— 命中与过滤的粒度都是块，不是行
-/// （票 20 第 3 条）。
-#[test]
-fn a_hit_brings_all_the_rows_of_its_block() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_with_a_failed_call(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    search_for(&mut state, "missing.rs");
-
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("missing.rs"), "主行在：{page}");
-    assert!(
-        page.contains("no such file"),
-        "它是那一块的附属行，跟着一起在：{page}"
-    );
-    assert!(!page.contains("调用 bash"), "别的块一条源行都不占：{page}");
 }
 
 /// 索引覆盖**整个会话**：早就滚出屏的那一块照样搜得到 —— 这是与窗口内搜索不同的一档
@@ -13025,187 +10295,6 @@ fn the_search_covers_the_whole_session_not_just_the_window() {
     assert!(
         page.contains("第 0 句话"),
         "滚出屏的那一块仍然搜得到：{page}"
-    );
-}
-
-/// 右下角那一行：`n 个命中` / `n 个命中 · 新增 M` 两种文案各自出现，滚到底之后「新增」
-/// 清零；而过滤期间那个位置**不再是手势位**，`G` 补上「回到最新」且**不动过滤**
-/// （票 20 第 9 条）。
-#[test]
-fn the_corner_gives_itself_to_the_hit_readout_while_a_filter_is_on() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..30 {
-        state.apply(message(
-            (index as u64) * 2 + 1,
-            &format!("命中 {index}"),
-            None,
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "命中");
-
-    let text = corner_text(&mut state, 120, 24);
-    assert!(text.contains("30 个命中"), "三十块都命中：{text:?}");
-    assert!(
-        !text.contains("点此到底"),
-        "过滤期间那一行整句让给命中读法：{text:?}"
-    );
-
-    // 过滤期间跟随暂停：视口停在读者原来读的地方，新到的命中块照样进账，那一行给「新增」。
-    state.key(Key::Char('g'));
-    state.apply(message(80, "命中 全都在这儿", None));
-    let text = corner_text(&mut state, 120, 24);
-    assert!(text.contains("31 个命中"), "{text:?}");
-    assert!(text.contains("新增 1"), "新到的命中块算一个新增：{text:?}");
-    assert!(
-        !trace_page(&mut state, 120, 24)
-            .join("\n")
-            .contains("命中 全都在这儿"),
-        "视口没有被新块顶走"
-    );
-
-    // `G` 回到底部并恢复跟随，而**过滤不变**；滚到底之后「新增」清零。
-    state.key(Key::Char('G'));
-    let page = trace_page(&mut state, 120, 24).join("\n");
-    assert!(
-        page.contains("命中 全都在这儿"),
-        "回到底部就看到新到的那一块：{page}"
-    );
-    assert!(
-        page.contains("命中 29"),
-        "过滤还在（账本上只有命中块）：{page}"
-    );
-    let text = corner_text(&mut state, 120, 24);
-    assert!(!text.contains("新增"), "滚到底之后「新增」清零：{text:?}");
-    assert!(text.contains("31 个命中"), "{text:?}");
-}
-
-/// 过滤期间那个浮字位**不再是可点的手势位**：点它没有反应 —— 回到最新由 `G` 承担
-/// （票 20 第 9 条）。
-#[test]
-fn clicking_the_corner_does_nothing_while_a_filter_is_on() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..30 {
-        state.apply(message(
-            (index as u64) * 2 + 1,
-            &format!("命中 {index}"),
-            None,
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "命中");
-    // 视口先离开底部：它现在停在顶上，于是「回到最新」与「留在原处」看得出来是两件事。
-    state.key(Key::Char('g'));
-    let before = trace_page(&mut state, 120, 24);
-    assert!(!before.is_empty());
-
-    let frame = buffer(120, 24, &mut state);
-    let rows = transcript_rows(&conversation_rows(&mut state, 120, 24));
-    let row = (TRANSCRIPT_TOP + rows - 1) as u16;
-    let column = (0..120)
-        .find(|x| frame[(*x, row)].symbol() != " ")
-        .expect("那个浮字位画着东西");
-    click(&mut state, column, row);
-    assert_eq!(
-        trace_page(&mut state, 120, 24),
-        before,
-        "点它没有反应（回到最新由 `G` 承担）"
-    );
-}
-
-/// 搜索模式里的 `/` 只是查询串里的一个字 —— 记号菜单不在这一刻开（票 20 第 2 条：
-/// 同一个物理键两层换含义的另一半）。
-#[test]
-fn a_slash_typed_into_the_search_query_is_just_a_character() {
-    let mut state = state_with_roster(&["kimi"]);
-    install_catalog(&mut state);
-    two_turns_with_two_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    state.key(Key::Char('/'));
-    state.key(Key::Char('/'));
-    state.key(Key::Char('u'));
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("/undo"), "菜单没开：\n{text}");
-    assert_eq!(
-        input_text(&mut state, 120, 40),
-        "/u",
-        "那两个键是查询串里的字"
-    );
-}
-
-/// 含 `needle` 的那一行此刻是不是整行画成**选中**那一档。
-///
-/// 不能直接数 [`selected_rows_text`]：过滤期间右下角那个浮字位整句也是那一档
-/// （`ACCENT` + `BOLD`），而它不是选中。按文字认才分得开。
-fn row_is_selected(state: &mut TuiState, width: u16, height: u16, needle: &str) -> bool {
-    let frame = buffer(width, height, state);
-    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
-    let selected = selected_rows(&frame, width, height, left);
-    (0..height).any(|y| {
-        let text = cells(&frame, y, left, width - 2);
-        text.contains(needle) && selected.contains(&y)
-    })
-}
-
-/// 状态行那一行画出来的文字（左栏与分隔列不算）。
-fn status_row_text(state: &mut TuiState, width: u16, height: u16) -> String {
-    let rows = conversation_rows(state, width, height);
-    let row = (TRANSCRIPT_TOP + transcript_rows(&rows)) as u16;
-    let frame = buffer(width, height, state);
-    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
-    cells(&frame, row, left, width)
-}
-
-/// 状态行**一个字都不动**：它在两个视图之间共用，而过滤只属于轨迹页
-/// （票 20 第 9 条、票 11 §1）。
-#[test]
-fn filtering_never_touches_the_status_row() {
-    let mut state = state_with_roster(&["kimi"]);
-    two_turns_with_two_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    let before = status_row_text(&mut state, 120, 40);
-    assert!(before.contains("模型"), "这一行是状态行：{before:?}");
-
-    search_for(&mut state, "第二个回答");
-    assert_eq!(
-        status_row_text(&mut state, 120, 40),
-        before,
-        "过滤期间状态行逐字未变"
-    );
-    state.key(Key::Esc);
-    assert_eq!(
-        status_row_text(&mut state, 120, 40),
-        before,
-        "清过滤之后也一个字没变"
-    );
-}
-
-/// `n` / `N` 沿命中走，并把选中移到那一块（票 20 第 6 条）。
-#[test]
-fn the_hit_keys_walk_the_hits_and_take_the_selection_with_them() {
-    let mut state = state_with_roster(&["kimi"]);
-    two_turns_with_two_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    search_for(&mut state, "回答");
-    assert!(
-        !row_is_selected(&mut state, 120, 40, "第一个回答"),
-        "还没有选中"
-    );
-
-    state.key(Key::Char('n'));
-    assert!(
-        row_is_selected(&mut state, 120, 40, "第一个回答"),
-        "第一个命中的那一块被选中"
-    );
-    state.key(Key::Char('n'));
-    assert!(
-        row_is_selected(&mut state, 120, 40, "第二个回答"),
-        "下一个命中"
-    );
-    state.key(Key::Char('N'));
-    assert!(
-        row_is_selected(&mut state, 120, 40, "第一个回答"),
-        "`N` 往回走一个"
     );
 }
 
@@ -13250,61 +10339,6 @@ fn a_width_change_keeps_the_filter_set() {
     assert!(wide.contains("回合 2"), "组头也在：{wide}");
 }
 
-/// 过滤期间新块到达视口不动，清掉过滤之后视口**回到原处**（票 20 第 7 条）。
-#[test]
-fn leaving_the_filter_puts_the_viewport_back() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..30 {
-        state.apply(message(
-            (index as u64) * 2 + 1,
-            &format!("第 {index} 句话"),
-            None,
-        ));
-    }
-    open_trace_tab(&mut state, 120, 24);
-    // 让视口离开底部：贴着底时「回到原处」与「回到底部」看不出区别。票 15 之后页面矮了
-    // 两行，多翻几页才到顶。
-    for _ in 0..6 {
-        state.key(Key::PageUp);
-    }
-    let before = trace_page(&mut state, 120, 24);
-    assert!(
-        before.iter().any(|row| row.contains("第 0 句话")),
-        "视口离开了底部：{before:#?}"
-    );
-
-    search_for(&mut state, "第 7 句话");
-    assert!(
-        trace_page(&mut state, 120, 24)
-            .join("\n")
-            .contains("第 7 句话"),
-        "命中那一块进了视口"
-    );
-    // 清过滤（此时不在搜索模式，`Esc` 的第一层就是它）——视口回到原来那一条来源行上。
-    // 比的是画出来的那些行，不含右下角那一行：那是新内容计数，它数的是「离开底部之后到了
-    // 多少」，而过滤期间那一屏换过内容，所以两个数本来就不必相同。
-    state.key(Key::Esc);
-    assert_eq!(
-        trace_page(&mut state, 120, 24).first(),
-        before.first(),
-        "退出过滤回到原处"
-    );
-
-    // 过滤期间新块到达：视口不动（它落在下方看不见），而那一块照样进了账本。
-    search_for(&mut state, "第");
-    state.apply(message(80, "第 7 句话的续篇", None));
-    assert!(
-        !trace_page(&mut state, 120, 24).join("\n").contains("续篇"),
-        "新块没有把视口顶走"
-    );
-    state.key(Key::Char('G'));
-    assert!(
-        trace_page(&mut state, 120, 24).join("\n").contains("续篇"),
-        "`G` 回到底部就看得到它：{:#?}",
-        trace_page(&mut state, 120, 24)
-    );
-}
-
 // ---------------------------------------------------------------------------
 // 折叠：三档、折行就是那一行、全折全展（票 21）
 //
@@ -13312,398 +10346,6 @@ fn leaving_the_filter_puts_the_viewport_back() {
 // 而全展还回来的是读者自己那份折叠态
 // （`.scratch/trace-ledger/spec.md` §8、票 21）。
 // ---------------------------------------------------------------------------
-
-/// 一个回合、两次迭代；第二次迭代里**连着三次**调用 —— 三档折叠每一档都有东西可折。
-///
-/// 这个回合**没有收尾**（没有 `TurnEnded`）：正在跑的那个回合也要折得起来（票 21 第 6 条）。
-fn a_turn_with_a_run_of_calls(state: &mut TuiState) {
-    state.apply(user_message(1, "把这三件事都跑一遍"));
-    state.apply(turn_started(2));
-    state.apply(message(3, "先看一眼。", None));
-    state.apply(turn_started_at(4, 2));
-    state.apply(message(5, "接着跑。", None));
-    for (offset, (tool, id)) in [("bash", "c-a"), ("read", "c-b"), ("bash", "c-c")]
-        .into_iter()
-        .enumerate()
-    {
-        let seq = 6 + offset as u64 * 2;
-        state.apply(tool_started(
-            seq,
-            id,
-            tool,
-            serde_json::json!({"command": tool}),
-        ));
-        state.apply(tool_completed(seq + 1, id, true, Some("body"), None));
-    }
-}
-
-/// 选中一个回合的一级组头按 `Space`：整组折成一行摘要，成员一条都不占行
-/// （票 21 第 1、2 条）。
-#[test]
-fn folding_a_unit_leaves_one_summary_line() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(
-        walk_down_to(&mut state, 120, 40, "回合 1"),
-        "选中落到那个一级组头上"
-    );
-    state.key(Key::Char(' '));
-
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        page.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
-        "折行沿用组头的格式：{page}"
-    );
-    assert!(
-        page.contains(&format!("┄ {}", wording::FOLDABLE)),
-        "`▸` 跟着那条虚线：{page}"
-    );
-    assert!(!page.contains("先看一眼"), "成员一条都不占行：{page}");
-    assert!(!page.contains("接着跑"), "{page}");
-    assert!(!page.contains("调用 bash"), "{page}");
-    assert!(
-        !page.contains("第 2 次迭代"),
-        "二级头也收在那一行里：{page}"
-    );
-}
-
-/// 一次迭代折成一行；同一迭代下**相邻**的三次调用折成 `3 个工具调用 · bash, read`
-/// （票 21 第 1、2 条）。
-#[test]
-fn an_iteration_and_a_run_of_calls_each_fold_into_one_line() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
-    state.key(Key::Char(' '));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("第 2 次迭代 · 3 个工具调用"), "{page}");
-    assert!(!page.contains("调用 bash"), "那一组收起来了：{page}");
-    assert!(page.contains("先看一眼"), "别的迭代照旧：{page}");
-
-    // 展开它，再去折那一段调用：是三次调用、两个名字。
-    state.key(Key::Char(' '));
-    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
-    state.key(Key::Char(' '));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("3 个工具调用 · bash, read"), "{page}");
-    assert!(!page.contains("调用 read"), "那几次调用收成一行：{page}");
-}
-
-/// 折行**就是那一行**：它可选中、`Enter` 开它的详情、`Space` 再展开（票 21 第 3 条）。
-#[test]
-fn a_fold_line_can_be_selected_opened_and_unfolded() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("3 个工具调用 · bash, read"),
-        "先折起来"
-    );
-    // 折行占一条源行，而选中仍落在它上面（它代表段首那一次调用）。
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 40).len(),
-        1,
-        "折行那一行整行亮着"
-    );
-
-    // `Enter` 开它的详情 —— 与段首那次调用自己那一行是同一份详情。
-    state.key(Key::Enter);
-    let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains(wording::detail_args_section()),
-        "详情覆盖层立着，落在参数那一面上：{text}"
-    );
-    state.key(Key::Esc);
-
-    // `Space` 展开：那几次调用各回各的行。
-    state.key(Key::Char(' '));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        page.contains("调用 bash") && page.contains("调用 read"),
-        "{page}"
-    );
-    assert!(!page.contains("3 个工具调用"), "{page}");
-}
-
-/// 折起来的**单位**与**迭代**两级也挂详情：`Enter` 开出它组内**第一条能开详情的成员**
-/// （`spec.md` §8 与票 21 第 3 条：折行「是一个源行、可选中、`Enter` 开详情、`Space` 展开」）。
-///
-/// 而 `Space` 照旧是展开 —— 两件事各归各的手势，不打架。
-#[test]
-fn a_folded_unit_and_iteration_open_their_first_member_with_a_detail() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    // 一级折行：组内第一条能开详情的成员是那条助手消息（二级头与「回合开始」都没有入口）。
-    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("回合 1 · 7 个步骤"),
-        "先折起来"
-    );
-    state.key(Key::Enter);
-    let opened = screen(120, 40, &mut state).join("\n");
-    assert!(opened.contains(MESSAGE_FACES), "详情覆盖层立着：{opened}");
-    assert!(
-        opened.contains("先看一眼"),
-        "开的是组内第一条能开详情的成员：{opened}"
-    );
-    state.key(Key::Esc);
-
-    // 那个折行仍然折着，而 `Space` 展开它 —— 两件事不打架。
-    state.key(Key::Char(' '));
-    let expanded = trace_page(&mut state, 120, 40).join("\n");
-    assert!(expanded.contains("先看一眼"), "{expanded}");
-    assert!(!expanded.contains("个步骤"), "`Space` 是展开：{expanded}");
-
-    // 二级折行同理：折起来之后按 `Enter` 开它组内第一条成员。
-    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("第 2 次迭代 · 3 个工具调用"),
-        "先折起来"
-    );
-    state.key(Key::Enter);
-    let opened = screen(120, 40, &mut state).join("\n");
-    assert!(opened.contains(MESSAGE_FACES), "详情覆盖层立着：{opened}");
-    assert!(opened.contains("接着跑"), "开的是那一条成员：{opened}");
-}
-
-/// 点组头那一行 / 点一行折行 = 折 / 展；**两次相邻的单击就是两次点击**（没有双击识别）
-/// （票 21 第 5 条）。
-#[test]
-fn clicking_a_header_or_a_fold_line_toggles_it() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    click_row(&mut state, 120, 40, "回合 1");
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("回合 1 · 7 个步骤"),
-        "点组头折起来"
-    );
-    // 再点同一处：那是**第二次单击**，于是它照旧是一次点击 —— 折回去。
-    click_row(&mut state, 120, 40, "回合 1");
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("先看一眼"), "第二次单击又展开：{page}");
-    assert!(!page.contains("个步骤"), "它不是一个双击：{page}");
-}
-
-/// `{` 全折到只剩各级组头与折行（**正在跑的那个回合也折**）；`}` 回到全折前那份折叠态
-/// —— 读者自己折过的东西还在（票 21 第 6 条）。
-#[test]
-fn folding_everything_leaves_headers_only_and_gives_the_readers_folds_back() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-
-    // 读者自己先折一次迭代 —— 它是「全折之前那份折叠态」里的一样东西。
-    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("第 2 次迭代 · 3 个工具调用")
-    );
-
-    state.key(Key::Char('{'));
-    let all = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        all.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
-        "一支没跑完的回合也折了：{all}"
-    );
-    assert!(
-        !all.contains("先看一眼") && !all.contains("调用 bash"),
-        "只剩组头与折行：{all}"
-    );
-    assert!(!all.contains("第 2 次迭代"), "迭代收在它那一组里：{all}");
-
-    state.key(Key::Char('}'));
-    let back = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        back.contains("第 2 次迭代 · 3 个工具调用"),
-        "读者自己折的那一次还在：{back}"
-    );
-    assert!(
-        !back.contains("回合 1 · 7 个步骤"),
-        "而全折不是读者折的 —— 它被撤掉了：{back}"
-    );
-    assert!(back.contains("先看一眼"), "{back}");
-}
-
-/// 无主段落不折；开场那一串注入折成**一行**、而且它不可展开（票 21 第 8 条）。
-#[test]
-fn the_preamble_collapses_to_one_line_and_stays_that_way() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.apply(injected(1, "第一条注入的正文"));
-    state.apply(injected(2, "第二条注入的正文"));
-    state.apply(RenderEvent::notice(
-        heng::events::SessionId::new("01J8ZQ4K7M"),
-        "命令回执".to_owned(),
-    ));
-    open_trace_tab(&mut state, 120, 40);
-
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        page.contains("开场 · 2 条注入 · …"),
-        "一串注入收成一行：{page}"
-    );
-    assert_eq!(
-        page.matches("上下文注入").count(),
-        0,
-        "注入不各自占行：{page}"
-    );
-    assert!(page.contains("命令回执"), "同一段里别的块照旧：{page}");
-
-    // 选到它（`g` = 账本第一条块，而它就是那一条）按 `Space`：它不是可展开的一组
-    // （`▸` 只许诺详情，不许诺摊开）。
-    state.key(Key::Char('g'));
-    assert!(
-        selected_rows_text(&mut state, 120, 40)
-            .iter()
-            .any(|row| row.contains("开场")),
-        "选中落在那一行上：{:?}",
-        selected_rows_text(&mut state, 120, 40)
-    );
-    state.key(Key::Char(' '));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert_eq!(
-        page.matches("上下文注入").count(),
-        0,
-        "按了也不摊开：{page}"
-    );
-}
-
-/// 过滤期间命中块被强制画开，而退出过滤之后**读者自己那份折叠态原样恢复**
-/// （票 21 第 10 条）。
-#[test]
-fn a_filter_opens_the_hits_and_leaves_the_readers_folds_alone() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("回合 1 · 7 个步骤")
-    );
-
-    // 命中块落在折起来的那一组里：它必须画开，否则读者按 `n` 也看不见它。
-    search_for(&mut state, "command");
-    let filtered = trace_page(&mut state, 120, 40).join("\n");
-    assert!(filtered.contains("调用 bash"), "命中块画开了：{filtered}");
-    assert!(
-        !filtered.contains("个步骤"),
-        "过滤期间一条折行都没有：{filtered}"
-    );
-
-    // 退出过滤（此时不在搜索模式，`Esc` 的第一层就是清过滤）：折回去的仍是原来那一块。
-    state.key(Key::Esc);
-    let back = trace_page(&mut state, 120, 40).join("\n");
-    assert!(
-        back.contains("回合 1 · 7 个步骤"),
-        "读者那份折叠态复原：{back}"
-    );
-    assert!(!back.contains("调用 bash"), "{back}");
-}
-
-/// 折叠集合按**块身份**存：改宽度触发那次重放之后它原样还在（票 21 第 9 条）。
-#[test]
-fn a_width_change_keeps_what_the_reader_folded() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
-    state.key(Key::Char(' '));
-
-    for width in [100, 140] {
-        let page = trace_page(&mut state, width, 40).join("\n");
-        assert!(
-            page.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
-            "{width} 列下它照旧折着：{page}"
-        );
-        assert!(!page.contains("先看一眼"), "{page}");
-    }
-}
-
-/// 折起来的成员不占源行，而两个括号键的落点不该落空：从折行的组头按 `]` 要先摊开再落点
-/// （票 19 留在 `land_on_record` 里的那个口子、票 21 接上）。
-#[test]
-fn the_brackets_unfold_what_they_have_to_land_on() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
-    state.key(Key::Char(' '));
-    assert!(
-        trace_page(&mut state, 120, 40)
-            .join("\n")
-            .contains("回合 1 · 7 个步骤"),
-        "先折起来"
-    );
-
-    state.key(Key::Char(']'));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("先看一眼"), "落点那一行摊开了：{page}");
-    assert!(!page.contains("个步骤"), "组也开了：{page}");
-    assert!(
-        selected_rows_text(&mut state, 120, 40)
-            .iter()
-            .any(|row| row.contains("回合开始（第 1 次迭代）")),
-        "选中落在组内第一条成员上：{:?}",
-        selected_rows_text(&mut state, 120, 40)
-    );
-}
-
-/// 一个**正在跑**的回合折起来之后，新到的东西不从折行底下漏出来 —— 那是票面第 6 条
-/// 「正在跑的那个回合也折」的另一面（票 21）。
-#[test]
-fn a_folded_turn_keeps_what_arrives_out_of_the_ledger() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_turn_with_a_run_of_calls(&mut state);
-    open_trace_tab(&mut state, 120, 40);
-    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
-    state.key(Key::Char(' '));
-
-    // 新块到达：它进了账本，但折行底下不冒出第二行 —— 折行自己长大一格。
-    state.apply(message(20, "新来的一句。", None));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("回合 1 · 8 个步骤"), "折行跟着长：{page}");
-    assert!(
-        !page.contains("新来的一句"),
-        "它没有从折行底下漏出来：{page}"
-    );
-
-    // 还在流的思考行同理：增量那一趟不触发重放，所以它自己问一句。
-    state.apply(reasoning_delta("正在想一件事。"));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(!page.contains("正在思考"), "{page}");
-    assert!(!page.contains("正在想一件事"), "{page}");
-
-    // 展开之后它还在 —— 收起来不是丢掉。
-    state.key(Key::Char(' '));
-    let page = trace_page(&mut state, 120, 40).join("\n");
-    assert!(page.contains("新来的一句"), "{page}");
-    assert!(
-        page.contains("正在思考"),
-        "那条还在流的思考行回来了：{page}"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // 时间轴的三行横带（`.scratch/trace-ledger/spec.md` §10、票 22）
@@ -13771,31 +10413,6 @@ fn message_at(
     )
 }
 
-/// 一次带固定时刻的工具调用开始 / 完成。
-fn tool_at(
-    seq: u64,
-    id: &str,
-    at: chrono::DateTime<chrono::Utc>,
-    done: bool,
-) -> heng::render::RenderEvent {
-    let payload = if done {
-        heng::events::EventPayload::ToolCallCompleted {
-            tool_call_id: heng::events::ToolCallId::new(id),
-            ok: true,
-            output: Some("好".to_owned()),
-            error: None,
-            duration_ms: 0,
-        }
-    } else {
-        heng::events::EventPayload::ToolCallStarted {
-            tool_call_id: heng::events::ToolCallId::new(id),
-            tool_name: "bash".to_owned(),
-            args: serde_json::json!({"command": "ls"}),
-        }
-    };
-    at_event(seq, at, payload)
-}
-
 /// 一段隔 `step` 秒一条的会话：N 次模型调用，每一次都换一个新单位 —— 于是账本里有内容、
 /// 时间轴上也有一段一段可读的形状。
 fn stamped_turns(state: &mut TuiState, base: chrono::DateTime<chrono::Utc>, count: u64, step: i64) {
@@ -13817,114 +10434,6 @@ fn stamped_turns(state: &mut TuiState, base: chrono::DateTime<chrono::Utc>, coun
 }
 
 #[test]
-fn the_trace_page_pins_a_three_row_band_under_the_tabs() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    stamped_turns(&mut state, base, 3, 10);
-    open_trace_tab(&mut state, 120, 24);
-    let band = trace_band_rows(&mut state, 120, 24);
-    assert_eq!(band.len(), 3, "刻度 + 模型泳道 + 工具泳道：{band:#?}");
-    assert!(
-        band[0].contains(&wording::clock(base)),
-        "第一行是刻度，写着绝对时刻：{:?}",
-        band[0]
-    );
-    assert!(
-        band[1].starts_with(&format!("{}模型", " ".repeat(9))),
-        "第二行是模型泳道，标签从第 9 列起：{:?}",
-        band[1]
-    );
-    assert!(
-        band[2].starts_with(&format!("{}工具", " ".repeat(9))),
-        "第三行是工具泳道：{:?}",
-        band[2]
-    );
-    let rows = conversation_rows(&mut state, 120, 24);
-    assert_eq!(
-        ledger_top(&rows),
-        usize::from(BAND_TOP) + 3,
-        "账本从横带下面起"
-    );
-    assert!(
-        rows[usize::from(band_row(3))].chars().nth(2) == Some(':'),
-        "账本第一行仍是它自己的时刻戳：{:?}",
-        rows[usize::from(band_row(3))]
-    );
-}
-
-#[test]
-fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
-    use heng::render::layout;
-    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
-    assert_eq!(
-        panes.band.map(|band| band.height),
-        Some(layout::BAND_ROWS),
-        "轨迹页顶上留着三行"
-    );
-    assert_eq!(
-        panes.transcript.height, 13,
-        "对话页的转录在顶部条之后是 13 行"
-    );
-    assert_eq!(panes.trace.height, 10, "轨迹页的可视从 13 行变成 10 行");
-    assert_eq!(
-        panes.trace.y,
-        panes.transcript.y + layout::BAND_ROWS,
-        "那三行正是它差的那几行"
-    );
-    assert_eq!(
-        panes.trace.bottom(),
-        panes.transcript.bottom(),
-        "两块正文区的底边齐平 —— 状态行、输入区与提示行两页同一个位置"
-    );
-    assert_eq!(layout::TRACE_CHROME, 9, "轨迹页的外壳是 9 行");
-
-    // 屏上：状态行、输入区与提示行都在，提示行落在最后一行上。
-    let mut state = state_with_roster(&["kimi"]);
-    stamped_turns(&mut state, fixed_at(9, 0, 0), 2, 10);
-    let rows = screen(120, 24, &mut state);
-    assert!(
-        rows[23].contains("esc 取消") || rows[23].contains("ctrl-d"),
-        "提示行还在屏幕最后一行：{:?}",
-        rows[23]
-    );
-    assert!(
-        rows[17].contains("模型"),
-        "状态行紧贴账本下面：{:?}",
-        rows[17]
-    );
-}
-
-#[test]
-fn the_axis_is_sixty_three_columns_wide() {
-    use heng::render::layout;
-    use heng::render::timeline::LABEL_COLUMNS;
-    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
-    let text = panes.trace_text();
-    assert_eq!(text.width - layout::STAMP_COLUMNS, 68, "正文 68 列");
-    assert_eq!(
-        text.width - layout::STAMP_COLUMNS - LABEL_COLUMNS,
-        63,
-        "横轴 63 列"
-    );
-    // 屏上同一个数：刻度行里最后一个标签的右端正好落在轴的最后那一列上。
-    let mut state = state_with_roster(&["kimi"]);
-    stamped_turns(&mut state, fixed_at(9, 0, 0), 2, 10);
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let left = axis_left_at_120();
-    let tick = cells(&frame, band_row(0), MAIN_LEFT_AT_120, 120);
-    assert!(!tick.trim().is_empty(), "刻度行有读数：{tick:?}");
-    assert!(
-        cells(&frame, band_row(0), left, left + 63).trim().len() > 8,
-        "刻度落在轴里：{tick:?}"
-    );
-    assert!(
-        cells(&frame, band_row(0), left + 63, 120).trim().is_empty(),
-        "轴右端那两列不画刻度：{tick:?}"
-    );
-}
-
-#[test]
 fn the_band_does_not_move_when_the_ledger_scrolls() {
     let mut state = state_with_roster(&["kimi"]);
     stamped_turns(&mut state, fixed_at(9, 0, 0), 8, 10);
@@ -13934,47 +10443,6 @@ fn the_band_does_not_move_when_the_ledger_scrolls() {
     state.mouse(wheel_at(60, 10, true));
     let after = trace_band_rows(&mut state, 120, 24);
     assert_eq!(before, after, "滚动账本时横带一个字节都不动");
-}
-
-#[test]
-fn the_model_lane_splits_on_the_first_token() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    state.apply(turn_at(1, 1, base));
-    state.apply(message_at(
-        2,
-        base + chrono::TimeDelta::seconds(5),
-        Some(2_000),
-    ));
-    state.apply(turn_ended_at(3, base + chrono::TimeDelta::seconds(10)));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(1);
-    let left = axis_left_at_120();
-    assert_eq!(
-        frame[(left + 5, row)].symbol(),
-        wording::BAND_MODEL,
-        "起头那一段在等首 token"
-    );
-    assert_eq!(
-        frame[(left + 5, row)].fg,
-        palette::MUTED,
-        "等首 token 那一格是静音档"
-    );
-    assert_eq!(
-        frame[(left + 40, row)].symbol(),
-        wording::BAND_MODEL,
-        "吐字段也画着"
-    );
-    assert_eq!(
-        frame[(left + 40, row)].fg,
-        palette::PLAIN,
-        "吐字那一格是前景档"
-    );
-    assert!(
-        frame[(left + 62, row)].symbol() == " " || frame[(left + 62, row)].fg == palette::PLAIN,
-        "收尾之后没有第三档颜色"
-    );
 }
 
 #[test]
@@ -14001,200 +10469,6 @@ fn an_old_session_draws_the_model_lane_in_one_colour() {
 }
 
 #[test]
-fn concurrent_tool_calls_stack_in_the_tool_lane() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    state.apply(tool_at(1, "call-1", base, false));
-    state.apply(tool_at(
-        2,
-        "call-2",
-        base + chrono::TimeDelta::seconds(2),
-        false,
-    ));
-    state.apply(tool_at(
-        3,
-        "call-1",
-        base + chrono::TimeDelta::seconds(6),
-        true,
-    ));
-    state.apply(tool_at(
-        4,
-        "call-2",
-        base + chrono::TimeDelta::seconds(8),
-        true,
-    ));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(2);
-    let left = axis_left_at_120();
-    assert_eq!(
-        frame[(left + 5, row)].symbol(),
-        wording::BAND_TOOL,
-        "只有一次调用在跑"
-    );
-    assert_eq!(
-        frame[(left + 30, row)].symbol(),
-        wording::BAND_TOOL_STACKED,
-        "两次调用叠着，那一格更实"
-    );
-    assert_eq!(
-        frame[(left + 58, row)].symbol(),
-        wording::BAND_TOOL,
-        "先起的那次收了尾，只剩后一次"
-    );
-}
-
-#[test]
-fn a_call_shorter_than_one_cell_is_not_drawn() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    // 轴域是 100 秒、63 格 —— 一格约 1.6 秒。0.1 秒的调用不画（宁缺勿假）。
-    state.apply(tool_at(1, "long", base, false));
-    state.apply(tool_at(
-        2,
-        "long",
-        base + chrono::TimeDelta::seconds(10),
-        true,
-    ));
-    state.apply(tool_at(
-        3,
-        "short",
-        base + chrono::TimeDelta::seconds(50),
-        false,
-    ));
-    state.apply(tool_at(
-        4,
-        "short",
-        base + chrono::TimeDelta::seconds(50) + chrono::TimeDelta::milliseconds(100),
-        true,
-    ));
-    state.apply(turn_ended_at(5, base + chrono::TimeDelta::seconds(100)));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(2);
-    let left = axis_left_at_120();
-    assert_eq!(
-        frame[(left + 3, row)].symbol(),
-        wording::BAND_TOOL,
-        "十秒那次画得出来"
-    );
-    for column in 30..35 {
-        assert_eq!(
-            frame[(left + column, row)].symbol(),
-            " ",
-            "不到一格的调用一格都不占（第 {column} 格）"
-        );
-    }
-}
-
-#[test]
-fn the_band_leaves_the_gaps_blank() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    state.apply(tool_at(1, "call-1", base, false));
-    state.apply(tool_at(
-        2,
-        "call-1",
-        base + chrono::TimeDelta::seconds(2),
-        true,
-    ));
-    state.apply(turn_ended_at(3, base + chrono::TimeDelta::seconds(20)));
-    open_trace_tab(&mut state, 120, 24);
-    let band = trace_band_rows(&mut state, 120, 24);
-    // 空档保持留白：两条泳道那两行除了标签与泳道字形，一个汉字都不写。
-    for line in [&band[1], &band[2]] {
-        let lane = &line[usize::from(MAIN_LEFT_AT_120) + 14..];
-        assert!(
-            !lane
-                .chars()
-                .any(|ch| ch.is_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&ch)),
-            "泳道上不写解释性文字：{line:?}"
-        );
-    }
-}
-
-#[test]
-fn the_unit_boundary_is_a_line_and_the_iteration_boundary_is_not() {
-    let mut state = state_with_roster(&["kimi"]);
-    let base = fixed_at(9, 0, 0);
-    state.apply(turn_at(1, 1, base));
-    state.apply(turn_at(2, 2, base + chrono::TimeDelta::seconds(10)));
-    state.apply(turn_at(3, 1, base + chrono::TimeDelta::seconds(20)));
-    state.apply(turn_ended_at(4, base + chrono::TimeDelta::seconds(20)));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(1);
-    let left = axis_left_at_120();
-    assert_eq!(
-        frame[(left, row)].symbol(),
-        wording::BAND_MARK,
-        "单位的头画一道竖线"
-    );
-    assert_eq!(
-        frame[(left + 62, row)].symbol(),
-        wording::BAND_MARK,
-        "第二个单位也画"
-    );
-    assert_ne!(
-        frame[(left + 31, row)].symbol(),
-        wording::BAND_MARK,
-        "迭代边界不标 —— 一个回合里可以有几百次"
-    );
-}
-
-#[test]
-fn the_tick_row_marks_the_viewport_and_follows_the_scroll() {
-    let mut state = state_with_roster(&["kimi"]);
-    stamped_turns(&mut state, fixed_at(9, 0, 0), 40, 10);
-    open_trace_tab(&mut state, 120, 24);
-    let painted = |state: &mut TuiState| -> Vec<bool> {
-        let frame = buffer(120, 24, state);
-        (0..63)
-            .map(|column| frame[(axis_left_at_120() + column, band_row(0))].bg == palette::VIEWPORT)
-            .collect()
-    };
-    let before = painted(&mut state);
-    assert!(before.iter().any(|hit| *hit), "视口那一段铺着底色");
-    assert!(!before[0], "视口不在开头时头几格没有底色（{before:?}）");
-    // 底色只铺在**刻度行**：两条泳道行一个字节都不沾（命中底色是票 23 的事）。
-    let frame = buffer(120, 24, &mut state);
-    for row in [band_row(1), band_row(2)] {
-        for column in 0..63 {
-            assert_eq!(
-                frame[(axis_left_at_120() + column, row)].bg,
-                Color::Reset,
-                "泳道行不铺底色（第 {column} 格）"
-            );
-        }
-    }
-    state.mouse(wheel_at(60, 10, true));
-    let after = painted(&mut state);
-    assert_ne!(before, after, "滚动时视口区间跟着走");
-}
-
-#[test]
-fn the_selected_block_leaves_a_mark_on_the_tool_lane() {
-    let mut state = state_with_roster(&["kimi"]);
-    stamped_turns(&mut state, fixed_at(9, 0, 0), 6, 10);
-    open_trace_tab(&mut state, 120, 24);
-    // 先选中最新的那一块：`G` 到最新，再按 `↑` 把落点放到上一块上。
-    state.key(Key::Char('g'));
-    state.key(Key::Char('g'));
-    state.key(Key::Up);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(2);
-    let marks: Vec<u16> = (0..63)
-        .filter(|column| frame[(axis_left_at_120() + column, row)].symbol() == wording::BAND_MARK)
-        .collect();
-    assert_eq!(marks.len(), 1, "选中块在轴上只留一道位置标记：{marks:?}");
-    assert_eq!(
-        frame[(axis_left_at_120() + marks[0], row)].fg,
-        palette::ACCENT,
-        "它是一根焦点色的前景记号"
-    );
-}
-
-#[test]
 fn the_band_gives_up_its_rows_before_the_ledger_does() {
     // 40×10 是屏幕的下界：那里横带整条让位，账本仍在（票 22 第 10 条）。
     let mut state = state_with_roster(&["kimi"]);
@@ -14216,50 +10490,6 @@ fn the_band_gives_up_its_rows_before_the_ledger_does() {
 }
 
 #[test]
-fn the_band_degrades_three_steps_as_the_terminal_narrows() {
-    use heng::render::layout;
-    use heng::render::timeline::BandKind;
-    // 120 列：完整刻度（轴 63 格）。80 列：宽档左栏换成窄档，轴 35 格 —— 稀疏刻度。
-    // 40 列：没有左栏，轴 24 格 —— 一行三态版，省下的一行还给账本。
-    for (width, kind, rows) in [
-        (120u16, BandKind::Full, 3u16),
-        (80, BandKind::Sparse, 3),
-        (40, BandKind::Compact, 2),
-    ] {
-        let panes = layout::plan(ratatui::layout::Rect::new(0, 0, width, 24), 1, true, false);
-        assert_eq!(panes.band_kind, kind, "{width} 列上的那一档");
-        assert_eq!(
-            panes.band.map(|band| band.height),
-            Some(rows),
-            "{width} 列上横带占的行"
-        );
-        assert_eq!(
-            panes.transcript.height - panes.trace.height,
-            rows,
-            "{width} 列上省下的行还给账本"
-        );
-    }
-    // 40 列上的三档：没有泳道标签、只剩一行三态，而账本照旧。
-    let mut state = state_with_roster(&["kimi"]);
-    stamped_turns(&mut state, fixed_at(9, 0, 0), 4, 10);
-    open_trace_tab(&mut state, 40, 24);
-    let band = trace_band_rows(&mut state, 40, 24);
-    assert_eq!(band.len(), 2, "一行三态版是两行：{band:#?}");
-    assert!(
-        !band
-            .iter()
-            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
-        "一行三态版把那五列也还给轴：{band:#?}"
-    );
-    assert!(
-        trace_page(&mut state, 40, 24)
-            .iter()
-            .any(|row| row.contains("第")),
-        "账本照旧画着"
-    );
-}
-
-#[test]
 fn the_band_takes_neither_the_keyboard_nor_a_click() {
     let mut state = state_with_roster(&["kimi"]);
     stamped_turns(&mut state, fixed_at(9, 0, 0), 4, 10);
@@ -14277,756 +10507,91 @@ fn the_band_takes_neither_the_keyboard_nor_a_click() {
     );
 }
 
-#[test]
-fn a_running_segment_is_drawn_up_to_now() {
-    let mut state = state_with_roster(&["kimi"]);
-    // 「当前时刻」是墙钟：进行中的那一段画到它，所以这一趟的起点也得在现在附近。
-    let base = chrono::Utc::now() - chrono::TimeDelta::seconds(8);
-    state.apply(tool_at(1, "call-1", base, false));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = band_row(2);
-    let left = axis_left_at_120();
-    assert_eq!(
-        frame[(left, row)].symbol(),
-        wording::BAND_TOOL,
-        "从起点那一格起"
-    );
-    assert_eq!(
-        frame[(left + 62, row)].symbol(),
-        wording::BAND_TOOL,
-        "右端画到当前时刻那一格"
-    );
-    // 流式的那一段**不给时长数字**：横带上只有绝对时刻，一句「多长」都没有。
-    let band = trace_band_rows(&mut state, 120, 24);
-    for line in &band {
-        assert!(
-            !line.contains(" s") && !line.contains("分钟"),
-            "横带上不给时长：{line:?}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 轴上的命中底色（`.scratch/trace-ledger/spec.md` §11、票 23）
 // ---------------------------------------------------------------------------
 
-/// 一条带固定时刻、自己那句正文的模型回答。
-fn answer_at(seq: u64, at: chrono::DateTime<chrono::Utc>, text: &str) -> heng::render::RenderEvent {
-    at_event(
-        seq,
-        at,
-        heng::events::EventPayload::MessageCompleted {
-            role: heng::events::Role::Assistant,
-            text: text.to_owned(),
-            reasoning: None,
-            first_token_ms: None,
-        },
-    )
-}
-
-/// 一条带固定时刻、自己那段输出的工具结果 —— 轨迹页上它就是那个工具块。
-fn tool_result_at(
-    seq: u64,
-    id: &str,
-    at: chrono::DateTime<chrono::Utc>,
-    output: &str,
-) -> heng::render::RenderEvent {
-    at_event(
-        seq,
-        at,
-        heng::events::EventPayload::ToolCallCompleted {
-            tool_call_id: heng::events::ToolCallId::new(id),
-            ok: true,
-            output: Some(output.to_owned()),
-            error: None,
-            duration_ms: 0,
-        },
-    )
-}
-
-/// 一条带固定时刻的上下文注入 —— 它不是模型调用也不是工具调用（票 23 第 5 条）。
-fn injection_at(
-    seq: u64,
-    at: chrono::DateTime<chrono::Utc>,
-    content: &str,
-) -> heng::render::RenderEvent {
-    at_event(
-        seq,
-        at,
-        heng::events::EventPayload::ContextInjected {
-            source: heng::events::ContextSource::AgentsMd,
-            content: content.to_owned(),
-        },
-    )
-}
-
-/// 一条七个单位的账本，**轴域正好 63 秒铺在 63 格上**（一格一秒，于是断言里的格号就是秒数）：
-/// 第 `index` 个单位的模型那一块落在 `index * 9 + 1` 秒，工具那一块落在 `index * 9 + 4` 秒。
-///
-/// 末尾那条注入撑起轴域的右端（63 秒），顺便当一个**不落轴**的块：它不是模型调用也不是
-/// 工具调用，在轴上没有位置。
-fn a_ledger_of_stamped_hits(state: &mut TuiState) {
-    let base = fixed_at(9, 0, 0);
-    let seconds = chrono::TimeDelta::seconds;
-    for index in 0..7u64 {
-        let at = base + seconds(index as i64 * 9);
-        state.apply(turn_at(100 + index * 4, 1, at));
-        state.apply(answer_at(
-            101 + index * 4,
-            at + seconds(1),
-            &format!("真回答 {index}"),
-        ));
-        state.apply(tool_at(
-            102 + index * 4,
-            &format!("c{index}"),
-            at + seconds(3),
-            false,
-        ));
-        state.apply(tool_result_at(
-            103 + index * 4,
-            &format!("c{index}"),
-            at + seconds(4),
-            &format!("读完了 {index}"),
-        ));
-        state.apply(turn_ended_at(104 + index * 4, at + seconds(5)));
-    }
-    state.apply(injection_at(900, base + seconds(63), "开场那一段注入"));
-}
-
-/// 某一行上铺着命中底色的那些格（轴内，0 起数）。
-fn hit_cells(frame: &Buffer, row: u16) -> Vec<u16> {
-    (0..63)
-        .filter(|column| frame[(axis_left_at_120() + column, row)].bg == palette::HIT)
-        .collect()
-}
-
-/// 泳道那一行在轴上的样子：逐格的字形与前景色 —— 「未命中的段不调弱」要的是逐格相同。
-fn lane_cells(frame: &Buffer, row: u16) -> Vec<(String, Color)> {
-    (0..63)
-        .map(|column| {
-            let cell = &frame[(axis_left_at_120() + column, row)];
-            (cell.symbol().to_owned(), cell.fg)
-        })
-        .collect()
-}
-
-/// 命中底色铺在**两条泳道行**上，而刻度行的底色只认视口 —— 两处底色、两个语义
-/// （票 23 第 2、6 条）。
-#[test]
-fn the_hits_wash_the_lanes_and_spare_the_tick_row() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "真回答 3");
-
-    let frame = buffer(120, 24, &mut state);
-    assert_eq!(
-        hit_cells(&frame, band_row(1)),
-        vec![28],
-        "模型那一块（第 28 秒）在模型泳道上铺着底色"
-    );
-    assert!(
-        hit_cells(&frame, band_row(2)).is_empty(),
-        "模型类命中不落工具泳道"
-    );
-    for column in 0..63 {
-        assert_ne!(
-            frame[(axis_left_at_120() + column, band_row(0))].bg,
-            palette::HIT,
-            "刻度行不铺命中底色（第 {column} 格）"
-        );
-    }
-}
-
-/// 工具类命中只落工具泳道（票 23 第 1 条）。
-#[test]
-fn a_tool_hit_lands_on_the_tool_lane_only() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "读完了 3");
-
-    let frame = buffer(120, 24, &mut state);
-    assert_eq!(
-        hit_cells(&frame, band_row(2)),
-        vec![31],
-        "工具那一块（第 31 秒）在工具泳道上铺着底色"
-    );
-    assert!(
-        hit_cells(&frame, band_row(1)).is_empty(),
-        "工具类命中不落模型泳道"
-    );
-}
-
-/// 命中之间隔着大于一格，底色就断开 —— 空档那些格一个字节都不铺（票 23 第 3 条）。
-#[test]
-fn the_band_breaks_where_the_hits_are_far_apart() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "真回答");
-
-    let frame = buffer(120, 24, &mut state);
-    assert_eq!(
-        hit_cells(&frame, band_row(1)),
-        vec![1, 10, 19, 28, 37, 46, 55],
-        "七块命中隔着九秒（一格一秒）：断成七段，段与段之间的空档是留白"
-    );
-}
-
-/// 注入那类命中**不在轴上出现**，而它在账本的过滤视图里**在**（票 23 第 5 条）——
-/// 「搜到的命中不一定都在轴上出现」是判据的后果，不是漏画。
-#[test]
-fn a_hit_outside_the_two_lanes_never_reaches_the_axis() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "开场那一段注入");
-
-    let page = trace_page(&mut state, 120, 24).join("\n");
-    assert!(page.contains("上下文注入"), "它在账本的过滤视图里：{page}");
-    assert!(
-        corner_text(&mut state, 120, 24).contains("1 个命中"),
-        "浮字位照样报它"
-    );
-    let frame = buffer(120, 24, &mut state);
-    for row in [band_row(1), band_row(2)] {
-        assert!(
-            hit_cells(&frame, row).is_empty(),
-            "注入既不是模型调用也不是工具调用，在轴上没有位置（第 {row} 行）"
-        );
-    }
-}
-
-/// 选中标记与命中底色**正交**：标记是前景竖线、底色是背景，同一格上两者共存
-/// （票 23 第 7 条）。
-#[test]
-fn the_selection_mark_shares_a_cell_with_a_hit_band() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    search_for(&mut state, "读完了 3");
-    // `n` 把选中带到第一个命中块上 —— 它正落在第 31 格那段底色上。
-    state.key(Key::Char('n'));
-
-    let frame = buffer(120, 24, &mut state);
-    let cell = &frame[(axis_left_at_120() + 31, band_row(2))];
-    assert_eq!(cell.symbol(), wording::BAND_MARK, "竖线画着");
-    assert_eq!(cell.fg, palette::ACCENT, "它是焦点色的前景记号");
-    assert_eq!(cell.bg, palette::HIT, "同一格的底色仍是命中那一档");
-}
-
-/// 未命中的那些格只是不加底色：字形与前景色逐格与过滤前**一模一样**（票 23 第 4 条）。
-#[test]
-fn the_unhit_stretches_of_a_lane_are_not_dialled_down() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    let before = lane_cells(&buffer(120, 24, &mut state), band_row(1));
-
-    search_for(&mut state, "真回答 3");
-    let frame = buffer(120, 24, &mut state);
-    assert!(!hit_cells(&frame, band_row(1)).is_empty(), "确实铺上了底色");
-    assert_eq!(
-        lane_cells(&frame, band_row(1)),
-        before,
-        "泳道一个字形、一个颜色都没变"
-    );
-}
-
-/// 折叠不改轴：折行是显示状态，时间区间是事实 —— 折起来的那一段底色照画（票 23 第 8 条）。
-#[test]
-fn folding_does_not_touch_the_axis() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    let before = hit_cells(&buffer(120, 24, &mut state), band_row(1));
-    assert!(before.is_empty(), "还没搜，轴上没有命中底色");
-
-    // 先把整本账折起来，再搜。
-    state.key(Key::Char('{'));
-    search_for(&mut state, "真回答");
-    let frame = buffer(120, 24, &mut state);
-    assert_eq!(
-        hit_cells(&frame, band_row(1)),
-        vec![1, 10, 19, 28, 37, 46, 55],
-        "折着的时候底色一格不少"
-    );
-}
-
-/// 清掉搜索之后，轴回到票 22 的样子：一段底色都不留（票 23 第 9 条）。
-#[test]
-fn clearing_the_search_takes_every_band_away() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_ledger_of_stamped_hits(&mut state);
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let lanes = [
-        lane_cells(&frame, band_row(1)),
-        lane_cells(&frame, band_row(2)),
-    ];
-
-    search_for(&mut state, "读完了 3");
-    let frame = buffer(120, 24, &mut state);
-    assert!(
-        !hit_cells(&frame, band_row(2)).is_empty(),
-        "过滤期间铺着底色"
-    );
-
-    state.key(Key::Esc);
-    let frame = buffer(120, 24, &mut state);
-    assert!(hit_cells(&frame, band_row(1)).is_empty(), "没有残留");
-    assert!(hit_cells(&frame, band_row(2)).is_empty(), "没有残留");
-    assert_eq!(
-        [
-            lane_cells(&frame, band_row(1)),
-            lane_cells(&frame, band_row(2))
-        ],
-        lanes,
-        "两条泳道逐格回到过滤之前"
-    );
-}
-
 // ---------------------------------------------------------------------------
-// 右栏（票 13）：容器、轨迹搬家与两档形态
+// 删主列页签条与提示行两套（票 16）
 // ---------------------------------------------------------------------------
 
-/// 票 13 的几何：120 列两侧栏同开 → 左栏 40 / 主列 50 / 右栏 28。
-///
-/// 三块从**同一条顶线**到底（顶部页签条还没来，那两行由票 15 接手）；底部三行（状态行 /
-/// 输入区 / 提示行）**只跨主列**，不跨右栏。
+/// 主列顶上不再有页签条：顶部页签条之下直接就是转录。
 #[test]
-fn the_right_rail_sits_beside_the_main_column_at_120_columns() {
-    use heng::render::layout;
-    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
-    let panes = layout::plan(area, 1, true, true);
-    let sidebar = panes.sidebar.expect("左栏在");
-    let rail = panes.right_rail.expect("右栏在");
-    assert_eq!(sidebar.width, 40);
-    assert_eq!(panes.main.width, 50);
-    assert_eq!(rail.width, 28);
-    assert_eq!(rail.x, panes.main.right() + 1);
-    assert_eq!(rail.y, panes.main.y);
-    assert_eq!(rail.height, panes.main.height);
-    assert_eq!(panes.right_divide, Some(panes.main.right()));
-    for bottom in [panes.status, panes.input, panes.hints] {
-        assert!(
-            bottom.right() <= panes.main.right(),
-            "底部三行不跨右栏：{bottom:?}"
-        );
-    }
-    // 右栏的轨迹区在横带之下；28 档的横带只有一行三态版那两行。
-    assert_eq!(
-        panes.right_band_kind,
-        heng::render::timeline::BandKind::Compact
-    );
-    assert_eq!(panes.right_band.expect("横带在").height, 2);
-    let trace = panes.right_trace.expect("轨迹区在");
-    assert_eq!(trace.y, rail.y + 2);
-    assert_eq!(trace.height, rail.height - 2);
-}
-
-/// herdr 的常态：94 列、左栏收起（票 27 之后默认关），右栏仍是 28 档、主列 65。
-#[test]
-fn the_right_rail_keeps_28_columns_at_94_columns_with_the_sidebar_hidden() {
-    use heng::render::layout;
-    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 94, 40), 1, false, true);
-    assert!(panes.sidebar.is_none());
-    assert_eq!(panes.main.width, 65);
-    assert_eq!(panes.right_rail.expect("右栏在").width, 28);
-}
-
-/// 右栏取宽档（40）的门槛：≥ 122 列；121 列还是 28 档（再宽一档主列就跌破 40）。
-#[test]
-fn the_right_rail_takes_the_wide_tier_only_from_122_columns() {
-    use heng::render::layout;
-    let wide = layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
-    assert_eq!(wide.right_rail.expect("右栏在").width, 40);
-    assert_eq!(wide.main.width, 40);
-    let narrow = layout::plan(ratatui::layout::Rect::new(0, 0, 121, 40), 1, true, true);
-    assert_eq!(narrow.right_rail.expect("右栏在").width, 28);
-}
-
-/// 左栏在窄档（28）时，右栏在 98 列上还活得下来，97 列就让位 —— 主列的地板是 40。
-#[test]
-fn the_right_rail_gives_way_below_98_columns_when_the_sidebar_is_narrow() {
-    use heng::render::layout;
-    let hidden = layout::plan(ratatui::layout::Rect::new(0, 0, 97, 40), 1, true, true);
-    assert!(hidden.right_rail.is_none(), "97 列时右栏隐藏");
-    assert_eq!(hidden.main.width, 68, "主列拿走右栏让出的那些列");
-    let visible = layout::plan(ratatui::layout::Rect::new(0, 0, 98, 40), 1, true, true);
-    assert_eq!(visible.right_rail.expect("右栏在").width, 28);
-    assert_eq!(visible.main.width, 40);
-}
-
-/// 右栏 28 档画轨迹：**不画时刻、不带用量**（缩略索引），组头短写、不带虚线。
-#[test]
-fn the_narrow_right_rail_draws_an_index_without_stamps_or_usage() {
+fn the_main_column_has_no_tab_bar_anymore() {
     let mut state = state_with_roster(&["kimi"]);
-    state.set_right_rail(true);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "c1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(3, "c1", true, Some("out"), None));
-
-    let panes =
-        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 40), 1, true, true);
-    let rail = panes.right_rail.expect("右栏在");
-    let (frame, _) = framed(120, 40, &mut state);
-    let text: Vec<String> = (rail.y..rail.y + rail.height)
-        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
-        .collect();
-    let joined = text.join("\n");
-    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
-    let header = text
-        .iter()
-        .find(|row| row.contains("回合 1"))
-        .unwrap_or_else(|| panic!("组头也在右栏里：{joined}"));
-    assert!(!header.contains('┄'), "组头不再并进虚线（票 13）：{header}");
+    state.apply(message(1, "一句话", None));
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
     assert!(
-        !joined.contains("in=") && !joined.contains("out="),
-        "右栏里不带行尾用量：{joined}"
+        !text.contains(wording::TAB_TRACE),
+        "屏幕上不再有 `轨迹` 那个页签：{text}"
     );
-    for row in text.iter().filter(|row| !row.trim().is_empty()) {
-        assert!(
-            !row.starts_with(|c: char| c.is_ascii_digit()),
-            "28 档不画行首时刻：{row}"
-        );
-    }
-    // 时间轴只画 Compact 那一档：没有泳道标签。
-    let band = panes.right_band.expect("横带在");
-    let band_text: Vec<String> = (band.y..band.y + band.height)
-        .map(|y| cells(&frame, y, band.x, band.x + band.width))
-        .collect();
+    // 顶部条两行之后就是转录：主列第 2 行是正文，而不是标签行。
+    let main = conversation_rows(&mut state, 120, 24);
     assert!(
-        !band_text
-            .iter()
-            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
-        "右栏的时间轴只有一行三态版：{band_text:#?}"
+        !main[2].contains(wording::TAB_CONVERSATION) && main[2].contains('['),
+        "主列第 2 行是转录：{:?}",
+        main[2]
     );
 }
 
-/// 右栏 40 档：保住九列时刻、**不画行尾用量**。
+/// 提示行跟着**键盘归属**换表：右栏拿住键盘时是 `RAIL_HINTS`（末条 `ctrl-v 交还`），
+/// 交还给输入区后换回 `KEY_HINTS`（末条 `ctrl-o 左栏`）。
 #[test]
-fn the_wide_right_rail_keeps_the_stamps_and_drops_the_usage() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.set_right_rail(true);
-    state.apply(turn_started(1));
-    state.apply(tool_started(
-        2,
-        "c1",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(3, "c1", true, Some("out"), None));
-
-    let panes =
-        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 122, 40), 1, true, true);
-    let rail = panes.right_rail.expect("右栏在");
-    assert_eq!(rail.width, 40);
-    let (frame, _) = framed(122, 40, &mut state);
-    let text: Vec<String> = (rail.y..rail.y + rail.height)
-        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
-        .collect();
-    let joined = text.join("\n");
-    assert!(joined.contains("调用 bash"), "轨迹在右栏里：{joined}");
-    assert!(
-        text.iter()
-            .any(|row| row.starts_with(|c: char| c.is_ascii_digit())),
-        "40 档保留行首那九列时刻：{joined}"
-    );
-    assert!(
-        !joined.contains("in=") && !joined.contains("out="),
-        "40 档也弃行尾用量：{joined}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 右栏开关与键盘层序（票 14）
-// ---------------------------------------------------------------------------
-
-/// 右栏里那些行：几何取自 `plan(..., right_wanted=true)`，与绘制共用同一份排版。
-fn rail_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
-    let panes = heng::render::layout::plan(
-        ratatui::layout::Rect::new(0, 0, width, height),
-        1,
-        true,
-        true,
-    );
-    let Some(rail) = panes.right_rail else {
-        return Vec::new();
-    };
-    let frame = buffer(width, height, state);
-    (rail.y..rail.y + rail.height)
-        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
-        .collect()
-}
-
-/// 右栏在屏幕上的分隔列。
-fn right_divide(width: u16, height: u16) -> u16 {
-    heng::render::layout::plan(
-        ratatui::layout::Rect::new(0, 0, width, height),
-        1,
-        true,
-        true,
-    )
-    .right_divide
-    .expect("右栏在")
-}
-
-/// `Ctrl-V` 一次按下 = 开栏 + 把键盘交给右栏；再按 = 交还键盘 + 关栏。
-#[test]
-fn ctrl_v_opens_the_right_rail_and_hands_it_the_keyboard() {
-    let mut state = state_with_roster(&["kimi"]);
+fn the_hint_row_switches_suites_with_the_keyboard() {
+    // 提示行分两套只在**有东西在等一行输入**时才谈得上 `enter 发送`：`idle()` 就是那个状态。
+    let mut state = idle();
     a_session_with_process_rows(&mut state);
-    let divide = right_divide(120, 24);
-
-    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert!(cursor.is_some(), "起步时键盘在输入区");
-    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏还没画");
+    // 宽到整份表都放得下：220 列 → 左栏 40 + 主列 139 + 右栏 40。
+    let _ = screen(220, 24, &mut state);
+    let conversation = screen(220, 24, &mut state).join("\n");
     assert!(
-        conversation_rows(&mut state, 120, 24)
-            .join("\n")
-            .contains("问题"),
-        "起步是对话页"
+        conversation.contains("enter 发送") && conversation.contains("esc 取消"),
+        "键盘在输入区时是对话那一套：{conversation}"
     );
+    assert!(!conversation.contains("enter 详情"), "没有右栏那一套");
 
     state.key(Key::CtrlV);
-    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(cursor, None, "开栏同时把键盘交给右栏");
-    assert_eq!(cells(&frame, 2, divide, divide + 1), "┆", "右栏画出来了");
-    let rail = rail_rows(&mut state, 120, 24).join("\n");
-    assert!(rail.contains("调用 bash"), "轨迹在右栏里：{rail}");
-    // 主列页签没有被它翻动（票 14 推翻了「Ctrl-V 翻两页」）：对话内容留在主列里，
-    // 而过程行只在右栏。主列的右缘要按右栏开着时的几何取（`conversation_rows` 的常量切片
-    // 会把右栏也算进去）。
+    let _ = screen(220, 24, &mut state);
+    let rail = screen(220, 24, &mut state).join("\n");
+    assert!(
+        rail.contains("enter 详情") && rail.contains("ctrl-v 交还"),
+        "键盘在右栏时换成右栏那一套：{rail}"
+    );
+    assert!(!rail.contains("enter 发送"), "不再承诺发送：{rail}");
+    assert!(rail.contains("ctrl-o 左栏"), "出口照旧：{rail}");
+
+    // 点输入区交还键盘：提示行立刻换回来，而右栏还在。
     let panes =
-        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
-    let frame = buffer(120, 24, &mut state);
-    let conversation: String = (0..24)
-        .map(|y| cells(&frame, y, panes.main.x, panes.main.right()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        conversation.contains("问题"),
-        "主列仍是对话页：{conversation}"
-    );
-    assert!(
-        !conversation.contains("调用 bash"),
-        "过程行不在主列：{conversation}"
-    );
-
-    state.key(Key::CtrlV);
-    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert!(cursor.is_some(), "再按一次交还键盘");
-    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏收起来了");
-}
-
-/// 点输入区 = 交还键盘但右栏留着 —— 与「开栏」那一下的两个后果故意不同。
-#[test]
-fn clicking_the_input_hands_the_keyboard_back_and_keeps_the_rail() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut state);
-    let _ = screen(120, 24, &mut state);
-    state.key(Key::CtrlV);
-    let divide = right_divide(120, 24);
-    let panes =
-        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
-    let _ = screen(120, 24, &mut state);
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 220, 24), 1, true, true);
     click(&mut state, panes.input.x + 2, panes.input.y + 1);
-    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert!(cursor.is_some(), "键盘回到输入区");
-    assert_eq!(
-        cells(&frame, 2, divide, divide + 1),
-        "┆",
-        "右栏留在了屏幕上"
-    );
-}
-
-/// 宽度放不下右栏时 `Ctrl-V` 只回一句，布局一个字节都不动。
-#[test]
-fn ctrl_v_on_a_narrow_screen_only_leaves_a_receipt() {
-    let mut state = state_with_roster(&["kimi"]);
-    let _ = screen(80, 24, &mut state);
-    let before = screen(80, 24, &mut state);
-    state.key(Key::CtrlV);
-    let after = screen(80, 24, &mut state);
+    let _ = screen(220, 24, &mut state);
+    let back = screen(220, 24, &mut state).join("\n");
     assert!(
-        after.iter().any(|row| row.contains("右栏放不下")),
-        "回执在提示行：{after:#?}"
-    );
-    let last = after.len() - 1;
-    assert_eq!(
-        after[..last],
-        before[..last],
-        "除提示行之外布局没变：{before:#?} → {after:#?}"
+        back.contains("enter 发送") && !back.contains("enter 详情"),
+        "交还键盘之后换回对话那一套：{back}"
     );
 }
 
-/// 右栏里的 `Esc` 一次退一层：清选中 → 交还键盘（搜索与过滤各占一层，没有时不占）。
+/// 只剩对话视图之后，翻页键与滚轮照旧作用在它上面。
 #[test]
-fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
+fn the_page_keys_still_walk_the_only_main_page() {
     let mut state = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut state);
-    let _ = screen(120, 24, &mut state);
-    state.key(Key::CtrlV);
-    let divide = right_divide(120, 24);
-    let _ = screen(120, 24, &mut state);
-
-    state.key(Key::Down);
-    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(cursor, None, "选中一块时键盘仍在右栏");
-    state.key(Key::Esc);
-    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(cursor, None, "清掉选中之后键盘还在右栏");
-    state.key(Key::Esc);
-    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
-    assert!(cursor.is_some(), "第二下把键盘交还输入区");
-    assert_eq!(
-        cells(&frame, 2, divide, divide + 1),
-        "┆",
-        "右栏还开着 —— Esc 退的是键盘，不是栏"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 顶部页签条（票 15）
-// ---------------------------------------------------------------------------
-
-/// 把一份宿主表与它的标题推进状态里：顺序就是 `ids` 的顺序（票 15 的排序判据）。
-fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
-    use heng::events::SessionId;
-    use heng::render::ConsoleRequest;
-    use heng::session::listing::{SessionListing, SessionMark, SessionRow};
-    let rows: Vec<SessionRow> = entries
-        .iter()
-        .map(|(id, title)| SessionRow {
-            id: SessionId::new(*id),
-            cwd: Some("/x/heng".to_owned()),
-            title: (*title).to_owned(),
-            group_key: "heng".to_owned(),
-            group: "heng".to_owned(),
-            written: None,
-            broken: false,
-            missing_cwd: false,
-            foreground: false,
-            mark: SessionMark::Idle,
-        })
-        .collect();
-    let ids: Vec<SessionId> = entries.iter().map(|(id, _)| SessionId::new(*id)).collect();
-    state.request(ConsoleRequest::Sessions {
-        listing: SessionListing {
-            rows,
-            total: entries.len(),
-            unreadable: false,
-        },
-    });
-    state.request(ConsoleRequest::Hosted { ids });
-}
-
-/// 120×40：第 0 行是标签、第 1 行是一条横跨整屏的虚线；左栏与右栏都从第 2 行起。
-#[test]
-fn the_top_tabs_strip_lists_every_hosted_session() {
-    let mut state = state_with_roster(&["kimi"]);
-    state.set_right_rail(true);
-    host_sessions(
-        &mut state,
-        &[
-            ("01J8ZQ4K7M", "会话 A"),
-            ("s-b", "会话 B"),
-            ("s-c", "会话 C"),
-        ],
-    );
-    let frame = buffer(120, 40, &mut state);
-    let top = row_text(&frame, 0, 120);
-    for title in ["会话 A", "会话 B", "会话 C"] {
-        assert!(top.contains(title), "标签上写着 {title}：{top}");
+    for index in 0..30 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("第 {index} 句"),
+            None,
+        ));
     }
-    assert!(top.contains('◆'), "焦点带 `◆`：{top}");
+    let _ = screen(120, 24, &mut state);
+    let bottom = screen(120, 24, &mut state).join("\n");
+    assert!(bottom.contains("第 29 句"), "贴底在最新那句：{bottom}");
+    state.key(Key::PageUp);
+    let page = screen(120, 24, &mut state).join("\n");
+    assert_ne!(page, bottom, "PageUp 翻动对话视图");
     assert!(
-        top.contains("平铺") && top.contains("右栏"),
-        "右端两个按钮：{top}"
-    );
-    assert_eq!(
-        row_text(&frame, 1, 120).trim_end_matches(' '),
-        "┄".repeat(120),
-        "第 1 行是一条横跨整屏的虚线"
-    );
-    // 三块都从第 2 行起：两条竖分隔线都在第 2 行上。
-    assert_eq!(frame[(40, 2)].symbol(), "┆", "左栏分隔线从顶部条之下起");
-    assert_eq!(frame[(91, 2)].symbol(), "┆", "右栏分隔线也从第 2 行起");
-}
-
-/// 状态类不上标签：同一个会话在跑，标签一个字都不变（等人类由状态行承担）。
-#[test]
-fn the_top_tabs_never_show_a_sessions_state() {
-    use heng::render::ConsoleRequest;
-    let mut state = state_with_roster(&["kimi"]);
-    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A"), ("s-b", "会话 B")]);
-    let before = row_text(&buffer(120, 40, &mut state), 0, 120);
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
-    let after = row_text(&buffer(120, 40, &mut state), 0, 120);
-    assert_eq!(before, after, "跑起来不往标签上加任何状态字形");
-    assert!(!after.contains("跑"), "标签里没有状态字：{after}");
-    assert!(!after.contains("等"), "标签里没有等人类：{after}");
-}
-
-/// 放不下的标签从尾部收成 `+N`，靠右端；`+N` 不可点。
-#[test]
-fn the_top_tabs_fold_the_overflow_into_a_plus_n() {
-    let mut state = state_with_roster(&["kimi"]);
-    let ids: Vec<String> = (0..8).map(|index| format!("s-{index}")).collect();
-    let mut entries: Vec<(&str, &str)> = vec![("01J8ZQ4K7M", "会话零号")];
-    entries.extend(ids.iter().enumerate().map(|(index, id)| {
-        (
-            id.as_str(),
-            if index % 2 == 0 {
-                "会话甲甲"
-            } else {
-                "会话乙乙"
-            },
-        )
-    }));
-    host_sessions(&mut state, &entries);
-    let frame = buffer(120, 40, &mut state);
-    let top = row_text(&frame, 0, 120);
-    assert!(top.contains("+"), "溢出收成 `+N`：{top}");
-    assert!(top.contains("会话零号"), "排在前面的标签留着：{top}");
-
-    // `+N` 不可点：点它前后屏幕完全一样（它没有进命中表）。
-    let x = top.find('+').expect("`+N` 在行里") as u16;
-    let before = screen(120, 40, &mut state);
-    click(&mut state, x, 0);
-    let after = screen(120, 40, &mut state);
-    assert_eq!(before, after, "`+N` 点了什么都不发生");
-}
-
-/// 屏高 < 20 时顶部条收成一行、没有那条虚线；到 20 行恢复两行。
-#[test]
-fn the_top_tabs_shrink_to_one_row_on_a_short_screen() {
-    let mut state = state_with_roster(&["kimi"]);
-    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A")]);
-    let short = screen(120, 19, &mut state);
-    assert!(short[0].contains("会话 A"), "标签还在第 0 行：{short:#?}");
-    assert!(
-        !short[1].starts_with('┄'),
-        "矮屏上不画顶部条那条虚线：{:?}",
-        short[1]
-    );
-
-    let tall = screen(120, 20, &mut state);
-    assert!(tall[0].contains("会话 A"), "标签还在第 0 行：{tall:#?}");
-    assert!(
-        tall[1].starts_with('┄'),
-        "20 行起是两行顶部条：{:?}",
-        tall[1]
+        !page.contains("第 29 句") || !bottom.contains("第 29 句"),
+        "翻上去之后最新那句不必还在"
     );
 }
