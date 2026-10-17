@@ -1,7 +1,7 @@
 # 22: 详情覆盖层与拖选
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 19
 
@@ -15,13 +15,25 @@ Blocked by: 19
 
 ## 验收
 
-- [ ] 右栏里点开一条详情，关掉后滚动位置还原给右栏（pty）。
-- [ ] 格内点开的详情在切焦点之后仍属于原来那个格；关掉时还原给那个格。
-- [ ] 覆盖层宽度不随格宽变（帧）。
-- [ ] 拖选不跨越格边界（单元 / pty）。
-- [ ] 既有详情覆盖层测试全绿。
+- [x] 右栏里点开一条详情，关掉后滚动位置还原给右栏（pty）。
+- [x] 格内点开的详情在切焦点之后仍属于原来那个格；关掉时还原给那个格。
+- [x] 覆盖层宽度不随格宽变（帧）。
+- [x] 拖选不跨越格边界（单元 / pty）。
+- [x] 既有详情覆盖层测试全绿。
 
 ## 依赖
 
 [19 集合生灭与满员拒绝](19-tiles-lifecycle-and-limit.md)。决定见
 [`issues/06-grilling-single-instance-surfaces.md`](06-grilling-single-instance-surfaces.md)。
+
+## 落地注记（2026-10-17）
+
+- `detail_opener` 与 `detail_serial` 跟着会话住进 `SessionLight`（`detail` 本来就在那里）：
+  切走收起来、切回原样回来，关掉时仍按**打开方**还原。`detail_rect` / `file_viewer_rect`
+  是「上一帧画在哪」的帧值，换会话时置空，免得旧坐标被当成这一帧的。
+- 覆盖层宽度本来就读整屏（`layout::detail_width` 用 `self.screen`），所以格宽不参与；测试
+  钉住「120 列上框宽 115–116、左缘 2」，并注明平铺态一格只有 45 列。
+- 拖选按**按下时刻的区域**夹取（`Drag::press` 带 block 下标），平铺两格是两个 `TextBlock`，
+  所以「拖到隔壁格」时头被夹回本格矩形；新增单测钉住这一条。
+- 测试：`history_replay` 2 条（覆盖层归属会话 + 关闭还原轨迹、宽度按整屏）、`selection`
+  单测 1 条（不跨格）。

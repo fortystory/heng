@@ -11337,3 +11337,70 @@ fn each_session_keeps_its_own_slash_catalog() {
     assert!(text.contains("only-a"), "甲的名册回来了：{text}");
     assert!(!text.contains("only-b"), "乙的名字不混进来：{text}");
 }
+
+// ---------------------------------------------------------------------------
+// 问卷与权限门每会话（票 20）
+// ---------------------------------------------------------------------------
+
+/// 对话框内那几行的文本（框的左右两边不算）。
+fn overlay_text(state: &mut TuiState, width: u16, height: u16) -> String {
+    let frame = buffer(width, height, state);
+    let Some((left, top, _)) = overlay_frame(&frame, width, height) else {
+        return String::new();
+    };
+    (top + 1..height)
+        .map(|y| {
+            let row = row_text(&frame, y, width);
+            row.chars().skip(left as usize).collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 两个会话各有一份等人类：切焦点画焦点那一份、切回去题面与作答都还在、作答只回到原来那个
+/// 会话（票 20）。
+#[test]
+fn each_session_keeps_its_own_pending_question() {
+    use heng::permissions::Answer;
+    let mut state = state();
+    let (ask_a, mut rx_a) = ask_permission();
+    state.request(ask_a);
+    let a_before = overlay_text(&mut state, 120, 24);
+    assert!(!a_before.is_empty(), "A 的题面在屏幕上");
+
+    // 切到 B：A 那一份收起来，B 的屏幕上是干净的。
+    switch_session(&mut state, "s-b");
+    assert!(overlay_text(&mut state, 120, 24).is_empty(), "B 没有题面");
+
+    // B 自己来一份。
+    let (ask_b, mut rx_b) = ask_permission();
+    state.request(ask_b);
+    assert!(!overlay_text(&mut state, 120, 24).is_empty(), "B 的题面在");
+
+    // 切回 A：题面与已填状态原样还在。
+    switch_session(&mut state, "01J8ZQ4K7M");
+    assert_eq!(
+        overlay_text(&mut state, 120, 24),
+        a_before,
+        "切回 A 题面还在"
+    );
+
+    // 在 A 的题上作答：只回到 A。
+    state.key(Key::Char('y'));
+    assert!(
+        matches!(rx_a.try_recv(), Ok(Answer::Allow)),
+        "A 的回复通道收到答案"
+    );
+    assert!(
+        overlay_text(&mut state, 120, 24).is_empty(),
+        "A 的题答完就收"
+    );
+
+    // 切到 B：B 的问题不受影响。
+    switch_session(&mut state, "s-b");
+    assert!(
+        !overlay_text(&mut state, 120, 24).is_empty(),
+        "B 的题还在等"
+    );
+    assert!(rx_b.try_recv().is_err(), "B 的问题没被 A 的作答碰过");
+}

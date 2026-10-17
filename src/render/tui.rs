@@ -4366,7 +4366,10 @@ impl TuiState {
             files: std::mem::take(&mut self.files),
             conversation: self.view.conversation.viewport(),
             trace: self.view.trace.viewport(),
+            pending: self.pending.take(),
             detail: self.detail.take(),
+            detail_opener: self.detail_opener.take(),
+            detail_serial: self.detail_serial,
             file_viewer: self.file_viewer.take(),
             picker: self.picker.take(),
             slash: std::mem::take(&mut self.slash),
@@ -4390,8 +4393,14 @@ impl TuiState {
             self.files = FileIndex::new();
             self.file_scan_wanted = true;
             self.editor = Input::new();
+            self.pending = None;
             self.detail = None;
+            self.detail_opener = None;
+            self.detail_serial = 0;
+            self.questionnaire_bottom = None;
+            self.detail_rect = None;
             self.file_viewer = None;
+            self.file_viewer_rect = None;
             self.picker = None;
             self.slash = MenuSelection::default();
             return;
@@ -4399,6 +4408,13 @@ impl TuiState {
         self.cwd = light.cwd;
         self.files = light.files;
         self.editor = light.editor;
+        self.pending = light.pending;
+        self.detail_opener = light.detail_opener;
+        self.detail_serial = light.detail_serial;
+        // 那几个「上一帧画在哪」的矩形每帧重算：换会话时先清掉，免得旧坐标被当成这一帧的。
+        self.questionnaire_bottom = None;
+        self.detail_rect = None;
+        self.file_viewer_rect = None;
         self.view.conversation.restore_viewport(light.conversation);
         self.view.trace.restore_viewport(light.trace);
         self.detail = light.detail;
@@ -10174,8 +10190,15 @@ struct SessionLight {
     conversation: crate::render::pane::Viewport,
     /// 轨迹视图的视口意图。
     trace: crate::render::pane::Viewport,
+    /// 等着人答的那一份（问卷 / 权限门 / 过大的粘贴）—— 每会话一份，全屏只画焦点那份
+    /// （票 20）。它自带 reply 通道，所以切走再切回、作答仍回到原来那个会话。
+    pending: Option<Pending>,
     /// 打开的详情覆盖层。
     detail: Option<DetailView>,
+    /// 打开详情的那一页、以及它打开前的滚动状态（票 22：跟着会话走，切回来关掉仍还原给它）。
+    detail_opener: Option<DetailOpener>,
+    /// 这个会话打开过多少次详情覆盖层（票 22）。
+    detail_serial: u64,
     /// 打开的文件查看器。
     file_viewer: Option<FileViewerPane>,
     /// 开着的选择器。

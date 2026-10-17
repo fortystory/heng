@@ -342,6 +342,25 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_never_crosses_into_the_next_tile() {
+        // 平铺态相邻两格（票 22）：按住第一格往右拖到第二格，头被夹回第一格的矩形，
+        // 取到的文本也只有第一格那一行。
+        let mut text = ScreenText::default();
+        text.push(
+            Rect::new(0, 2, 45, 4),
+            vec![TextRow::plain("格一".to_owned())],
+        );
+        text.push(
+            Rect::new(46, 2, 45, 4),
+            vec![TextRow::plain("格二".to_owned())],
+        );
+        let mut drag = Drag::press((0, 2), Some(0));
+        drag.moved((80, 2), Rect::new(0, 2, 45, 4));
+        assert_eq!(drag.head, (44, 2), "头夹在第一格右缘");
+        assert_eq!(text_of(&text, &drag), "格一", "隔壁的字不进来");
+    }
+
+    #[test]
     fn the_text_of_a_selection_joins_soft_wraps_and_keeps_hard_ones() {
         // 一个软折的续行拼回一条；区域自己的换行落一个 `\n`（spec §6）。
         let mut text = ScreenText::default();

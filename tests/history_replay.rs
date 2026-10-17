@@ -1376,3 +1376,117 @@ fn a_new_replay_closes_the_one_in_flight_first() {
         "旧批次在**新重建开始之前**收尾，于是它的缓冲落在那份历史之前：{rows:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 详情覆盖层归属会话（票 22）
+// ---------------------------------------------------------------------------
+
+/// 前台切到另一个会话（渲染端只发上行，真正改指针的是循环）。
+fn switch_to(state: &mut TuiState, id: &str) {
+    let mut session_facts = facts();
+    session_facts.session_id = id.to_owned();
+    state.request(ConsoleRequest::SwitchSession {
+        facts: session_facts,
+        cwd: std::path::PathBuf::from("/x/heng"),
+        events: Vec::new(),
+    });
+    while state.replay_pending() {
+        state.replay_batch();
+    }
+}
+
+/// 详情覆盖层跟着**打开它的那个会话**走：切走收起来、切回原样还在；关掉时按打开方还原，
+/// 不会把滚动位置还错地方（票 22）。
+#[test]
+fn a_detail_overlay_belongs_to_the_session_that_opened_it() {
+    let mut state = state();
+    replay(
+        &mut state,
+        vec![
+            tool_started(1, "call-b1", "bash", serde_json::json!({"command": "ls"})),
+            tool_completed(2, "call-b1", true, Some("body"), None),
+            tool_started(3, "call-b2", "bash", serde_json::json!({"command": "pwd"})),
+            tool_completed(4, "call-b2", true, Some("body2"), None),
+        ],
+    );
+    run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    // 往上滚一点，好让「还原给打开方」有东西可看。
+    state.key(Key::PageUp);
+    let before_top = screen(120, 40, &mut state)
+        .into_iter()
+        .find(|row| row.contains("kimi ▸"))
+        .expect("轨迹里有一行");
+    click_row(&mut state, 120, 40, "调用 bash");
+    assert!(
+        screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
+        "A 上详情开着"
+    );
+
+    // 切到 B：覆盖层跟着 A 留在它那一份里，B 的屏幕是干净的。
+    switch_to(&mut state, "s-b");
+    assert!(
+        !screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
+        "B 上没有 A 的覆盖层"
+    );
+
+    // 切回 A：覆盖层与打开方都原样回来。
+    switch_to(&mut state, "01J8ZQ4K7M");
+    assert!(
+        screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
+        "切回 A 详情还在"
+    );
+
+    // `Esc` 关掉：按打开方（轨迹）还原滚动位置。
+    state.key(Key::Esc);
+    let after = screen(120, 40, &mut state);
+    assert!(!after.join("\n").contains(TOOL_FACES), "关掉了");
+    let after_top = after
+        .into_iter()
+        .find(|row| row.contains("kimi ▸"))
+        .expect("轨迹里有一行");
+    assert_eq!(after_top, before_top, "滚动位置还原给轨迹，而不是回到别处");
+}
+
+/// 覆盖层框（那一行两端是空角的虚线）的左缘与宽度。
+fn overlay_left_and_width(buffer: &Buffer, width: u16, height: u16) -> Option<(u16, u16)> {
+    for y in 0..height {
+        let mut first: Option<u16> = None;
+        for x in 1..width.saturating_sub(1) {
+            if buffer[(x, y)].symbol() == "┄" {
+                first.get_or_insert(x);
+            } else if let Some(start) = first {
+                if buffer[(start - 1, y)].symbol() == " " && buffer[(x, y)].symbol() == " " {
+                    return Some((start - 1, x - start + 1));
+                }
+                first = None;
+            }
+        }
+    }
+    None
+}
+
+/// 详情覆盖层的宽度按**整屏**量（票 22）：120 列上框宽 116（两侧各留 2 列边距），与平铺态
+/// 一格的 45 列无关。
+#[test]
+fn the_detail_overlay_is_sized_to_the_screen() {
+    let mut state = state();
+    replay(
+        &mut state,
+        vec![
+            tool_started(1, "call-w1", "bash", serde_json::json!({"command": "ls"})),
+            tool_completed(2, "call-w1", true, Some("body"), None),
+        ],
+    );
+    run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+    let frame = buffer(120, 40, &mut state);
+    let (left, width) = overlay_left_and_width(&frame, 120, 40).expect("详情框在");
+    assert_eq!(left, 2, "框按整屏居中：左缘留 2 列");
+    assert!(
+        (115..=116).contains(&width),
+        "宽度按整屏量（120 − 两侧边距）：{width}"
+    );
+    assert!(width > 45, "比平铺态一格（45 列）宽得多");
+}
