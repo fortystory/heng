@@ -250,6 +250,14 @@ pub fn below_minimum(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
+/// 右栏时间轴能画的格子宽度（扣掉滚动条、行首时刻与泳道标签）。
+///
+/// 排版（`right_band_kind`）与画家（`draw_right_rail`）共用这一处 —— 画家不重推降级阶梯。
+pub fn right_axis_width(rail: Rect) -> u16 {
+    rail.width
+        .saturating_sub(TRAILING_COLUMNS + STAMP_COLUMNS + timeline::LABEL_COLUMNS)
+}
+
 impl Regions {
     /// 转录的文字区：它的内容减去右缘永远留着的那两列 —— 滚动条的与回合条的。
     ///
@@ -312,6 +320,11 @@ impl Regions {
     ///
     /// 终端小到显示不出有用的正文时是 `None` —— 与 [`Regions::modal`] 给的是同一个诚实
     /// 答案，而那时详情视图干脆不打开，而不是打开成两行边框。
+    /// 右栏时间轴的格子宽度；右栏没画出来时是 0。
+    pub fn right_axis_width(&self) -> u16 {
+        self.right_rail.map_or(0, right_axis_width)
+    }
+
     pub fn detail(&self) -> Option<Rect> {
         self.overlay_area(self.detail_width())
     }
@@ -540,10 +553,7 @@ fn plan_with(
     // 泳道标签）。40 档 24 格、28 档 12 格，两档都落在 Compact（票 08 第 10 条：右栏只画
     // 这一档）。右栏**不做** Full / Sparse —— 那两档要的轴宽在 40 列里根本不存在。
     let right_band_kind = right_rail.map_or(BandKind::Empty, |rail| {
-        let axis = rail
-            .width
-            .saturating_sub(TRAILING_COLUMNS + STAMP_COLUMNS + timeline::LABEL_COLUMNS);
-        match BandKind::of_axis(axis) {
+        match BandKind::of_axis(right_axis_width(rail)) {
             BandKind::Full | BandKind::Sparse => BandKind::Compact,
             kind => kind,
         }

@@ -4077,12 +4077,12 @@ impl TuiState {
             used += width + 1;
             entries.push((text, index, focused));
         }
-        let hidden = self.sessions.hosted.len().saturating_sub(entries.len());
+        let mut hidden = self.sessions.hosted.len().saturating_sub(entries.len());
         if hidden > 0 {
-            // `+N` 也得放得下：放不下就再让一个标签出去。
+            // `+N` 也得放得下：放不下就再让一个标签出去 —— 让出去的那一个也要算进 `+N`。
             let more = text_columns(&wording::top_more(hidden));
-            if used + more > room as usize {
-                let _ = entries.pop();
+            if used + more > room as usize && entries.pop().is_some() {
+                hidden += 1;
             }
         }
         (entries, hidden)
@@ -10894,7 +10894,7 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     let Some(cells) = layout::tile_cells(panes.transcript, state.tile_cell_count()) else {
         return;
     };
-    draw_tile_dividers(frame, panes.transcript, cells.len());
+    draw_tile_dividers(frame, panes.transcript, &cells);
     let focus = state.front().clone();
     let slots: Vec<(usize, Rect, Option<crate::events::SessionId>)> = cells
         .iter()
@@ -10962,7 +10962,7 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
 }
 
 /// 一格的正文：它自己那个会话的对话视图。尾巴按它自己的流来（非焦点格没有「正在想」的
-/// 动画 —�� 那需要全局脉冲，而它只属于焦点）。
+/// 动画 —— 那需要全局脉冲，而它只属于焦点）。
 fn draw_tile_body(frame: &mut ratatui::Frame, body: Rect, view: &mut View) {
     if body.width == 0 || body.height == 0 {
         return;
@@ -10972,22 +10972,20 @@ fn draw_tile_body(frame: &mut ratatui::Frame, body: Rect, view: &mut View) {
     frame.render_widget(Paragraph::new(rows), body);
 }
 
-/// 格与格之间那几条虚线：与 [`layout::tile_cells`] 同一算式（左半宽、上半高），所以线与
-/// 格矩形的边界永远严丝合缝。
-fn draw_tile_dividers(frame: &mut ratatui::Frame, pool: Rect, cells: usize) {
+/// 格与格之间那几条虚线：位置从 [`layout::tile_cells`] 给出的矩形**读**出来，不重推算式
+/// （画家不重推降级阶梯），所以线与格边界永远严丝合缝。
+fn draw_tile_dividers(frame: &mut ratatui::Frame, pool: Rect, cells: &[Rect]) {
     let style = Style::default().fg(palette::CHROME);
-    let left = pool.width.saturating_sub(1) / 2;
-    let top = pool.height.saturating_sub(1) / 2;
     let buffer = frame.buffer_mut();
-    if cells >= 2 {
-        let x = pool.x + left;
+    if cells.len() >= 2 {
+        let x = cells[1].x.saturating_sub(1);
         for y in pool.y..pool.bottom() {
             buffer[(x, y)].set_symbol("┆").set_style(style);
         }
     }
-    if cells >= 3 {
-        let y = pool.y + top;
-        for x in pool.x + left + 1..pool.right() {
+    if cells.len() >= 3 {
+        let y = cells[2].y.saturating_sub(1);
+        for x in cells[1].x..pool.right() {
             buffer[(x, y)].set_symbol("┄").set_style(style);
         }
     }
@@ -11003,23 +11001,14 @@ fn draw_right_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
         return;
     };
     let width = state.view.trace_width;
-    // 轴宽与排版里那一笔同源（票 04）：右栏宽扣掉滚动条与指示器那两列、九列时刻、五列泳道
-    // 标签 —— 40 档 24 格、28 档 12 格。
-    let axis_width = panes.right_rail.map_or(0, |rail| {
-        rail.width.saturating_sub(
-            layout::TRAILING_COLUMNS + layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS,
-        )
-    });
     draw_trace_pane(
         frame,
         panes.right_band,
         panes.right_band_kind,
         text_area,
         width,
-        axis_width,
+        panes.right_axis_width(),
         state,
-        true,
-        None,
     );
 }
 
@@ -11035,8 +11024,6 @@ fn draw_trace_pane(
     layout_width: u16,
     axis_width: u16,
     state: &mut TuiState,
-    interactive: bool,
-    scrollbar: Option<Rect>,
 ) {
     // 固定区那一块排在账本上面，于是它不随账本滚动（票 22 第 1 条）。
     if let Some(band) = band {
@@ -11048,7 +11035,7 @@ fn draw_trace_pane(
     let top = state.view.trace.top();
     mark_trace_selection(state, top, &mut rows);
     let folded = soft_folds(&state.view.trace, top, rows.len());
-    if interactive {
+    {
         state.view.trace_drawn.top = text_area.y;
         state.view.trace_drawn.rows = (0..rows.len())
             .map(|offset| state.view.trace.source_at(top + offset))
@@ -11079,11 +11066,7 @@ fn draw_trace_pane(
     }
     note_rows(state, text_area, &rows, &folded, &[]);
     frame.render_widget(Paragraph::new(rows), text_area);
-    if let Some(scrollbar) = scrollbar {
-        draw_scrollbar(frame, scrollbar, &state.view.trace);
-    }
-    // 指示器两种形态都画：主列轨迹页在票 16 之前还活着，它「点回底部」的入口不能先没了。
-    // 右栏那一份最后画、覆盖 `trace_indicator` —— 指针按右栏算。
+    // 轨迹唯一的家是右栏（票 16 删掉了主列轨迹页），指示器按右栏算。
     draw_indicator(frame, text_area, state, Viewport::Trace);
 }
 

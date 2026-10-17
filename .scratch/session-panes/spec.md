@@ -1,6 +1,6 @@
 # 多会话平铺与右侧栏
 
-Status: ready-for-agent（2026-10-17 由 [`map.md`](map.md) 折成 —— 12 张决策票全部 `resolved`；
+Status: done（2026-10-17 由 [`map.md`](map.md) 折成 —— 12 张决策票全部 `resolved`；
 实现票拆成 16 张，在 [`issues/13`](issues/13-right-rail-and-trace.md)–[`28`](issues/28-glossary-docs-and-adr.md)）
 
 - **来源**：wayfinder 图 [`map.md`](map.md)（2026-10-17 走完：三轮 charting 十九问 + 十二张票）。

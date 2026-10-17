@@ -11410,10 +11410,7 @@ fn each_session_keeps_its_own_pending_question() {
 fn the_tiles_draw_each_sessions_own_transcript() {
     let mut state = state_with_roster(&["kimi"]);
     state.set_right_rail(true);
-    host_sessions(
-        &mut state,
-        &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")],
-    );
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
     switch_session(&mut state, "01J8ZQ4K7M");
     state.apply(message(1, "甲说的话", None));
     switch_session(&mut state, "s-b");
@@ -11449,5 +11446,37 @@ fn the_tiles_draw_each_sessions_own_transcript() {
     assert!(
         !cell_lines(tiles[1]).contains("甲说的话"),
         "乙格里没有甲的话"
+    );
+}
+
+/// 顶部页签条放不下时末尾收成 `+N`：让出去的那个标签也计进 N（票 15 的溢出）。
+#[test]
+fn the_tab_strip_reports_the_hidden_sessions_in_its_plus_count() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "甲"),
+            ("s-b", "乙"),
+            ("s-c", "丙"),
+            ("s-d", "丁"),
+            ("s-e", "戊"),
+            ("s-f", "己"),
+        ],
+    );
+    let rows = screen(40, 24, &mut state);
+    let top = &rows[0];
+    assert!(top.contains('+'), "窄屏顶部条收成 +N：{top:?}");
+    // 报出来的 N 与屏幕上少画的那几个一致：六个里看得见的标题数 + N = 6。
+    let mut shown = 0;
+    for title in ["甲", "乙", "丙", "丁", "戊", "己"] {
+        if top.contains(title) {
+            shown += 1;
+        }
+    }
+    let hidden = 6 - shown;
+    assert!(
+        top.contains(&format!("+{hidden}")),
+        "N 与隐藏数一致（隐藏 {hidden}）：{top:?}"
     );
 }
