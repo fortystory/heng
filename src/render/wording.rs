@@ -1780,18 +1780,13 @@ pub fn rail_status_line_with(
     hint_row(receipt, &RAIL_HINTS, exit_hint(busy, raised), width)
 }
 
-/// 顶部页签条上一个会话标签（票 15）：`[◆ 标题]` / `[▪ 标题]` / `[ 标题]`。
+/// 顶部页签条上一个会话标签（票 15）：`[◆ 标题]` / `[ 标题]`。
 ///
-/// 两种标记：**焦点**用 `◆`、**平铺集合成员**用 `▪`。状态类（忙 / 闲 / 等人类、未读、
-/// 装载色）**一个都不上标签** —— 等人类由状态行的全局读数承担（票 15 决定 37）。
-pub fn top_tab(focused: bool, tiled: bool, title: &str) -> String {
-    let mark = if focused {
-        "◆"
-    } else if tiled {
-        "▪"
-    } else {
-        " "
-    };
+/// 只有**焦点**带 `◆`（2026-10-17 维护者修订：平铺槽位就是宿主表本身，不再有「集合成员」这个
+/// 中间状态，`▪` 随之退场）。状态类（忙 / 闲 / 等人类、未读、装载色）**一个都不上标签** ——
+/// 等人类由状态行的全局读数承担（票 15 决定 37）。
+pub fn top_tab(focused: bool, title: &str) -> String {
+    let mark = if focused { "◆" } else { " " };
     format!("[{mark} {title}]")
 }
 
@@ -1826,35 +1821,9 @@ pub fn tile_title(focused: bool, title: &str) -> String {
     format!("{} {title}", if focused { "◆" } else { "·" })
 }
 
-/// 平铺集合没满时末尾那一格：点它开会话选择器（票 18）。
-pub const TILE_ADD: &str = "[+ 加入]";
-
-/// 焦点格标题行末尾那个移出记号（票 18）。
-pub const TILE_CLOSE: &str = "×";
-
-/// `[+ 加入]` 打开的会话选择器的标题（票 18）。
-pub fn picker_title_session() -> &'static str {
-    "平铺加入哪个会话"
-}
-
-/// 平铺集合满员（票 19）：说清上限，并给出下一步。
-pub fn tiles_full(limit: usize) -> String {
-    format!("平铺最多 {limit} 个；先移出一个再加")
-}
-
 /// 平铺几何放不下（票 17）：回标签态，并说一句 —— 否则按 `Ctrl-R` 像没反应。
 pub fn tiles_too_small() -> &'static str {
     "这个尺寸放不下平铺；回到标签态"
-}
-
-/// 焦点会话不在平铺集合里（票 18）：拒绝进平铺并说清。
-pub fn tiles_focus_not_in_set() -> &'static str {
-    "焦点会话不在平铺集合里"
-}
-
-/// 平铺态按 `Ctrl-O`（票 17）：左栏在平铺态自动收起，不是心愿被吞掉了。
-pub fn tiles_sidebar_fixed() -> &'static str {
-    "平铺态左栏自动收起"
 }
 
 /// 右栏在这个宽度下放不下（票 14）：`Ctrl-V` 只回一句，布局一个字节都不动。

@@ -1223,10 +1223,10 @@ fn a_replayed_history_keeps_the_times_it_was_written_with() {
         ],
     );
     run_replay(&mut state);
-    // 130 列让右栏落 40 档（≥122）：只有那一档画行首的时刻列。
-    open_trace_tab(&mut state, 130, 40);
+    // 142 列让右栏落 60 档（2026-10-17 加宽后 ≥142）：只有那一档画行首的时刻列。
+    open_trace_tab(&mut state, 142, 40);
 
-    let text = screen(130, 40, &mut state).join("\n");
+    let text = screen(142, 40, &mut state).join("\n");
     let early_stamp = wording::stamp(early);
     let late_stamp = wording::stamp(late);
     assert_ne!(early_stamp, late_stamp, "两个时刻读起来不同");
@@ -1415,7 +1415,7 @@ fn a_detail_overlay_belongs_to_the_session_that_opened_it() {
     state.key(Key::PageUp);
     let before_top = screen(120, 40, &mut state)
         .into_iter()
-        .find(|row| row.contains("kimi ▸"))
+        .find(|row| row.contains("调用 bash"))
         .expect("轨迹里有一行");
     click_row(&mut state, 120, 40, "调用 bash");
     assert!(
@@ -1443,7 +1443,7 @@ fn a_detail_overlay_belongs_to_the_session_that_opened_it() {
     assert!(!after.join("\n").contains(TOOL_FACES), "关掉了");
     let after_top = after
         .into_iter()
-        .find(|row| row.contains("kimi ▸"))
+        .find(|row| row.contains("调用 bash"))
         .expect("轨迹里有一行");
     assert_eq!(after_top, before_top, "滚动位置还原给轨迹，而不是回到别处");
 }

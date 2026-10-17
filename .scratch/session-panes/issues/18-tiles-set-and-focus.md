@@ -42,3 +42,6 @@ Blocked by: 17
 - 审查后修的边界：移出到**只剩一个**时不只是回标签态，**焦点也给剩下的那一个**（上行
   `OpenSession`）—— `removing_until_one_left_hands_the_focus_to_the_survivor` 钉住。
 - `Ctrl-1…4` 只在平铺态是手势（标签态按下去什么都不发生，`ctrl_digits_only_work_in_the_tiled_state`）。
+- **2026-10-17 维护者修订**：集合退场 —— 平铺槽位就是宿主表的前 `tile_limit` 个会话，没有
+  `[+ 加入]`、没有 `×` 移出、没有本地选择器；`Ctrl-1…4` 与点格仍然换焦点（按槽位下标）。
+  上一条注记里那些「加号 / 移出 / 拒绝」的边界随之删除。

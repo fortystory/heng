@@ -26,11 +26,10 @@ pub const MIN_HEIGHT: u16 = 10;
 /// 的两行在票 16 离开：顶部页签条（票 15，在**主列之外**）接替了它，所以这一条从 6 落到 4。
 const CHROME: u16 = 4;
 
-/// 顶部页签条占的行（票 15）：标签行 + 它下面那条虚线。
+/// 顶部页签条占的行（票 15；2026-10-17 维护者修订：它只在**主列内**，平铺态不画）。
 ///
-/// 它横跨**整屏**，左栏、主列、右栏都从它下面起算 —— 于是它不是 [`CHROME`] 的一部分：
-/// 那是**主列内部**的纵向算术，而顶部条在外层。屏高 < [`TOP_TABS_COMPACT_BELOW`] 时收成
-/// 一行、不画虚线。
+/// 左栏与右栏从屏幕顶上起算，顶部条只压在主列上面；于是它不是 [`CHROME`] 的一部分 ——
+/// 那是主列内部的纵向算术。屏高 < [`TOP_TABS_COMPACT_BELOW`] 时收成一行、不画虚线。
 const TOP_TABS_ROWS: u16 = 2;
 
 /// 屏高低于这个数，顶部页签条收成一行（票 15）。
@@ -86,18 +85,19 @@ const SIDEBAR_WIDE_FROM: u16 = 120;
 /// 低于这个宽度，左栏整栏隐藏，主列拿走一切。
 const SIDEBAR_NARROW_FROM: u16 = 80;
 
-/// 右栏的两个内容宽度（票 13；与左栏同一种三档制：40 / 28 / 隐藏）。
+/// 右栏的两个内容宽度（票 13；2026-10-17 维护者要求再加宽一半：28 → 42、40 → 60）。
 ///
 /// 宽度**不受左栏意愿影响**：右栏的开与关是它自己的一位意愿（票 14 的 `Ctrl-V`），而这里是
 /// 宽度档的可行性。两者相乘。
-pub const RAIL_WIDE: u16 = 40;
-const RAIL_NARROW: u16 = 28;
+pub const RAIL_WIDE: u16 = 60;
+const RAIL_NARROW: u16 = 42;
 
 /// 低于这个整屏宽，右栏整栏隐藏 —— 与左栏窄档的下界同一个数（票 04 的「窄屏右栏先让位」）。
 const RAIL_HIDDEN_BELOW: u16 = 80;
 
-/// 从这个整屏宽起右栏用 40 档；再窄一档就是 28（票 13 的让位算法）。
-const RAIL_WIDE_FROM: u16 = 122;
+/// 从这个整屏宽起右栏用 60 档；再窄一档就是 42（票 13 的让位算法；60 档要
+/// 40 左栏 + 1 + 40 主列 + 1 + 60 = 142 列）。
+const RAIL_WIDE_FROM: u16 = 142;
 
 /// 标签态一个 pane 的宽度下限（票 08 第 13 条）：主列不比它窄，落不下就收右栏。
 ///
@@ -448,7 +448,8 @@ impl Regions {
 /// 2026-10-08 之前它还有一个 `input_text_width` 兄弟，从它这里再减掉提示符那两列；提示符退场
 /// 之后两者相同，于是只留这一个（`.scratch/ui-trim/spec.md`）。
 pub fn content_width(area: Rect, sidebar_wanted: bool, right_wanted: bool) -> u16 {
-    main_width(area.width, sidebar_wanted, right_wanted)
+    let (sidebar, rail) = laid_out(area.width, sidebar_wanted, right_wanted);
+    main_width(area.width, sidebar, rail)
 }
 
 /// 排出一帧的版面。`draft_rows` 是输入的草稿折成的行数，`sidebar_wanted` 是用户想不想看见
@@ -464,7 +465,28 @@ pub fn content_width(area: Rect, sidebar_wanted: bool, right_wanted: bool) -> u1
 ///
 /// 问卷占着底部时走 [`plan_questionnaire`]：只有那条上限不同，其余一字不差。
 pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool, right_wanted: bool) -> Regions {
-    plan_with(area, draft_rows, sidebar_wanted, right_wanted, false)
+    plan_with(area, draft_rows, sidebar_wanted, right_wanted, false, false)
+}
+
+/// 平铺态的版面（票 17）：**没有顶部页签条**，左栏与右栏从屏幕顶上起算（2026-10-17 维护者
+/// 修订）；底部三行仍然只有一份、横跨平铺区。
+pub fn plan_tiled(
+    area: Rect,
+    draft_rows: u16,
+    sidebar_wanted: bool,
+    right_wanted: bool,
+) -> Regions {
+    plan_with(area, draft_rows, sidebar_wanted, right_wanted, false, true)
+}
+
+/// 平铺态 + 问卷占着底部。
+pub fn plan_tiled_questionnaire(
+    area: Rect,
+    draft_rows: u16,
+    sidebar_wanted: bool,
+    right_wanted: bool,
+) -> Regions {
+    plan_with(area, draft_rows, sidebar_wanted, right_wanted, true, true)
 }
 
 /// 排出一帧的版面，而底部那块由**问卷**占着（spec §19）。
@@ -478,7 +500,7 @@ pub fn plan_questionnaire(
     sidebar_wanted: bool,
     right_wanted: bool,
 ) -> Regions {
-    plan_with(area, rows, sidebar_wanted, right_wanted, true)
+    plan_with(area, rows, sidebar_wanted, right_wanted, true, false)
 }
 
 fn plan_with(
@@ -487,20 +509,19 @@ fn plan_with(
     sidebar_wanted: bool,
     right_wanted: bool,
     questionnaire: bool,
+    tiled: bool,
 ) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
-    let tier = sidebar_tier(area.width, sidebar_wanted);
-    // 右栏与左栏同时存在（冻结项 6）；它的宽度档与「想不想看见」相乘，判据在
-    // [`right_rail_tier`]。它的让位只影响主列宽，左栏档一个字不动。
-    let rail_tier = right_rail_tier(area.width, sidebar_wanted).filter(|_| right_wanted);
-    // 顶部页签条横跨整屏（票 15）：三块内容都从它下面起算。它不在 [`CHROME`] 里 —— 那是
-    // 主列内部的开销，而顶部条在外层。
-    let top_rows = top_tabs_rows(area.height);
+    // 左栏与右栏的宽度档一起算：右栏优先，左栏宽档让右栏放不下时会降一档（票 05 那条
+    // 「左栏在右栏开时降一档」；2026-10-17 右栏加宽之后它成了默认路径）。
+    let (sidebar_tier_value, rail_tier) = laid_out(area.width, sidebar_wanted, right_wanted);
+    // 顶部页签条只在**主列内**、且只在标签态（2026-10-17 维护者修订）：左栏与右栏从屏幕顶上
+    // 起算，平铺态没有顶部条。
+    let top_rows = if tiled { 0 } else { top_tabs_rows(area.height) };
     let main_height = area.height.saturating_sub(top_rows);
-    // 左栏顶上让出一行空行，底下**不再让给提示行** —— 提示行回到了主列里，左栏因此恢复全高
-    // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16）。
-    let sidebar_rows = main_height.saturating_sub(SIDEBAR_TOP_GAP);
-    let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
+    // 左栏顶上让出一行空行，底下不再让给提示行 —— 它现在从屏幕顶上起算。
+    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
+    let (sidebar_kind, page_rows) = sidebar_content(sidebar_tier_value, sidebar_rows);
     let cap = if questionnaire {
         questionnaire_input_rows(main_height)
     } else {
@@ -511,20 +532,14 @@ fn plan_with(
     let transcript_rows = main_height.saturating_sub(CHROME + input_rows);
     // 轨迹页比它多一条横带（票 22）：宽度那一档决定横带是几行，高度那一档决定它值不值当留。
 
-    let sidebar = tier.map(|tier| {
-        Rect::new(
-            area.x,
-            area.y + top_rows + SIDEBAR_TOP_GAP,
-            tier,
-            sidebar_rows,
-        )
-    });
-    let divide = tier.map(|tier| area.x + tier);
+    let sidebar = sidebar_tier_value
+        .map(|tier| Rect::new(area.x, area.y + SIDEBAR_TOP_GAP, tier, sidebar_rows));
+    let divide = sidebar_tier_value.map(|tier| area.x + tier);
     let main_x = divide.map_or(area.x, |divide| divide + 1);
     let main = Rect::new(
         main_x,
         area.y + top_rows,
-        main_width(area.width, sidebar_wanted, right_wanted),
+        main_width(area.width, sidebar_tier_value, rail_tier),
         main_height,
     );
 
@@ -548,7 +563,8 @@ fn plan_with(
     // 右栏（票 13）：与主列同高的一列，轨迹住在它里面。分隔线落在主列右缘那一列上 ——
     // 与左栏那条同一种画法，方向相反。
     let right_divide = rail_tier.map(|_| main.right());
-    let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, main.y, tier, main_height));
+    // 右栏从屏幕顶上起、**画满全高**（顶部条只在主列里）。
+    let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, area.y, tier, area.height));
     // 右栏里的时间轴：轴宽照票 04 的口径（右栏宽 − 2 列滚动条与指示器 − 九列时刻 − 五列
     // 泳道标签）。40 档 24 格、28 档 12 格，两档都落在 Compact（票 08 第 10 条：右栏只画
     // 这一档）。右栏**不做** Full / Sparse —— 那两档要的轴宽在 40 列里根本不存在。
@@ -573,7 +589,7 @@ fn plan_with(
 
     Regions {
         screen: area,
-        top_tabs: Rect::new(area.x, area.y, area.width, top_rows),
+        top_tabs: Rect::new(main.x, area.y, main.width, top_rows),
         top_tabs_rows: top_rows,
         main,
         right_rail,
@@ -637,12 +653,31 @@ fn sidebar_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
 ///
 /// 外框已经不占列了（spec §1），所以这里只剩两条侧栏的账。意愿为假时那两笔一起让回来，
 /// 主列因此拿到整屏宽（`.scratch/sidebar-toggle/spec.md` §2、票 13）。
-fn main_width(width: u16, sidebar_wanted: bool, right_wanted: bool) -> u16 {
-    let sidebar = sidebar_tier(width, sidebar_wanted).map_or(0, |tier| tier + 1);
-    let rail = right_rail_tier(width, sidebar_wanted)
-        .filter(|_| right_wanted)
-        .map_or(0, |tier| tier + 1);
+fn main_width(width: u16, sidebar: Option<u16>, rail: Option<u16>) -> u16 {
+    let sidebar = sidebar.map_or(0, |tier| tier + 1);
+    let rail = rail.map_or(0, |tier| tier + 1);
     width.saturating_sub(sidebar + rail)
+}
+
+/// 左栏与右栏这一帧各自的宽度档：`(左栏, 右栏)`；`None` 表示那一栏不画。
+///
+/// **右栏优先**（票 05 的「左栏在右栏开时降一档」）：右栏 42 档在 120 列上需要左栏让到 28
+/// 才放得下 40 列主列，那就让左栏降档；窄档也放不下时右栏自己隐藏。
+fn laid_out(width: u16, sidebar_wanted: bool, right_wanted: bool) -> (Option<u16>, Option<u16>) {
+    let mut sidebar = sidebar_tier(width, sidebar_wanted);
+    if right_wanted
+        && sidebar == Some(SIDEBAR_WIDE)
+        && right_rail_for(width, sidebar).is_none()
+        && right_rail_for(width, Some(SIDEBAR_NARROW)).is_some()
+    {
+        sidebar = Some(SIDEBAR_NARROW);
+    }
+    let rail = if right_wanted {
+        right_rail_for(width, sidebar)
+    } else {
+        None
+    };
+    (sidebar, rail)
 }
 
 /// 右栏这一帧的内容宽度，没得画时是 `None`。
@@ -654,7 +689,7 @@ fn main_width(width: u16, sidebar_wanted: bool, right_wanted: bool) -> u16 {
 /// 120 列两侧栏同开 → 右栏 28、主列 50；94 列左栏收起（herdr 常态）→ 右栏 28、主列 65。
 /// 左栏在 28 档时 < 98 列右栏隐藏（97 列的主列只剩 39，跌破 [`MIN_MAIN_WIDTH`]）；左栏
 /// 收起时右栏能活到 80 列。
-fn right_rail_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
+fn right_rail_for(width: u16, sidebar: Option<u16>) -> Option<u16> {
     if width < RAIL_HIDDEN_BELOW {
         return None;
     }
@@ -663,8 +698,7 @@ fn right_rail_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
     } else {
         RAIL_NARROW
     };
-    let main_room =
-        width.saturating_sub(sidebar_tier(width, sidebar_wanted).map_or(0, |tier| tier + 1));
+    let main_room = width.saturating_sub(sidebar.map_or(0, |tier| tier + 1));
     (main_room >= tier + 1 + MIN_MAIN_WIDTH).then_some(tier)
 }
 
@@ -675,8 +709,8 @@ fn right_rail_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
 /// （`.scratch/trace-tab/spec.md` §4）。块字那一档的地板比其余各档高一截
 /// （[`BLOCK_LOGO_MIN_PAGE_ROWS`]），所以它只在真放得下的终端上出现。意愿为假时连门都不进：
 /// 整栏让位（`.scratch/sidebar-toggle/spec.md` §2）。
-fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (SidebarKind, u16) {
-    let Some(tier) = sidebar_tier(width, sidebar_wanted) else {
+fn sidebar_content(tier: Option<u16>, content_rows: u16) -> (SidebarKind, u16) {
+    let Some(tier) = tier else {
         return (SidebarKind::Hidden, 0);
     };
     let mut kind = if tier >= LOGO_WIDTH {

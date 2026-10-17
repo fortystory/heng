@@ -317,16 +317,16 @@ fn too_many_changes_fill_the_page_and_say_how_many_are_left() {
     open_changes(&mut state, 120, 24);
     let rows = sidebar(&mut state, 120, 24, 40);
 
-    // 宽档 120×24 下页区是 40 列 × 13 行（票 15 的顶部页签条吃掉两行）：标题一行 +
-    // 11 个文件 + 末行那一句。
+    // 宽档 120×24 下页区是 40 列 × 15 行（左栏全高，2026-10-17 修订）：标题一行 +
+    // 13 个文件 + 末行那一句。
     let last = rows
         .iter()
         .rev()
         .find(|row| !row.is_empty())
         .expect("页区里有东西");
     assert!(
-        last.contains("还有 19 处改动"),
-        "画满 13 行之后说清省掉了多少：{last:?}\n{rows:#?}"
+        last.contains("还有 17 处改动"),
+        "画满 15 行之后说清省掉了多少：{last:?}\n{rows:#?}"
     );
     assert!(
         !rows.iter().any(|row| row.contains("file29.rs")),

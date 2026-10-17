@@ -182,33 +182,33 @@ pub enum Key {
 
 /// 把一个 crossterm 按键翻成 [`Key`]，TUI 不认的键返回 `None`。
 fn map_key(key: KeyEvent) -> Option<Key> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let KeyCode::Char(ch) = key.code {
-            return match ch.to_ascii_lowercase() {
-                'c' => Some(Key::CtrlC),
-                'd' => Some(Key::CtrlD),
-                'a' => Some(Key::CtrlA),
-                'e' => Some(Key::CtrlE),
-                'u' => Some(Key::CtrlU),
-                'k' => Some(Key::CtrlK),
-                'w' => Some(Key::CtrlW),
-                'p' => Some(Key::CtrlP),
-                'n' => Some(Key::CtrlN),
-                'g' => Some(Key::CtrlG),
-                'j' => Some(Key::Newline),
-                'z' => Some(Key::CtrlZ),
-                'o' => Some(Key::CtrlO),
-                'r' => Some(Key::CtrlR),
-                '1'..='4' => Some(Key::CtrlDigit(ch.to_digit(10)? as u8)),
-                // `Ctrl-M` 不在这儿：它在终端里就是回车（`\r`），落到下面那个 `Enter` 分支
-                // 里去 —— 与「提交」撞车（spec §7）。
-                't' => Some(Key::CtrlT),
-                // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：`Ctrl-K` 被行编辑
-                // 的「抹到行尾」占着，它是这一圈里剩下的那枚空闲键。
-                'v' => Some(Key::CtrlV),
-                _ => None,
-            };
-        }
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && let KeyCode::Char(ch) = key.code
+    {
+        return match ch.to_ascii_lowercase() {
+            'c' => Some(Key::CtrlC),
+            'd' => Some(Key::CtrlD),
+            'a' => Some(Key::CtrlA),
+            'e' => Some(Key::CtrlE),
+            'u' => Some(Key::CtrlU),
+            'k' => Some(Key::CtrlK),
+            'w' => Some(Key::CtrlW),
+            'p' => Some(Key::CtrlP),
+            'n' => Some(Key::CtrlN),
+            'g' => Some(Key::CtrlG),
+            'j' => Some(Key::Newline),
+            'z' => Some(Key::CtrlZ),
+            'o' => Some(Key::CtrlO),
+            'r' => Some(Key::CtrlR),
+            '1'..='4' => Some(Key::CtrlDigit(ch.to_digit(10)? as u8)),
+            // `Ctrl-M` 不在这儿：它在终端里就是回车（`\r`），落到下面那个 `Enter` 分支
+            // 里去 —— 与「提交」撞车（spec §7）。
+            't' => Some(Key::CtrlT),
+            // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：`Ctrl-K` 被行编辑
+            // 的「抹到行尾」占着，它是这一圈里剩下的那枚空闲键。
+            'v' => Some(Key::CtrlV),
+            _ => None,
+        };
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         // 方向键带 Ctrl：标签态换标签（spec 决定 15/18）。不带 Ctrl 的左右仍是行编辑的光标
@@ -2616,15 +2616,6 @@ pub struct TuiState {
     read_only_by: std::collections::HashMap<crate::events::SessionId, bool>,
     /// 平铺集合的上限（`[ui] tile_limit`，票 19、26 读它；缺省 4）。
     tile_limit: usize,
-    /// 被关掉的前台会话留下的**座位**：`/clear` 翻页时新会话接替它（票 19）。
-    ///
-    /// 位置只能在这里记：`SessionClosed` 把旧会话移出集合那一刻，它的下标就再也找不回来了，
-    /// 而新会话的 `SwitchSession` 要晚一步到。
-    tile_seat: Option<usize>,
-    /// `[+ 加入]` 打开的那个本地选择器：候选的会话 id（下标与 `picker` 的行一一对应）。
-    ///
-    /// 它复用既有的选择器浮层与键位，只是答完不进循环 —— 加入平铺集合是纯前端的事。
-    tile_picker: Option<Vec<crate::events::SessionId>>,
     /// 用户想不想看见**右栏**（票 13 起默认开，票 14 的 `Ctrl-V` 切换）。
     ///
     /// 与 [`TuiState::sidebar_wanted`] 同一档的纯视图意愿：只活在这一次进程里，不落配置、
@@ -3238,10 +3229,6 @@ enum HitAction {
     ToggleTiles,
     /// 点平铺态里的第 N 格：换焦点（票 18）。
     Tile(usize),
-    /// 点末尾那个 `[+ 加入]` 格：打开会话选择器（票 18）。
-    TileAdd,
-    /// 点焦点格标题行末尾的 `×`：把它移出平铺集合（票 18）。
-    TileRemove,
     /// 点顶部条右端的右栏开关：与 `Ctrl-V` 同一条动作（票 15）。
     ToggleRail,
     /// 点轨迹页上的一行**折叠把手**（组头那一行，或者一行折行）：折 / 展它代表的那一块
@@ -4029,8 +4016,6 @@ impl TuiState {
             tile_limit: crate::config::DEFAULT_TILE_LIMIT,
             catalogs: std::collections::HashMap::new(),
             read_only_by: std::collections::HashMap::new(),
-            tile_picker: None,
-            tile_seat: None,
             picker: None,
             notice: None,
             last_session_click: None,
@@ -4101,8 +4086,7 @@ impl TuiState {
         for (index, id) in self.sessions.hosted.iter().enumerate() {
             let title = self.hosted_title(id);
             let focused = id == &self.front;
-            let tiled = self.tiles.contains(id);
-            let text = wording::top_tab(focused, tiled, &fit_title(&title, TOP_TAB_TITLE_MAX));
+            let text = wording::top_tab(focused, &fit_title(&title, TOP_TAB_TITLE_MAX));
             let width = text_columns(&text);
             if used + width + 1 > room as usize {
                 break;
@@ -4164,6 +4148,24 @@ impl TuiState {
     /// 平铺集合的上限（票 19、26）：`Tui::run` 从配置读一次，测试也可以直接设。
     pub fn set_tile_limit(&mut self, limit: usize) {
         self.tile_limit = limit.clamp(crate::config::MIN_TILE_LIMIT, crate::config::MAX_TILE_LIMIT);
+        self.rebuild_tiles();
+    }
+
+    /// 平铺槽位 = 宿主表的前 `tile_limit` 个会话（2026-10-17 维护者修订）。
+    ///
+    /// 没有 `[+ 加入]`、没有移出：屏幕上平铺的就是打开着的那些会话。槽位 ≤ 1 时退回标签态
+    /// ——「平铺」至少要有两个格。
+    fn rebuild_tiles(&mut self) {
+        self.tiles = self
+            .sessions
+            .hosted
+            .iter()
+            .take(self.tile_limit)
+            .cloned()
+            .collect();
+        if self.tiles.len() <= 1 {
+            self.tiled = false;
+        }
     }
 
     /// 左栏想不想看见（票 26、27 的启动初值；`Ctrl-O` 之后直接改字段）。
@@ -5068,18 +5070,12 @@ impl TuiState {
             // 顶部页签条（票 15）：点标签 = 切前台。能不能切（cwd 还在不在、流坏没坏）
             // 是循环那一侧的判断，渲染层只上报「有人点了这一个」。
             Some(HitAction::TopSession(index)) => {
-                if let Some(id) = self.sessions.hosted.get(index).cloned() {
-                    // 平铺态的焦点只能在集合内（票 07 语义 2、票 15）：点集合外的标签先把
-                    // 它加进集合；满员被拒时这一下什么都不发生。
-                    if self.tiled && !self.tiles.contains(&id) {
-                        self.add_tile(id.clone());
-                        if !self.tiles.contains(&id) {
-                            return;
-                        }
-                    }
-                    if id != self.front {
-                        self.events.push(FrontEndEvent::OpenSession { id });
-                    }
+                // 顶部条只在标签态画（2026-10-17 修订：平铺态没有它），所以这里只有
+                // 「点标签 = 切前台」这一件事。
+                if let Some(id) = self.sessions.hosted.get(index).cloned()
+                    && id != self.front
+                {
+                    self.events.push(FrontEndEvent::OpenSession { id });
                 }
             }
             // 右端那个开关与 `Ctrl-V` 是同一条动作（票 15）。平铺按钮的动作由票 17 接：
@@ -5087,8 +5083,6 @@ impl TuiState {
             Some(HitAction::ToggleRail) => self.toggle_right_rail(),
             Some(HitAction::ToggleTiles) => self.toggle_tiles(),
             Some(HitAction::Tile(slot)) => self.focus_tile(slot),
-            Some(HitAction::TileAdd) => self.open_tile_picker(),
-            Some(HitAction::TileRemove) => self.remove_focused_tile(),
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
@@ -6152,10 +6146,9 @@ impl TuiState {
         self.trace_keyboard = false;
     }
 
-    /// 平铺态这一帧要切几格：集合成员 + 末尾那个 `[+ 加入]`（集合没满时）。
+    /// 平铺态这一帧要切几格：槽位里的会话数（2026-10-17 修订后没有 `[+ 加入]`）。
     fn tile_cell_count(&self) -> usize {
-        let add = usize::from(self.tiles.len() < self.tile_limit);
-        self.tiles.len() + add
+        self.tiles.len()
     }
 
     /// 焦点格在这个平铺池里的宽度；焦点不在集合里时 `None`。
@@ -6172,28 +6165,22 @@ impl TuiState {
     ///
     /// 池子是**平铺区**：顶部条之下、状态行之上、右栏之左 —— 与 [`draw_tiles`] 画的是同一块。
     fn tile_cells_now(&self, area: Rect, rows: u16) -> Option<Vec<Rect>> {
-        let panes = layout::plan(area, rows, false, self.right_wanted);
+        let panes = tiled_plan(area, rows, self.sidebar_wanted, self, false);
         layout::tile_cells(panes.transcript, self.tile_cell_count())
     }
 
-    /// `Ctrl-R` / 顶部条的平铺按钮：标签态 ⇄ 平铺态（票 17）。
+    /// `Ctrl-R` / 顶部条的平铺按钮：标签态 ⇄ 平铺态（票 17；2026-10-17 维护者修订）。
     ///
-    /// 三条边界（票 18）：集合空时进平铺先**自动把焦点加进来**；集合非空而焦点不在里面时
-    /// **拒绝**并给一句；几何放不下时也给一句、不进入。
+    /// 平铺的就是宿主表里打开着的那些会话（前 `tile_limit` 个），没有「加入 / 移出」这一步。
+    /// 进平铺时左栏**自动收起**，但 `Ctrl-O` 仍能把它叫回来（那一栏不再被平铺态锁死）。
     fn toggle_tiles(&mut self) {
         if self.tiled {
             self.tiled = false;
             self.dirty = true;
             return;
         }
-        if self.tiles.is_empty() {
-            self.tiles.push(self.front.clone());
-        } else if !self.tiles.contains(&self.front) {
-            self.notice = Some((
-                std::time::Instant::now(),
-                wording::tiles_focus_not_in_set().to_owned(),
-            ));
-            self.dirty = true;
+        self.rebuild_tiles();
+        if self.tiles.len() < 2 {
             return;
         }
         let rows = self.bottom_rows(self.area);
@@ -6206,7 +6193,8 @@ impl TuiState {
             return;
         }
         self.tiled = true;
-        // 左栏在平铺态自动收起：它的键盘归属也一起放下（那一列不画了）。
+        // 左栏自动收起（维护者修订）；键盘归属一起放下 —— 那一列暂时不画了。
+        self.sidebar_wanted = false;
         self.release_sidebar_keyboard();
         self.dirty = true;
     }
@@ -6241,91 +6229,10 @@ impl TuiState {
         }
     }
 
-    /// 把一个会话加进平铺集合（票 18 的 `[+ 加入]`）。满员时按票 19 拒绝并给回执。
-    fn add_tile(&mut self, id: crate::events::SessionId) {
-        if self.tiles.contains(&id) {
-            return;
-        }
-        if self.tiles.len() >= self.tile_limit {
-            self.notice = Some((
-                std::time::Instant::now(),
-                wording::tiles_full(self.tile_limit),
-            ));
-        } else {
-            self.tiles.push(id);
-        }
-        self.dirty = true;
-    }
-
     /// 点 `[+ 加入]`：用**既有的选择器浮层**从宿主表里挑一个还不在集合里的会话（票 18）。
     ///
-    /// 候选就是「宿主表 − 平铺集合」，标签用与左栏、顶部条同一份标题。答完不进循环 ——
-    /// 加入平铺集合是纯前端的事，所以 reply 那一端丢在这里，`tile_picker` 记着候选是谁。
-    fn open_tile_picker(&mut self) {
-        use crate::render::{PickerOption, PickerRequest};
-        let candidates: Vec<(crate::events::SessionId, String)> = self
-            .sessions
-            .hosted
-            .iter()
-            .filter(|id| !self.tiles.contains(*id))
-            .map(|id| (id.clone(), self.hosted_title(id)))
-            .collect();
-        if candidates.is_empty() {
-            self.notice = Some((
-                std::time::Instant::now(),
-                wording::tiles_full(self.tile_limit),
-            ));
-            self.dirty = true;
-            return;
-        }
-        let (reply, _unused) = tokio::sync::oneshot::channel();
-        let options = candidates
-            .iter()
-            .map(|(_, title)| PickerOption {
-                label: title.clone(),
-                detail: String::new(),
-                current: false,
-                enabled: true,
-            })
-            .collect();
-        self.tile_picker = Some(candidates.into_iter().map(|(id, _)| id).collect());
-        self.close_detail();
-        self.picker = Some(Picker::new(PickerRequest {
-            title: wording::picker_title_session().to_owned(),
-            options,
-            reply,
-        }));
-        self.dirty = true;
-    }
-
     /// 点焦点格标题行末尾的 `×`：把它移出集合（票 18）。
     ///
-    /// 移出之后焦点给集合里的**下一个**；只剩一个时自动回标签态（票 18 的第三条边界）。
-    /// 前台指针归循环持有，所以「焦点给下一个」是一条上行的 `OpenSession`。
-    fn remove_focused_tile(&mut self) {
-        let Some(position) = self.tiles.iter().position(|id| id == &self.front) else {
-            return;
-        };
-        self.tiles.remove(position);
-        if self.tiles.len() <= 1 {
-            // 收窄到只剩一个：回标签态，**焦点也给剩下的那一个**（票 18 的「给下一个」在
-            // 最后一格上同样成立）。
-            self.tiled = false;
-            if let Some(last) = self.tiles.first().cloned()
-                && last != self.front
-            {
-                self.events.push(FrontEndEvent::OpenSession { id: last });
-            }
-        } else if let Some(next) = self
-            .tiles
-            .get(position.min(self.tiles.len().saturating_sub(1)))
-            .cloned()
-        {
-            self.events.push(FrontEndEvent::OpenSession { id: next });
-        }
-        self.dirty = true;
-    }
-
     /// `Ctrl-V`：右栏开关，**一次按下同时把键盘交给它**（票 14，冻结项 7）。
     ///
     /// 开栏 = 把键盘从输入区（或左栏）交给右栏；再按 = 交还键盘并关栏。关栏**不动指针**：
@@ -6404,7 +6311,6 @@ impl TuiState {
         if !inside {
             let mut picker = self.picker.take().expect("刚判过它在");
             picker.close(None);
-            self.tile_picker = None;
             return true;
         }
         let hit = picker
@@ -6424,11 +6330,6 @@ impl TuiState {
                 if enabled {
                     let mut picker = self.picker.take().expect("刚判过它在");
                     picker.close(Some(index));
-                    if let Some(candidates) = self.tile_picker.take()
-                        && let Some(id) = candidates.get(index).cloned()
-                    {
-                        self.add_tile(id);
-                    }
                 }
             }
             None => return false,
@@ -6464,12 +6365,6 @@ impl TuiState {
                     let mut picker = self.picker.take().expect("刚判过它在");
                     let answer = picker.highlight;
                     picker.close(Some(answer));
-                    // `[+ 加入]` 的选择器是**本地**的：答完直接进集合，不进循环（票 18）。
-                    if let Some(candidates) = self.tile_picker.take()
-                        && let Some(id) = candidates.get(answer).cloned()
-                    {
-                        self.add_tile(id);
-                    }
                 }
             }
             // 取消不是一次切换，也不给回执（spec §7）。
@@ -6477,7 +6372,6 @@ impl TuiState {
                 if let Some(mut picker) = self.picker.take() {
                     picker.close(None);
                 }
-                self.tile_picker = None;
             }
             _ => {}
         }
@@ -7410,21 +7304,11 @@ impl TuiState {
                 // 切走的那一份收进表里常驻，下次切回来不再重放。
                 let outgoing = std::mem::replace(&mut self.view, incoming);
                 self.views.insert(old_front, outgoing);
-                // `/clear` 翻页：新会话**接替**刚关掉的前台会话在集合里的位置（票 19）。
-                // 普通切换不动集合的顺序（票 15 决定 39）—— 只有 `SessionClosed` 记下了座位
-                // 的那一次才搬。
+                // 平铺槽位跟宿主表走（2026-10-17 修订）：切到一个不在槽位、槽位还没满的
+                // 会话时把它补进末尾 —— 真实流程里 `Hosted` 会重排，这里兜住没推那一份的路径。
                 let new_front = self.front.clone();
-                if let Some(position) = self.tile_seat.take() {
-                    if let Some(now) = self.tiles.iter().position(|held| held == &new_front) {
-                        if now != position {
-                            self.tiles.remove(now);
-                            let position = position.min(self.tiles.len());
-                            self.tiles.insert(position, new_front.clone());
-                        }
-                    } else if self.tiles.len() < self.tile_limit {
-                        let position = position.min(self.tiles.len());
-                        self.tiles.insert(position, new_front.clone());
-                    }
+                if !self.tiles.contains(&new_front) && self.tiles.len() < self.tile_limit {
+                    self.tiles.push(new_front);
                 }
                 self.load_light(cwd);
                 // 名册与只读是**每会话**的（票 25）：按 id 从表里取。
@@ -7521,18 +7405,9 @@ impl TuiState {
                 self.views.remove(&id);
                 self.catalogs.remove(&id);
                 self.read_only_by.remove(&id);
-                // 关掉的会话从平铺集合里移出；只剩一个就自动回标签态（票 19）。关掉的要是
-                // 前台，把它的**座位**记下来 —— `/clear` 的新会话随后接替这个位置。
-                if let Some(position) = self.tiles.iter().position(|held| held == &id) {
-                    self.tiles.remove(position);
-                    if id == self.front {
-                        self.tile_seat = Some(position);
-                    }
-                }
-                if self.tiles.len() <= 1 {
-                    self.tiled = false;
-                }
                 self.sessions.hosted.retain(|held| held != &id);
+                // 关掉的会话不在宿主表了：平铺槽位跟着重排，只剩一个就回标签态（票 19）。
+                self.rebuild_tiles();
                 self.sessions.host_empty = empty;
                 // 空宿主：输入区禁用（提交时循环回一句）。
                 self.muted = empty;
@@ -7549,26 +7424,10 @@ impl TuiState {
             // 宿主表里装着哪几个（票 29）：会话页那三档标题色。
             ConsoleRequest::Hosted { ids } => {
                 // 顺序 = 宿主表的装载顺序（票 15：顶部页签条按它排，稳定）。
-                let added: Vec<_> = ids
-                    .iter()
-                    .filter(|id| !self.sessions.hosted.contains(id))
-                    .cloned()
-                    .collect();
                 self.sessions.hosted = ids;
-                // 新装载的会话自动加入平铺集合末尾（票 19）；集合满了就**拒绝并说清**。
-                for id in added {
-                    if self.tiles.contains(&id) {
-                        continue;
-                    }
-                    if self.tiles.len() < self.tile_limit {
-                        self.tiles.push(id);
-                    } else {
-                        self.notice = Some((
-                            std::time::Instant::now(),
-                            wording::tiles_full(self.tile_limit),
-                        ));
-                    }
-                }
+                // 平铺槽位 = 宿主表的前 `tile_limit` 个（2026-10-17 维护者修订：打开几个就
+                // 平铺几个，没有 `[+ 加入]` 那一格）。
+                self.rebuild_tiles();
                 self.dirty = true;
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
@@ -7853,15 +7712,8 @@ impl TuiState {
             return;
         }
         if key == Key::CtrlO {
-            // 平铺态左栏自动收起（票 17）：「愿不愿意」不归它管，于是只给一句回执。
-            if self.tiled {
-                self.notice = Some((
-                    std::time::Instant::now(),
-                    wording::tiles_sidebar_fixed().to_owned(),
-                ));
-                self.dirty = true;
-                return;
-            }
+            // 平铺态也能开关左栏（2026-10-17 维护者修订）：进平铺时它自动收起，`Ctrl-O` 把
+            // 它叫回来；格宽因此变窄到放不下时下一帧会回标签态并给回执。
             self.sidebar_wanted = !self.sidebar_wanted;
             // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
             if !self.sidebar_wanted {
@@ -9032,11 +8884,39 @@ fn plan_for(
     questionnaire: bool,
     state: &TuiState,
 ) -> layout::Regions {
-    let sidebar = !tiled && state.sidebar_wanted;
-    if questionnaire {
-        layout::plan_questionnaire(area, rows, sidebar, state.right_wanted)
+    // 平铺态的左栏由**意愿**决定（进平铺时自动收起，`Ctrl-O` 能叫回来）；标签态同样。
+    let sidebar = state.sidebar_wanted;
+    match (tiled, questionnaire) {
+        (true, true) => tiled_plan(area, rows, sidebar, state, true),
+        (true, false) => tiled_plan(area, rows, sidebar, state, false),
+        (false, true) => layout::plan_questionnaire(area, rows, sidebar, state.right_wanted),
+        (false, false) => layout::plan(area, rows, sidebar, state.right_wanted),
+    }
+}
+
+/// 平铺态的版面：格放不下时**右栏先让位**（2026-10-17 维护者修订：右栏加宽之后 94 列上
+/// 「两个格 + 右栏」放不下了，而平铺才是那一刻的主要目的）。让位只影响这一帧的排版，
+/// `right_wanted` 本身不动 —— 下一帧还会再试。
+fn tiled_plan(
+    area: Rect,
+    rows: u16,
+    sidebar: bool,
+    state: &TuiState,
+    questionnaire: bool,
+) -> layout::Regions {
+    let plan = |right: bool| {
+        if questionnaire {
+            layout::plan_tiled_questionnaire(area, rows, sidebar, right)
+        } else {
+            layout::plan_tiled(area, rows, sidebar, right)
+        }
+    };
+    let panes = plan(state.right_wanted);
+    if state.right_wanted && layout::tile_cells(panes.transcript, state.tile_cell_count()).is_none()
+    {
+        plan(false)
     } else {
-        layout::plan(area, rows, sidebar, state.right_wanted)
+        panes
     }
 }
 
@@ -9311,7 +9191,8 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     // 竖虚线跟左栏同高：画到屏幕最后一行（`.scratch/tui-feedback/spec.md` §2 —— 提示行回到
     // 主列之后，左栏不再为它让出底下那一行）。它从**顶部页签条之下**起（票 15）—— 顶部条
     // 横跨整屏，那上面没有两条栏的分界。
-    for y in panes.main.y..area.bottom() {
+    // 左栏 / 右栏从屏幕顶上起（顶部条只在主列里，2026-10-17 修订），竖线也画满全高。
+    for y in area.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
@@ -9326,7 +9207,8 @@ fn draw_right_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: 
     };
     let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
-    for y in panes.main.y..area.bottom() {
+    // 左栏 / 右栏从屏幕顶上起（顶部条只在主列里，2026-10-17 修订），竖线也画满全高。
+    for y in area.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
@@ -10998,7 +10880,8 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
 /// 画平铺态（票 17）：在平铺区里切格，每格一条标题行 + 它自己那个会话的对话视图。
 ///
 /// 平铺态每格**只有对话视图**（票 08 第 12 条）—— 轨迹的家仍是右栏。格与格之间一条虚线，
-/// 焦点格的标题前 `◆`、其余 `·`；集合没满时最后一格是 `[+ 加入]`。
+/// 焦点格的标题前 `◆`、其余 `·`。格数就是宿主表里打开着的会话数（2026-10-17 维护者修订：
+/// 没有 `[+ 加入]`、也没有移出记号）。
 ///
 /// 非焦点格的投影从 [`TuiState::views`] 里**临时取出来**画完再放回：绘制要 `&mut` 那个
 /// 窗格（折行缓存），而 `TuiState` 不能同时借出两份。
@@ -11010,24 +10893,12 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     state.conversation_rect = None;
     draw_tile_dividers(frame, panes.transcript, &cells);
     let focus = state.front().clone();
-    let slots: Vec<(usize, Rect, Option<crate::events::SessionId>)> = cells
+    let slots: Vec<(usize, Rect, crate::events::SessionId)> = cells
         .iter()
         .enumerate()
-        .map(|(index, rect)| (index, *rect, state.tiles.get(index).cloned()))
+        .filter_map(|(index, rect)| state.tiles.get(index).cloned().map(|id| (index, *rect, id)))
         .collect();
     for (index, rect, id) in slots {
-        let Some(id) = id else {
-            // `[+ 加入]` 格：点它打开会话选择器（票 18）。
-            paint_text(
-                frame,
-                rect.x + 1,
-                rect.y,
-                wording::TILE_ADD,
-                Style::default().fg(palette::MUTED),
-            );
-            state.regions.push(rect, HitAction::TileAdd);
-            continue;
-        };
         let focused = id == focus;
         let title = state.hosted_title(&id);
         let title = fit_title(&title, rect.width.saturating_sub(4) as usize);
@@ -11045,20 +10916,6 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             &wording::tile_title(focused, &title),
             style,
         );
-        // `×` 比整格的命中先登记：`action_at` 取第一个命中的区域。
-        if focused {
-            let close_x = rect.right().saturating_sub(2);
-            paint_text(
-                frame,
-                close_x,
-                rect.y,
-                wording::TILE_CLOSE,
-                Style::default().fg(palette::MUTED),
-            );
-            state
-                .regions
-                .push(Rect::new(close_x, rect.y, 2, 1), HitAction::TileRemove);
-        }
         // 焦点格的正文让给文本层（拖选 / 可点链接），所以只有标题行是「换焦点」的命中；
         // 非焦点格整格可点 —— 点了就换焦点（票 18）。
         let hit = if focused {
@@ -11131,7 +10988,10 @@ fn draw_tile_dividers(frame: &mut ratatui::Frame, pool: Rect, cells: &[Rect]) {
     }
     if cells.len() >= 3 {
         let y = cells[2].y.saturating_sub(1);
-        for x in cells[1].x..pool.right() {
+        // 3 格是 L 形：左格全高，横线只在右半。4 格是 2×2：横线跨全宽（2026-10-17 维护者
+        // 报告「左边列两格之间没有分隔」）。
+        let start = if cells.len() >= 4 { pool.x } else { cells[1].x };
+        for x in start..pool.right() {
             buffer[(x, y)].set_symbol("┄").set_style(style);
         }
     }
