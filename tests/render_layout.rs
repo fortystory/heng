@@ -11404,3 +11404,50 @@ fn each_session_keeps_its_own_pending_question() {
     );
     assert!(rx_b.try_recv().is_err(), "B 的问题没被 A 的作答碰过");
 }
+
+/// 平铺态两格各画**自己那个会话**的转录（票 17 的排法 + 票 23 的每会话投影）。
+#[test]
+fn the_tiles_draw_each_sessions_own_transcript() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")],
+    );
+    switch_session(&mut state, "01J8ZQ4K7M");
+    state.apply(message(1, "甲说的话", None));
+    switch_session(&mut state, "s-b");
+    state.apply(message(2, "乙说的话", None));
+    switch_session(&mut state, "01J8ZQ4K7M");
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+
+    let frame = buffer(120, 40, &mut state);
+    let pool = tile_pool(120, 40, true);
+    let tiles = heng::render::layout::tile_cells(pool, 3).expect("两会话 + 加号是三格");
+    let cell_lines = |cell: ratatui::layout::Rect| {
+        (cell.y..cell.bottom())
+            .map(|y| cells(&frame, y, cell.x, (cell.x + cell.width).min(120)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        cell_lines(tiles[0]).contains("甲说的话"),
+        "第一格是甲的转录：{:?}",
+        cell_lines(tiles[0])
+    );
+    assert!(
+        !cell_lines(tiles[0]).contains("乙说的话"),
+        "甲格里没有乙的话"
+    );
+    assert!(
+        cell_lines(tiles[1]).contains("乙说的话"),
+        "第二格是乙的转录：{:?}",
+        cell_lines(tiles[1])
+    );
+    assert!(
+        !cell_lines(tiles[1]).contains("甲说的话"),
+        "乙格里没有甲的话"
+    );
+}
