@@ -891,7 +891,15 @@ fn the_trace_page_hints_at_its_own_keys() {
 
     // 切回对话页，两套就换回来了 —— 这个状态里没有人在读行，于是换回来的是查看器那一套
     // （那时 `enter 发送` 会是一个兑现不了的承诺，`.scratch/tui-feedback/spec.md` §6）。
-    state.key(Key::CtrlV);
+    // 票 14 之后 `Ctrl-V` 是右栏开关，不再是主列翻页，所以这里点页签。
+    click_in_row(
+        &mut state,
+        120,
+        24,
+        TRANSCRIPT_TOP as u16 - 2,
+        wording::TAB_CONVERSATION,
+    );
+    let _ = screen(120, 24, &mut state);
     let back = hint_items_of(120, &mut state).join(" · ");
     assert!(back.contains("esc 取消"), "{back}");
     assert!(back.contains("PgUp/PgDn 滚动"), "{back}");
@@ -12414,37 +12422,6 @@ fn switching_the_main_tab_keeps_the_selection() {
 
 /// `Ctrl-V` 在主列两页之间翻一个来回（`.scratch/trace-shortcuts/spec.md` §1）：与点页签走
 /// **同一条路**，所以切到轨迹页时那一层照票 18 第 3 条自动回到持有。
-#[test]
-fn ctrl_v_flips_the_main_tab_both_ways() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut state);
-
-    // 起步是对话页：过程行不在上面。
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(conversation.contains("问题"), "{conversation}");
-    assert!(
-        !conversation.contains("调用 bash"),
-        "过程行不进对话：{conversation}"
-    );
-
-    state.key(Key::CtrlV);
-    let page = trace_page(&mut state, 120, 24).join("\n");
-    assert!(page.contains("调用 bash"), "轨迹页画全量块：{page}");
-    // **自动回到持有**：切过去之后 `↓` 立刻选得中一块（票 18 第 3 条）。
-    state.key(Key::Down);
-    assert_eq!(
-        selected_rows_text(&mut state, 120, 24).len(),
-        1,
-        "切过去就能用方向键"
-    );
-
-    // 再按一下回来：过程行又出了对话页。
-    state.key(Key::CtrlV);
-    let back = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(back.contains("问题"), "{back}");
-    assert!(!back.contains("调用 bash"), "回到对话页：{back}");
-}
-
 /// 宽度变化重放之后，「开场那一段已经开过了」这件事**跟着记录一起回来** —— 否则后面再到的
 /// 一块开场段会**再开一条** `开场` 小标题（票 18 记下的那条旁支缺陷）。
 ///
@@ -14739,5 +14716,153 @@ fn the_wide_right_rail_keeps_the_stamps_and_drops_the_usage() {
     assert!(
         !joined.contains("in=") && !joined.contains("out="),
         "40 档也弃行尾用量：{joined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 右栏开关与键盘层序（票 14）
+// ---------------------------------------------------------------------------
+
+/// 右栏里那些行：几何取自 `plan(..., right_wanted=true)`，与绘制共用同一份排版。
+fn rail_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let panes = heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    );
+    let Some(rail) = panes.right_rail else {
+        return Vec::new();
+    };
+    let frame = buffer(width, height, state);
+    (rail.y..rail.y + rail.height)
+        .map(|y| cells(&frame, y, rail.x, rail.x + rail.width))
+        .collect()
+}
+
+/// 右栏在屏幕上的分隔列。
+fn right_divide(width: u16, height: u16) -> u16 {
+    heng::render::layout::plan(
+        ratatui::layout::Rect::new(0, 0, width, height),
+        1,
+        true,
+        true,
+    )
+    .right_divide
+    .expect("右栏在")
+}
+
+/// `Ctrl-V` 一次按下 = 开栏 + 把键盘交给右栏；再按 = 交还键盘 + 关栏。
+#[test]
+fn ctrl_v_opens_the_right_rail_and_hands_it_the_keyboard() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let divide = right_divide(120, 24);
+
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "起步时键盘在输入区");
+    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏还没画");
+    assert!(
+        conversation_rows(&mut state, 120, 24)
+            .join("\n")
+            .contains("问题"),
+        "起步是对话页"
+    );
+
+    state.key(Key::CtrlV);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "开栏同时把键盘交给右栏");
+    assert_eq!(cells(&frame, 2, divide, divide + 1), "┆", "右栏画出来了");
+    let rail = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(rail.contains("调用 bash"), "轨迹在右栏里：{rail}");
+    // 主列页签没有被它翻动（票 14 推翻了「Ctrl-V 翻两页」）：对话内容留在主列里，
+    // 而过程行只在右栏。主列的右缘要按右栏开着时的几何取（`conversation_rows` 的常量切片
+    // 会把右栏也算进去）。
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let frame = buffer(120, 24, &mut state);
+    let conversation: String = (0..24)
+        .map(|y| cells(&frame, y, panes.main.x, panes.main.right()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        conversation.contains("问题"),
+        "主列仍是对话页：{conversation}"
+    );
+    assert!(
+        !conversation.contains("调用 bash"),
+        "过程行不在主列：{conversation}"
+    );
+
+    state.key(Key::CtrlV);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "再按一次交还键盘");
+    assert_ne!(cells(&frame, 2, divide, divide + 1), "┆", "右栏收起来了");
+}
+
+/// 点输入区 = 交还键盘但右栏留着 —— 与「开栏」那一下的两个后果故意不同。
+#[test]
+fn clicking_the_input_hands_the_keyboard_back_and_keeps_the_rail() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlV);
+    let divide = right_divide(120, 24);
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let _ = screen(120, 24, &mut state);
+    click(&mut state, panes.input.x + 2, panes.input.y + 1);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "键盘回到输入区");
+    assert_eq!(
+        cells(&frame, 2, divide, divide + 1),
+        "┆",
+        "右栏留在了屏幕上"
+    );
+}
+
+/// 宽度放不下右栏时 `Ctrl-V` 只回一句，布局一个字节都不动。
+#[test]
+fn ctrl_v_on_a_narrow_screen_only_leaves_a_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    let _ = screen(80, 24, &mut state);
+    let before = screen(80, 24, &mut state);
+    state.key(Key::CtrlV);
+    let after = screen(80, 24, &mut state);
+    assert!(
+        after.iter().any(|row| row.contains("右栏放不下")),
+        "回执在提示行：{after:#?}"
+    );
+    let last = after.len() - 1;
+    assert_eq!(
+        after[..last],
+        before[..last],
+        "除提示行之外布局没变：{before:#?} → {after:#?}"
+    );
+}
+
+/// 右栏里的 `Esc` 一次退一层：清选中 → 交还键盘（搜索与过滤各占一层，没有时不占）。
+#[test]
+fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlV);
+    let divide = right_divide(120, 24);
+    let _ = screen(120, 24, &mut state);
+
+    state.key(Key::Down);
+    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "选中一块时键盘仍在右栏");
+    state.key(Key::Esc);
+    let (_, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(cursor, None, "清掉选中之后键盘还在右栏");
+    state.key(Key::Esc);
+    let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
+    assert!(cursor.is_some(), "第二下把键盘交还输入区");
+    assert_eq!(
+        cells(&frame, 2, divide, divide + 1),
+        "┆",
+        "右栏还开着 —— Esc 退的是键盘，不是栏"
     );
 }

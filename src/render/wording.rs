@@ -1783,6 +1783,13 @@ pub fn trace_status_line_with(
     hint_row(receipt, &TRACE_HINTS, exit_hint(busy, raised), width)
 }
 
+/// 右栏在这个宽度下放不下（票 14）：`Ctrl-V` 只回一句，布局一个字节都不动。
+///
+/// 与「按了没反应」区分开 —— 那会让人以为是按键没送到。
+pub fn rail_too_narrow() -> &'static str {
+    "右栏放不下"
+}
+
 /// 一次复制之后提示行打头的那句回执（`.scratch/tui-feedback/spec.md` §6）。
 pub fn copied(chars: usize, lines: usize) -> String {
     format!("已复制 {chars} 字 · {lines} 行")

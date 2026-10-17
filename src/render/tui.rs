@@ -5904,16 +5904,34 @@ impl TuiState {
         }
     }
 
-    /// `Ctrl-V`：在对话页与轨迹页之间翻一个来回（`.scratch/trace-shortcuts/spec.md` §1）。
+    /// `Ctrl-V`：右栏开关，**一次按下同时把键盘交给它**（票 14，冻结项 7）。
     ///
-    /// 两个标签只有两个，所以「翻一个来回」就是它的全部语义；切换本身落到
-    /// [`Self::set_main_tab`]，与点页签**逐字同路**。
-    fn switch_main_tab(&mut self) {
-        let tab = match self.main_tab {
-            MainTab::Conversation => MainTab::Trace,
-            MainTab::Trace => MainTab::Conversation,
-        };
-        self.set_main_tab(tab);
+    /// 开栏 = 把键盘从输入区（或左栏）交给右栏；再按 = 交还键盘并关栏。关栏**不动指针**：
+    /// 选中、过滤、搜索串都留着，下次开栏还在原处（票 08 第 3 条）。
+    ///
+    /// 布局放不下时（< 80 列，或者主列会被挤到 40 以下）什么都不改，只给一句回执 ——
+    /// 按一下却毫无反应，读的人会以为是按键没送到。
+    fn toggle_right_rail(&mut self) {
+        if self.right_wanted {
+            self.right_wanted = false;
+            self.release_trace_keyboard();
+            self.dirty = true;
+            return;
+        }
+        // 开之前先问这一帧的排版放不放得下：右栏的宽度档与让位算法只有一个家。
+        let panes = layout::plan(self.area, 1, self.sidebar_wanted, true);
+        if panes.right_rail.is_none() {
+            self.notice = Some((
+                std::time::Instant::now(),
+                wording::rail_too_narrow().to_owned(),
+            ));
+            self.dirty = true;
+            return;
+        }
+        self.right_wanted = true;
+        // 开栏与「把键盘交给它」是同一个动作（票 08 第 1 条）。
+        self.take_trace_keyboard();
+        self.dirty = true;
     }
 
     /// 点在输入区上：把键盘还给输入区，回答 `true`。
@@ -7289,7 +7307,9 @@ impl TuiState {
         // 浮层立着时归浮层」是同一条纪律
         // （`.scratch/questionnaire-reading/spec.md`），而这一层扣着 `Enter` 与方向键不放会
         // 让一道正在等的题按不动。关掉它们之后原样还给轨迹页 —— 这一位没被动过。
-        if self.main_tab == MainTab::Trace
+        // 票 14 起这一层归**右栏**；过渡期（票 16 之前）主列那个轨迹页还在，它拿键盘的
+        // 老路径照旧成立 —— 两个入口共用同一份 `trace_keyboard` 与同一份轨迹视口。
+        if (self.right_wanted || self.main_tab == MainTab::Trace)
             && self.trace_keyboard
             && self.pending.is_none()
             && self.trace_key(key)
@@ -7317,12 +7337,13 @@ impl TuiState {
             }
             return;
         }
-        // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：与左栏开关同一档的纯视图
-        // 手势 —— 忙闲都生效、不清举手，而详情覆盖层与历史重放拦得住它（上面两支已经提前
-        // 返回），选择器立着时归选择器（也已经在上面返回）。它排在轨迹页那一支之后：轨迹页
-        // 只认自己收编的那几个键，这一枚照旧落到这里，而搜索模式里也不许把它扣下。
+        // 右栏开关（票 14，推翻 `trace-shortcuts` §1 的「主列两页翻一个来回」）：与左栏
+        // 开关同一档的纯视图手势 —— 忙闲都生效、不清举手；详情覆盖层与历史重放拦得住它
+        // （上面两支已经提前返回），选择器立着时归选择器（也已经在上面返回）。它排在轨迹
+        // 那一支之后：轨迹层只认自己收编的那几个键，这一枚照旧落到这里，而搜索模式里也不
+        // 许把它扣下。
         if key == Key::CtrlV {
-            self.switch_main_tab();
+            self.toggle_right_rail();
             return;
         }
         // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-D`
@@ -14491,6 +14512,12 @@ const BLINK_FRAMES: u64 = 8;
 fn keyboard_in_the_input(state: &TuiState) -> bool {
     state.pending.is_none()
         && !state.sidebar_keyboard
+        // 右栏拿住键盘时输入区没有它（票 14）：`Ctrl-V` 与点右栏都会把这一位交过去。
+        && !(state.right_wanted && state.trace_keyboard)
+        // 选择器与历史重放立着时同样归它们 —— 这一条与 `key` 的阶梯同源（研究票 02 报的
+        // 漏项；此前它们独占键盘，光标却照旧露在输入区）。
+        && state.picker.is_none()
+        && state.replay.is_none()
         && state.detail.is_none()
         && state.file_viewer.is_none()
 }
