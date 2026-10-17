@@ -293,6 +293,17 @@ mod loading {
                     quit: ExitRequest::default(),
                     requests: requests.clone(),
                 };
+                // 名册与只读也随这个会话走（票 25）：装载路径与启动路径一样推一次，
+                // 切到它时 `/` 菜单与页内改名的判据才有东西。
+                console.catalog(
+                    id.clone(),
+                    super::interactive::slash_catalog(
+                        &crate::render::wording::BUILT_IN_COMMANDS,
+                        &loaded.harness.skill_catalog(),
+                        &[],
+                    ),
+                );
+                console.read_only(id.clone(), loaded.read_only);
                 let session_cwd = cwd.clone();
                 if let Err(error) =
                     host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))
@@ -620,6 +631,17 @@ pub(super) async fn attach(
                 quit: ExitRequest::default(),
                 requests: requests.clone(),
             };
+            // 名册与只读也随这个会话走（票 25）：装载路径与启动路径一样推一次，
+            // 切到它时 `/` 菜单与页内改名的判据才有东西。
+            console.catalog(
+                id.clone(),
+                super::interactive::slash_catalog(
+                    &crate::render::wording::BUILT_IN_COMMANDS,
+                    &loaded.harness.skill_catalog(),
+                    &[],
+                ),
+            );
+            console.read_only(id.clone(), loaded.read_only);
             let session_cwd = cwd.clone();
             if let Err(error) =
                 host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))

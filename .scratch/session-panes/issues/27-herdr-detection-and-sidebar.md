@@ -41,3 +41,5 @@ Blocked by: —
   只冒烟启动）。`herdr::tests` 钉住精确等值，`config_profiles` 钉住四组
   `initial_wanted`，`render_layout` 的 `a_hidden_starting_sidebar_leaves_the_frame_without_it`
   钉住「不画时整条列不在」。
+- **只在 `auto` 时读环境**（审查后修）：`always` / `never` 是显式覆盖，不再调用
+  `in_herdr(env)`（口径与 spec 45 对齐；行为不变）。

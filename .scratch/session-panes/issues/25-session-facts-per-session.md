@@ -40,3 +40,10 @@ Blocked by: 17
 - 关闭会话时表里那几行一起清掉。
 - 测试：`render_layout` 3 条（cwd → 标题、文件索引往返、名册按会话）、`session_page` 2 条
   （只读会话拒改名 / 普通会话照旧）。
+- **装载路径也推名册与只读**（审查后修）：此前只有启动会话推 `Catalog` / `ReadOnly`，装载
+  出来的会话切过去时 `/` 菜单是空的、只读标记也丢。现在 `attach` 的两处装载分支在 adopt 之前
+  各推一次（名册用 `loaded.harness.skill_catalog()`，MCP 模板为空 —— 与那个 actor 原本的
+  `prompts: Arc::new(Vec::new())` 一致）。
+- **文件索引跨会话竞态**（审查后修）：遍历结果现在带着**发起时的 cwd** 回来
+  （`files_loaded_for`），对不上当前会话就丢掉、把挂着的 `Loading` 复位并为当前 cwd 再请一次；
+  切回一个索引没就绪的会话也会复位后重扫。单测 `a_file_scan_from_the_old_cwd_does_not_land_in_the_new_session`。

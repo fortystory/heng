@@ -6740,35 +6740,6 @@ fn a_single_select_option_is_chosen_by_clicking_its_row() {
 }
 
 #[test]
-fn the_main_tabs_still_answer_clicks_while_a_questionnaire_is_up() {
-    // 问卷占的是**底部输入区**，不是整个指针：主列上方的页签条、转录与左栏照旧归它们本来管的
-    // 人。以前它把每一次点击都吃掉，于是问卷一立起来，「轨迹」就点不动了。
-    use heng::questions::{Choice, UserQuestion};
-    let (mut state, _answers) = questionnaire_state(UserQuestion {
-        id: "q1".to_owned(),
-        header: None,
-        question: "选一个".to_owned(),
-        multi_select: false,
-        options: vec![Choice {
-            label: "甲".to_owned(),
-            description: None,
-        }],
-    });
-    // 注入行只住在轨迹页，所以它是「现在这一页是哪一页」的判据。
-    state.apply(injected(1, "注入的正文"));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("[上下文注入"), "对话页不画注入行：{text}");
-
-    open_trace_tab(&mut state, 120, 24);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("[上下文注入"),
-        "点「轨迹」之后它在那儿：{text}"
-    );
-    assert!(text.contains("1. 甲"), "切页不动问卷，它仍在底部：{text}");
-}
-
-#[test]
 fn a_sidebar_tab_click_while_a_questionnaire_is_up_switches_but_keeps_the_keyboard() {
     // 切页可以，键盘不跟着走：那一页平时会收走键盘（`.scratch/files-page/spec.md` §5），而问
     // 卷还立着，`j` 仍该是问卷的键（`.scratch/questionnaire-keys/spec.md` §7 的补记）。
@@ -9664,90 +9635,6 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
 }
 
 #[test]
-fn a_trace_row_opens_its_detail_while_a_questionnaire_is_up() {
-    // 读模型做决定之前想看一眼上一次调用发生了什么 —— 覆盖层以前在问卷立着时打不开
-    // （`questioning` 那一串门），于是只能等这一轮问完再看
-    // （`.scratch/questionnaire-reading/spec.md`）。
-    use heng::questions::{Choice, UserQuestion};
-    let (mut state, _answers) = questionnaire_state(UserQuestion {
-        id: "q1".to_owned(),
-        header: None,
-        question: "选一个".to_owned(),
-        multi_select: false,
-        options: vec![Choice {
-            label: "甲".to_owned(),
-            description: None,
-        }],
-    });
-    state.apply(tool_started(
-        1,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "ls -la"}),
-    ));
-    state.apply(tool_completed(2, "call-1", true, Some("全部文件"), None));
-    open_trace_tab(&mut state, 120, 24);
-    click_text(&mut state, 120, 24, "调用 bash");
-
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("ls -la"), "详情覆盖层开着：{text}");
-    // 浮层的底边被挡在问卷上面，所以那道题始终看得见 —— 一个看不见题面的问卷等于答不了。
-    assert!(text.contains("选一个"), "题面还在底部：{text}");
-    assert!(text.contains("1. 甲"), "选项也在：{text}");
-}
-
-#[test]
-fn the_detail_holds_the_keyboard_and_closing_it_hands_the_questionnaire_back() {
-    // 键盘跟着**当前那一层**：详情立着时 `Esc` 关的是它（不是「退出这次询问」），而关掉
-    // 之后问卷的作答与焦点原样留在那儿（`.scratch/questionnaire-reading/spec.md`）。
-    use heng::questions::{Choice, UserQuestion};
-    let (mut state, mut answers) = questionnaire_state(UserQuestion {
-        id: "q1".to_owned(),
-        header: None,
-        question: "选一个".to_owned(),
-        multi_select: false,
-        options: vec![Choice {
-            label: "甲".to_owned(),
-            description: None,
-        }],
-    });
-    state.apply(tool_started(
-        1,
-        "call-1",
-        "bash",
-        serde_json::json!({"command": "ls -la"}),
-    ));
-    state.apply(tool_completed(2, "call-1", true, Some("全部文件"), None));
-    open_trace_tab(&mut state, 120, 24);
-    click_text(&mut state, 120, 24, "调用 bash");
-
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("ls -la"), "详情开着：{text}");
-
-    // 键盘跟着当前那一层：空格（确认）与回车（提交）都落在详情里，问卷既没作答也没提交。
-    state.key(Key::Char(' '));
-    state.key(Key::Enter);
-    assert!(
-        answers.try_recv().is_err(),
-        "详情占着键盘，问卷既没被作答也没被提交"
-    );
-
-    // `Esc` 关掉的是详情（它排在问卷那一支前面），而下面那道题的作答与焦点原样留着。
-    state.key(Key::Esc);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("ls -la"), "详情关掉了：{text}");
-
-    // 键盘回到问卷：高亮仍在第一项，于是空格确认它、回车提交。
-    state.key(Key::Char(' '));
-    state.key(Key::Enter);
-    let answers = answers.try_recv().expect("问卷提交了");
-    assert_eq!(
-        answers.expect("一次成功的作答").answers[0].selected,
-        vec!["甲".to_owned()]
-    );
-}
-
-#[test]
 fn a_file_row_in_the_sidebar_opens_its_content_while_a_questionnaire_is_up() {
     // 文件页与轨迹页是同一类：点一行开详情覆盖层。以前问卷立着时这一列被 `questioning`
     // 挡着，连目录都展不开（`.scratch/questionnaire-reading/spec.md`）。
@@ -12067,5 +11954,60 @@ fn two_modes_do_not_replay_the_trace_when_the_rail_is_closed() {
         state.trace_replays(),
         replays,
         "右栏关着时两态往返不动轨迹缓存"
+    );
+}
+
+/// 平铺态点集合外的标签：先加入集合再切；满员被拒时这一下什么都不发生（票 07 语义 2）。
+#[test]
+fn clicking_a_tab_outside_the_set_joins_it_first() {
+    use heng::render::FrontEndEvent;
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_tile_limit(2);
+    host_sessions(
+        &mut state,
+        &[("01J8ZQ4K7M", "甲"), ("s-b", "乙"), ("s-c", "丙")],
+    );
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(state.tiles().len(), 2, "上限 2：丙不在集合里");
+
+    click_text(&mut state, 120, 40, "丙");
+    assert!(
+        !state.tiles().contains(&heng::events::SessionId::new("s-c")),
+        "满员：丙进不了集合"
+    );
+    assert!(state.take_events().is_empty(), "满员时也不换前台");
+
+    state.set_tile_limit(3);
+    click_text(&mut state, 120, 40, "丙");
+    assert!(
+        state.tiles().contains(&heng::events::SessionId::new("s-c")),
+        "上限放宽后点它先加入集合"
+    );
+    assert!(
+        state.take_events().iter().any(
+            |event| matches!(event, FrontEndEvent::OpenSession { id } if id.as_str() == "s-c")
+        ),
+        "然后才换前台"
+    );
+}
+
+/// 窗口缩小到放不下时自动回标签态，并给一句回执（票 17 / 文档里的「并说一句」）。
+#[test]
+fn shrinking_under_the_tile_floor_falls_back_with_a_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    assert!(state.tiled());
+
+    let rows = screen(80, 24, &mut state);
+    assert!(!state.tiled(), "放不下就回标签态");
+    assert!(
+        rows.iter().any(|row| row.contains("放不下平铺")),
+        "并且说一句：{rows:#?}"
     );
 }

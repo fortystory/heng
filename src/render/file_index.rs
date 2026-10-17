@@ -58,6 +58,14 @@ impl FileIndex {
         *self = Self::Ready(Arc::new(paths));
     }
 
+    /// 那次遍历的结果不会回来了（发起它的会话已经切走、结果被丢弃）：回到「还没扫过」，
+    /// 下一次 [`begin`](Self::begin) 才发得出去。
+    pub fn abandon(&mut self) {
+        if matches!(self, Self::Loading) {
+            *self = Self::Idle;
+        }
+    }
+
     /// 按 `query` 过滤的候选，大小写不敏感，最多 `limit` 条。
     ///
     /// 匹配是**分段**的（`.scratch/tui-feedback/spec.md` §4）：query 与路径都按 `/` 切段、空段

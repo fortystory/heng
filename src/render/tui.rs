@@ -445,6 +445,28 @@ pub struct TuiOptions {
     pub tile_limit: usize,
 }
 
+/// 真进程开机那一刻的渲染状态。
+///
+/// 抽出来是为了有回归网（Spec 轴审查：启动夺键盘与 `Ctrl-←→` 两个缺口正是「`Tui::run` 的
+/// 组装态从没被断言过」漏掉的）：右栏默认开、左栏按初值、平铺关、**键盘在输入区**。
+fn boot_state(
+    facts: SessionFacts,
+    cwd: std::path::PathBuf,
+    home: Option<std::path::PathBuf>,
+    sidebar: bool,
+    tile_limit: usize,
+) -> TuiState {
+    let mut state = TuiState::new(facts, cwd, home);
+    // 左栏的启动初值（票 25/27）：`auto` 在 herdr 里收起，`always` / `never` 是显式覆盖。
+    state.set_sidebar_wanted(sidebar);
+    state.set_tile_limit(tile_limit);
+    // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
+    // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
+    // 注意：**不**把键盘交给右栏 —— 它默认开着，但键盘一开始仍归输入区（票 14/16/21）。
+    state.set_right_rail(true);
+    state
+}
+
 /// TUI 渲染器。
 pub struct Tui {
     options: TuiOptions,
@@ -467,15 +489,7 @@ impl Tui {
         // 家目录在这里读一次，不进 `TuiState::new` 的调用方：标题那一层是纯函数，读环境
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let mut state = TuiState::new(facts, cwd, home);
-        // 左栏的启动初值（票 25/27）：`auto` 在 herdr 里收起，`always` / `never` 是显式覆盖。
-        state.set_sidebar_wanted(sidebar);
-        state.set_tile_limit(tile_limit);
-        // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
-        // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
-        state.set_right_rail(true);
-        // 注意：这里**不**把键盘交给右栏。右栏默认开着，但键盘一开始仍归输入区
-        // （票 14/16/21：`Ctrl-V` 或点右栏才交过去；`TuiState::new` 里 `trace_keyboard` 是 false）。
+        let mut state = boot_state(facts, cwd, home, sidebar, tile_limit);
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -492,8 +506,9 @@ impl Tui {
         // 文件索引的结果从这条通道回到循环。遍历跑在 `spawn_blocking` 里，于是一次大
         // 工作区的遍历永远不占着这个 task，也从不进任何一次按键的处理路径
         // （`.scratch/input-tokens/spec.md` §1）。
+        // 结果带**发起时的根**一起回来（票 25）：切走之后在飞的遍历不会落进新会话的索引。
         let (files_tx, mut files_rx) =
-            tokio::sync::mpsc::unbounded_channel::<Vec<std::path::PathBuf>>();
+            tokio::sync::mpsc::unbounded_channel::<(std::path::PathBuf, Vec<std::path::PathBuf>)>();
 
         // 改动页的读数从这条通道回来。它是渲染器自己在**宿主侧**起的一次只读 git：不进事件
         // 流、不进 `messages`、不过权限门与沙箱，而它必须 `tokio::spawn` 出去 —— 一帧的
@@ -539,7 +554,7 @@ impl Tui {
                 let root = state.cwd().to_path_buf();
                 let tx = files_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let _ = tx.send(file_index::scan(&root));
+                    let _ = tx.send((root.clone(), file_index::scan(&root)));
                 });
             }
             // 改动页那一次取数走 `tokio::spawn`（它要 await `tokio::process` 与超时，不是
@@ -592,7 +607,7 @@ impl Tui {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
-                    Some(paths) = files_rx.recv() => state.files_loaded(paths),
+                    Some((root, paths)) = files_rx.recv() => state.files_loaded_for(&root, paths),
                     Some(outcome) = changes_rx.recv() => state.changes_loaded(outcome),
                     Some((serial, body, note)) = diff_rx.recv() => state.diff_loaded(serial, body, note),
                     Some(()) = viewer_rx.recv() => state.mark_dirty(),
@@ -2532,6 +2547,9 @@ pub struct TuiState {
     /// 该发一次遍历了吗。预热与提交各置一次，渲染循环取走并真去起那个 blocking 任务 ——
     /// 于是「什么时候扫」是状态机的事，「怎么扫」是循环的事，测试不必起任务。
     file_scan_wanted: bool,
+    /// 正在飞的那次遍历是**哪个会话的 cwd** 发起的（票 25）：结果回来时对不上就丢掉，
+    /// 免得旧工作区的索引落进新会话。
+    file_scan_cwd: Option<std::path::PathBuf>,
     /// 开头的 `/` 能变成哪些名字，按循环报上来的样子。在那份报告到达之前是空的，这
     /// 正是 `/` 菜单要等它到了才开的原因。
     catalog: Vec<CatalogEntry>,
@@ -3986,6 +4004,7 @@ impl TuiState {
             // 进 TUI 就预热一次：人真打 `@` 的时候它通常已经好了
             // （`.scratch/input-tokens/spec.md` §1）。
             file_scan_wanted: true,
+            file_scan_cwd: None,
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             tab: Tab::Usage,
@@ -4421,6 +4440,11 @@ impl TuiState {
         };
         self.cwd = light.cwd;
         self.files = light.files;
+        if self.files.paths().is_none() {
+            // 上次切走时遍历还在飞、结果被丢弃：复位成「还没扫过」并请一次重扫（票 25）。
+            self.files.abandon();
+            self.file_scan_wanted = true;
+        }
         self.editor = light.editor;
         self.pending = light.pending;
         self.detail_opener = light.detail_opener;
@@ -5044,10 +5068,18 @@ impl TuiState {
             // 顶部页签条（票 15）：点标签 = 切前台。能不能切（cwd 还在不在、流坏没坏）
             // 是循环那一侧的判断，渲染层只上报「有人点了这一个」。
             Some(HitAction::TopSession(index)) => {
-                if let Some(id) = self.sessions.hosted.get(index).cloned()
-                    && id != self.front
-                {
-                    self.events.push(FrontEndEvent::OpenSession { id });
+                if let Some(id) = self.sessions.hosted.get(index).cloned() {
+                    // 平铺态的焦点只能在集合内（票 07 语义 2、票 15）：点集合外的标签先把
+                    // 它加进集合；满员被拒时这一下什么都不发生。
+                    if self.tiled && !self.tiles.contains(&id) {
+                        self.add_tile(id.clone());
+                        if !self.tiles.contains(&id) {
+                            return;
+                        }
+                    }
+                    if id != self.front {
+                        self.events.push(FrontEndEvent::OpenSession { id });
+                    }
                 }
             }
             // 右端那个开关与 `Ctrl-V` 是同一条动作（票 15）。平铺按钮的动作由票 17 接：
@@ -7843,6 +7875,11 @@ impl TuiState {
         // 那一支之后：轨迹层只认自己收编的那几个键，这一枚照旧落到这里，而搜索模式里也不
         // 许把它扣下。
         if key == Key::CtrlV {
+            // 问卷 / 中间那几种确认立着时键盘归它们（与轨迹层同一条让位）：这时候动右栏
+            // 会把提示行换成 `RAIL_HINTS`，而按键其实还在问卷那里。
+            if self.pending.is_some() {
+                return;
+            }
             self.toggle_right_rail();
             return;
         }
@@ -8034,12 +8071,30 @@ impl TuiState {
             return false;
         }
         self.file_scan_wanted = false;
+        self.file_scan_cwd = Some(self.cwd.clone());
         true
+    }
+
+    /// 一次遍历的结果回来了：只有当它属于**当前**会话的 cwd 时才换上（票 25）。
+    ///
+    /// 遍历在飞的时候用户可能已经切走；那份结果属于旧工作区，落进新会话的索引会让 `@`
+    /// 候选与文件页读到错的文件列表。丢掉之后旧会话切回来会重新扫（见 [`Self::load_light`]）。
+    pub fn files_loaded_for(&mut self, root: &std::path::Path, paths: Vec<std::path::PathBuf>) {
+        if self.file_scan_cwd.as_deref() != Some(root) || self.cwd != root {
+            // 旧工作区的那一趟结果不落进新会话：复位挂着的 `Loading`，并为当前 cwd 再请
+            // 一次遍历（切会话时 `load_light` 也会置这一位，这里兜住「没走那条路」的路径）。
+            self.file_scan_cwd = None;
+            self.files.abandon();
+            self.file_scan_wanted = true;
+            return;
+        }
+        self.files_loaded(paths);
     }
 
     /// 一次遍历的结果回来了：换上新的索引，并请一帧 —— 候选列表与「能兑现」的判据都跟着
     /// 它变。
     pub fn files_loaded(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.file_scan_cwd = None;
         self.files.loaded(paths);
         // 一次重扫之后，不在索引里的路径**直接丢掉**：留在展开集合里的每一个目录都还在索引
         // 里，于是它下次回到工作区时是收起的，而不是带着上一次的展开状态复活
@@ -9033,7 +9088,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let mut tiled = state.tiled;
     let mut panes = plan_for(area, content_rows, tiled, questionnaire, state);
     if tiled && layout::tile_cells(panes.transcript, state.tile_cell_count()).is_none() {
+        // 窗口缩小到放不下：回标签态，并说一句（与 `Ctrl-R` 进入时被拒同一条回执）。
         state.tiled = false;
+        state.notice = Some((
+            std::time::Instant::now(),
+            wording::tiles_too_small().to_owned(),
+        ));
         tiled = false;
         panes = plan_for(area, content_rows, false, questionnaire, state);
     }
@@ -15575,6 +15635,59 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真进程组装态：右栏默认开，但键盘仍在输入区（票 14/16/21；Spec 轴审查要求补的回归网）。
+    #[test]
+    fn the_boot_state_leaves_the_keyboard_in_the_input() {
+        let seed = state();
+        let page = boot_state(seed.view.facts.clone(), seed.cwd.clone(), None, true, 4);
+        assert!(keyboard_in_the_input(&page), "开机键盘在输入区");
+        assert!(page.right_wanted, "右栏默认开");
+        assert!(!page.trace_keyboard, "右栏没拿键盘");
+        assert_eq!(page.tile_limit, 4);
+    }
+
+    /// crossterm 解码：视图手势与标签手势都认得出来（Spec 轴审查：`map_key` 从没有单测）。
+    #[test]
+    fn the_view_gestures_map_from_crossterm() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        assert_eq!(map_key(ctrl(KeyCode::Char('r'))), Some(Key::CtrlR));
+        assert_eq!(map_key(ctrl(KeyCode::Char('v'))), Some(Key::CtrlV));
+        assert_eq!(map_key(ctrl(KeyCode::Char('o'))), Some(Key::CtrlO));
+        assert_eq!(map_key(ctrl(KeyCode::Char('1'))), Some(Key::CtrlDigit(1)));
+        assert_eq!(map_key(ctrl(KeyCode::Char('4'))), Some(Key::CtrlDigit(4)));
+        assert_eq!(map_key(ctrl(KeyCode::Left)), Some(Key::CtrlLeft));
+        assert_eq!(map_key(ctrl(KeyCode::Right)), Some(Key::CtrlRight));
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            Some(Key::Left),
+            "不带 Ctrl 的左右仍是行编辑"
+        );
+    }
+
+    /// 一次遍历在飞时切了会话：旧 cwd 的结果被丢掉，并为新 cwd 再请一次（票 25）。
+    #[test]
+    fn a_file_scan_from_the_old_cwd_does_not_land_in_the_new_session() {
+        let mut page = state();
+        assert!(page.take_file_scan(), "第一帧会请一次遍历");
+        page.cwd = std::path::PathBuf::from("/x/other");
+        page.files_loaded_for(
+            std::path::Path::new("/x/heng"),
+            vec![std::path::PathBuf::from("旧工作区的.rs")],
+        );
+        assert!(page.files.paths().is_none(), "旧结果不落进新会话");
+        assert!(page.take_file_scan(), "丢弃之后还会为新 cwd 再请一次");
+        page.files_loaded_for(
+            std::path::Path::new("/x/other"),
+            vec![std::path::PathBuf::from("新工作区的.rs")],
+        );
+        assert_eq!(
+            page.files.paths().map(<[_]>::len),
+            Some(1),
+            "当前 cwd 的结果才换上"
+        );
+    }
 
     /// 平行表跟着窗格交回来的丢弃数裁，而不是自己数 `CAP`：推过上限之后，行链接与回合条
     /// 仍与窗格的源行一一对应（`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。

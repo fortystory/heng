@@ -46,3 +46,5 @@ Blocked by: 16
 - 测试：`layout::tile_tests` 5 条 + `render_layout` 6 条帧断言。
 - 审查后补的帧：`three_tiles_make_an_l_in_the_frame`（2 会话 + 加号 = 3 格 L 形，左格全高、
   右边上下各半高）。
+- **窗口缩小到放不下时也给回执**（审查后修）：`draw_frame` 的帧回退与 `Ctrl-R` 进入被拒
+  共用同一句 `这个尺寸放不下平铺；回到标签态`。
