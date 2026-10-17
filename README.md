@@ -263,7 +263,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
   （`grep` 带 `after` / `before` / `count`，`glob` 按模式列文件）、`repo_map`、`skill`、`todo`、
   `goal_note`、`task`、`ask_user_question`、`git`（一条入口，`op` 读侧 `ReadOnly`、写侧
   `Exclusive`）、联网两个与 MCP 四个元工具，而 `bash` 是唯一那个 `Exclusive` 的通用出口。
-- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是一条左栏 + 一条主列 + 一条右栏（右栏够宽才画；[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)、[ADR 0024](docs/adr/0024-trace-lives-in-the-right-rail.md)）、**没有外框**：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏；顶上一条横跨整屏的页签条（见上面的「TUI 长什么样」）。
+- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是一条左栏 + 一条主列 + 一条右栏（右栏够宽才画；[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)、[ADR 0024](docs/adr/0024-trace-lives-in-the-right-rail.md)）、**没有外框**：≥ 120 列时左栏 40 列画标记（右栏开着时让到 28），80–119 列退成文字身份，再窄整栏隐藏；**主列顶上**一条页签条（见上面的「TUI 长什么样」）。
 
 默认数值：单 agent 100 回合、执行者 25 回合（这两个用 `[turn]` 调）、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
 

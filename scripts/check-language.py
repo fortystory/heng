@@ -92,7 +92,10 @@ FROZEN_FILES = [
     "src/agent/history.rs",
     "src/render/input.rs",
     "src/render/tui.rs",
-    "src/cli.rs",
+    "src/cli/interactive.rs",
+    "src/cli/loading.rs",
+    "src/cli/probe.rs",
+    "src/cli/sessions.rs",
 ]
 
 # 两条方向相反的棘轮（ADR 0005），数字都是**实测值**：
@@ -150,7 +153,12 @@ MODEL_TEXT_FLOOR = {
     "src/agent/history.rs": 7,
     "src/render/input.rs": 3,
     "src/render/tui.rs": 2,
-    "src/cli.rs": 15,
+    # 2026-10-17：`src/cli.rs` 拆成 `src/cli/*` 之后，这一侧的中文串按文件重新实测
+    # 并保住原来的下限总量（15 → 1 + 2 + 12 + 1 = 16）。
+    "src/cli/interactive.rs": 1,
+    "src/cli/loading.rs": 2,
+    "src/cli/probe.rs": 12,
+    "src/cli/sessions.rs": 1,
 }
 # 2026-10-03 MCP 那一轮把上限从 27 提到 **29**（实测值）：新加进来的两条都是纯 `format!`
 # 骨架，与下面记着的原来那两条同类 —— `"{MCP_UNTRUSTED_MARKER}\n\n{text}"`（`mcp_call.rs`
