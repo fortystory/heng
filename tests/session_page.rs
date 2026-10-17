@@ -120,8 +120,22 @@ fn click(state: &mut TuiState, column: u16, row: u16) {
 /// 点左栏页签条上的 `会话`，把这一页叫出来。
 fn open_sessions(state: &mut TuiState, width: u16, height: u16) {
     let frame = buffer(width, height, state);
-    let (column, row) = find_cell(&frame, width, height, wording::TAB_SESSIONS);
+    // 顶部页签条（票 15）的标签也会写标题里的「会话」二字，所以从它下面那一行起找左栏的
+    // 页签条。
+    let (column, row) = find_cell_below(&frame, width, height, wording::TAB_SESSIONS, 2);
     click(state, column, row);
+}
+
+/// 与 [`find_cell`] 同一条路，只是从屏幕第 `from` 行起找 —— 顶部页签条会占用第 0、1 行。
+fn find_cell_below(frame: &Buffer, width: u16, height: u16, needle: &str, from: u16) -> (u16, u16) {
+    for y in from..height {
+        let text = row_text(frame, y, width);
+        if let Some(byte) = text.find(needle) {
+            let column = heng::render::width::text_columns(&text[..byte]) as u16;
+            return (column, y);
+        }
+    }
+    panic!("屏幕上找不到 {needle}");
 }
 
 #[test]
@@ -568,7 +582,8 @@ fn the_more_line_still_counts_what_this_page_holds() {
 fn title_colour(state: &mut TuiState, title: &str) -> ratatui::style::Color {
     let frame = buffer(120, 24, state);
     let first = title.chars().next().expect("标题非空").to_string();
-    for y in 0..24u16 {
+    // 顶部页签条（票 15）也写标题，但那是另一种颜色语义；要找的是左栏列表行。
+    for y in 2..24u16 {
         let text = row_text(&frame, y, 120);
         // 页顶那一行也会点名标题（`关闭「…」`，票 32）—— 要读的是**列表行**那一档色。
         if !text.contains(title) || text.contains("关闭「") {

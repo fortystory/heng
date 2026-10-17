@@ -52,6 +52,25 @@ const MIN_LEDGER_ROWS: u16 = 3;
 /// 左栏那条少一行 —— 主列顶上就是屏幕边缘，不需要再画一条线把它跟什么分开。
 const MAIN_TABS_ROWS: u16 = 2;
 
+/// 顶部页签条占的行（票 15）：标签行 + 它下面那条虚线。
+///
+/// 它横跨**整屏**，左栏、主列、右栏都从它下面起算 —— 于是它不是 [`CHROME`] 的一部分：
+/// 那是**主列内部**的纵向算术，而顶部条在外层。屏高 < [`TOP_TABS_COMPACT_BELOW`] 时收成
+/// 一行、不画虚线。
+const TOP_TABS_ROWS: u16 = 2;
+
+/// 屏高低于这个数，顶部页签条收成一行（票 15）。
+const TOP_TABS_COMPACT_BELOW: u16 = 20;
+
+/// 这一帧顶部页签条占几行：正常两行、矮屏一行。
+fn top_tabs_rows(height: u16) -> u16 {
+    if height < TOP_TABS_COMPACT_BELOW {
+        1
+    } else {
+        TOP_TABS_ROWS
+    }
+}
+
 /// **一个带框浮层**花掉的行列：它的内容矩形 = 四边各内缩一格。
 ///
 /// 外壳不再用它 —— 外框已经离开（spec §1），内容区就是终端本身。它现在只服务那三块自己
@@ -200,6 +219,10 @@ pub struct Regions {
     /// 整屏。外壳如今不再内缩，所以它就是内容区（spec §1）。详情覆盖层在**它**里面居中
     /// （§4）——而问题覆盖层仍然在主列里，两者故意不同基准。
     pub screen: Rect,
+    /// 顶部页签条（票 15）：横跨整屏的标签行（+ 下面那条虚线，矮屏上不画）。
+    pub top_tabs: Rect,
+    /// 这一帧顶部条占几行：2 是常态，屏高 < 20 时是 1。
+    pub top_tabs_rows: u16,
     /// 主列：分隔线右侧的一切。问题覆盖层与 `/` 菜单在它里面定位。
     pub main: Rect,
     /// 右栏（票 13）：一条与主列同高的列，轨迹住在它里面。右栏不在时是 `None`。
@@ -518,37 +541,45 @@ fn plan_with(
     // 右栏与左栏同时存在（冻结项 6）；它的宽度档与「想不想看见」相乘，判据在
     // [`right_rail_tier`]。它的让位只影响主列宽，左栏档一个字不动。
     let rail_tier = right_rail_tier(area.width, sidebar_wanted).filter(|_| right_wanted);
+    // 顶部页签条横跨整屏（票 15）：三块内容都从它下面起算。它不在 [`CHROME`] 里 —— 那是
+    // 主列内部的开销，而顶部条在外层。
+    let top_rows = top_tabs_rows(area.height);
+    let main_height = area.height.saturating_sub(top_rows);
     // 左栏顶上让出一行空行，底下**不再让给提示行** —— 提示行回到了主列里，左栏因此恢复全高
-    // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16）。于是 120×24 下
-    // 页区从 14 行回到 15 行：页高的公式不变，变的只是剩余高度。
-    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
+    // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16）。
+    let sidebar_rows = main_height.saturating_sub(SIDEBAR_TOP_GAP);
     let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
     let cap = if questionnaire {
-        questionnaire_input_rows(area.height)
+        questionnaire_input_rows(main_height)
     } else {
-        max_input_rows(area.height)
+        max_input_rows(main_height)
     };
     let input_rows = rows.max(MIN_INPUT_ROWS).min(cap);
     // 对话页的转录：外壳那几行、输入区之外全是它的。
-    let transcript_rows = area.height.saturating_sub(CHROME + input_rows);
+    let transcript_rows = main_height.saturating_sub(CHROME + input_rows);
     // 轨迹页比它多一条横带（票 22）：宽度那一档决定横带是几行，高度那一档决定它值不值当留。
     let trace_band = band_kind(
-        area.height,
+        main_height,
         input_rows,
         trace_axis_width(main_width(area.width, sidebar_wanted, right_wanted)),
     );
-    let trace_rows = area
-        .height
-        .saturating_sub(CHROME + trace_band.rows() + input_rows);
+    let trace_rows = main_height.saturating_sub(CHROME + trace_band.rows() + input_rows);
 
-    let sidebar = tier.map(|tier| Rect::new(area.x, area.y + SIDEBAR_TOP_GAP, tier, sidebar_rows));
+    let sidebar = tier.map(|tier| {
+        Rect::new(
+            area.x,
+            area.y + top_rows + SIDEBAR_TOP_GAP,
+            tier,
+            sidebar_rows,
+        )
+    });
     let divide = tier.map(|tier| area.x + tier);
     let main_x = divide.map_or(area.x, |divide| divide + 1);
     let main = Rect::new(
         main_x,
-        area.y,
+        area.y + top_rows,
         main_width(area.width, sidebar_wanted, right_wanted),
-        area.height,
+        main_height,
     );
 
     // 状态行**紧贴**转录的最后一行：它上方那条线已经不画了，省下的一行整行还给了转录
@@ -592,7 +623,7 @@ fn plan_with(
     // 右栏（票 13）：与主列同高的一列，轨迹住在它里面。分隔线落在主列右缘那一列上 ——
     // 与左栏那条同一种画法，方向相反。
     let right_divide = rail_tier.map(|_| main.right());
-    let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, area.y, tier, area.height));
+    let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, main.y, tier, main_height));
     // 右栏里的时间轴：轴宽照票 04 的口径（右栏宽 − 2 列滚动条与指示器 − 九列时刻 − 五列
     // 泳道标签）。40 档 24 格、28 档 12 格，两档都落在 Compact（票 08 第 10 条：右栏只画
     // 这一档）。右栏**不做** Full / Sparse —— 那两档要的轴宽在 40 列里根本不存在。
@@ -620,6 +651,8 @@ fn plan_with(
 
     Regions {
         screen: area,
+        top_tabs: Rect::new(area.x, area.y, area.width, top_rows),
+        top_tabs_rows: top_rows,
         main,
         right_rail,
         right_divide,
@@ -812,10 +845,14 @@ fn max_input_rows(height: u16) -> u16 {
 /// 退回与草稿同一条「给转录留一行」的余地。一份画不出来的问卷比少一行转录糟得多 ——
 /// 前者是**问不出来**。
 fn questionnaire_input_rows(height: u16) -> u16 {
+    // 问卷优先于「给转录留一行」：余地下到连 [`MIN_INPUT_ROWS`] 都画不出问卷时，题面与
+    // 选项仍然拿满那三行 —— 一份画不出来的问卷比少一行转录糟得多（前者是**问不出来**）。
+    // 票 15 之后顶部页签条又吃掉一两行，40×10 那个地板正好落到这一支上。
+    let room = height.saturating_sub(CHROME + 1);
     height
         .saturating_sub(CHROME + TRANSCRIPT_FLOOR_WITH_QUESTIONNAIRE)
         .max(MIN_INPUT_ROWS)
-        .min(height.saturating_sub(CHROME + 1))
+        .min(room.max(MIN_INPUT_ROWS))
         .max(1)
 }
 

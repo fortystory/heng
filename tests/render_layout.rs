@@ -137,8 +137,9 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
 
 /// 转录的第一行。外框走了之后它曾经就是终端的第一行
 /// （`.scratch/tui-chrome/spec.md` §1）；2026-10-06 起主列顶上多了页签条那两行（标签行与它
-/// 下面那条线），转录从第三行起（`.scratch/trace-in-main/spec.md` §1）。
-const TRANSCRIPT_TOP: usize = 2;
+/// 下面那条线），转录从第三行起（`.scratch/trace-in-main/spec.md` §1）。票 15 又在整屏顶上
+/// 加了顶部页签条那两行，于是它再下移两行。
+const TRANSCRIPT_TOP: usize = 4;
 
 /// 一帧画出来之后转录占的那些行：第一条横线画在输入区上面，
 /// 而它和转录之间还夹着状态行那一行。
@@ -149,9 +150,15 @@ const TRANSCRIPT_TOP: usize = 2;
 /// 那条虚线本身（页签条的两条横线到分隔列就结束，不会以它结尾）。
 fn transcript_rows(rows: &[String]) -> usize {
     // 页签条下面那条线也以 `┄` 结尾（它同样画到屏幕右缘），所以从转录的第一行起往后找
-    // （`.scratch/trace-in-main/spec.md` §1）。
+    // （`.scratch/trace-in-main/spec.md` §1）。票 15 之后顶部条在矮屏上只占一行，转录因此
+    // 早一行起。
+    let top = if rows.len() < 20 {
+        TRANSCRIPT_TOP - 1
+    } else {
+        TRANSCRIPT_TOP
+    };
     rows.iter()
-        .skip(TRANSCRIPT_TOP)
+        .skip(top)
         .position(|row| row.ends_with('┄'))
         .expect("主列里输入区上面那条横线在屏幕上")
         // 转录与那条线之间还夹着状态行那一行。
@@ -174,7 +181,6 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 正文不重复它（票 13 第 9 条）。
 const TOOL_FACES: &str = "参数┆输出┆Schema┆计时┆来源┆概述";
 const MESSAGE_FACES: &str = "正文┆用量┆计时┆概述";
-const THINKING_FACES: &str = "思考┆用量┆计时┆概述";
 
 /// 切到下一面：覆盖层立着时 `Tab` 是空键，于是它归标签条（票 13 第 3 条）。
 fn next_face(state: &mut TuiState) {
@@ -227,39 +233,39 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     // 那一行空行下面开始（2026-10-01 真机反馈）；120x24 装不下块字，所以这里是收起来的
     // 那一版 —— 五行网格、拼音在第 2 行、汉字在第 3 行。
     assert!(
-        rows[2].contains("héng") && rows[3].contains('衡'),
+        rows[4].contains("héng") && rows[5].contains('衡'),
         "标记的拼音与汉字落在左栏的那两行上：{:?} / {:?}",
-        rows[2],
-        rows[3]
+        rows[4],
+        rows[5]
     );
 
     // 左栏的页签条：上下两条横线夹着三个标签（`轨迹` 不在这一列里了），两条横线从屏幕左缘
     // 一直画到分隔列（`.scratch/trace-in-main/spec.md` §2）。
     assert_eq!(
-        rows[6].trim_matches(|ch| ch == '┄' || ch == '┆' || ch == ' '),
+        rows[8].trim_matches(|ch| ch == '┄' || ch == '┆' || ch == ' '),
         "",
         "页签条的上横线横跨整条左栏：{:?}",
-        rows[6]
+        rows[8]
     );
     assert!(
-        rows[7].contains("调用量") && rows[7].contains("文件") && !rows[7].contains("轨迹"),
+        rows[9].contains("调用量") && rows[9].contains("文件") && !rows[9].contains("轨迹"),
         "三个页签占自己那一行：{:?}",
-        rows[7]
+        rows[9]
     );
 
-    // 主列的页签条：标签行就是屏幕第一行，它下面一条线，转录从第三行起
+    // 主列的页签条：顶部页签条两行之后是标签行，它下面一条线，转录再下一行起
     // （`.scratch/trace-in-main/spec.md` §1）。
     assert!(
-        rows[0].contains("对话") && rows[0].contains("轨迹"),
-        "两个视图占主列的第一行：{:?}",
-        rows[0]
+        rows[2].contains("对话") && rows[2].contains("轨迹"),
+        "两个视图占主列标签行：{:?}",
+        rows[2]
     );
-    assert!(rows[1].ends_with('┄'), "标签下面一条线：{:?}", rows[1]);
+    assert!(rows[3].ends_with('┄'), "标签下面一条线：{:?}", rows[3]);
 
     // 分隔线跑满屏幕的整个高度。24 行终端留给转录十五行：
     // 三行归输入区的地板、六行归外壳 —— 页签条那两行也在这里
     // （`.scratch/trace-in-main/spec.md` §1）。
-    assert_eq!(transcript_rows(&rows), 15, "120x24 给转录 15 行");
+    assert_eq!(transcript_rows(&rows), 13, "120x24 给转录 13 行");
     assert!(
         !rows[16].contains('┄'),
         "状态行上方那条横线已经不画了：{:?}",
@@ -314,7 +320,7 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
     // 空气（spec §2）。分隔线占自己那一列，在第 40 列 ——
     // 外框走了之后，它就是最左那一列内容加四十。
     let frame = buffer(120, 24, &mut state());
-    assert_eq!(frame[(40, 0)].symbol(), "┆", "分隔线从屏幕顶起");
+    assert_eq!(frame[(40, 2)].symbol(), "┆", "分隔线从顶部条之下起");
     // 提示行只跨**主列**（`.scratch/tui-feedback/spec.md` §2），所以竖虚线跟左栏同高、一直
     // 画到屏幕最后一行。
     assert_eq!(frame[(40, 22)].symbol(), "┆", "画到屏幕倒数第二行");
@@ -323,13 +329,13 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
         "┆",
         "最后一行（提示行那一行）也有它：左栏恢复全高"
     );
-    // 标记从顶上留的那一行空行**下面**开始：第 1 行；120x24 里是收起来的那一版，
-    // 五行网格里汉字在第 3 行，从往里十七列处开始（列 1 + 17 = 18）。
-    assert_eq!(frame[(0, 1)].symbol(), " ", "左边一列空气");
-    assert_eq!(frame[(18, 3)].symbol(), "衡", "然后是标记");
+    // 标记从顶部页签条与左栏顶上那一行空行**下面**开始：第 3 行；120x24 里是收起来的那
+    // 一版，五行网格里汉字在第 5 行，从往里十七列处开始（列 1 + 17 = 18）。
+    assert_eq!(frame[(0, 3)].symbol(), " ", "左边一列空气");
+    assert_eq!(frame[(18, 5)].symbol(), "衡", "然后是标记");
     // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 39，
     // 分隔线在 40。
-    assert_eq!(frame[(39, 1)].symbol(), " ", "右边也有一列");
+    assert_eq!(frame[(39, 3)].symbol(), " ", "右边也有一列");
 }
 
 #[test]
@@ -343,30 +349,30 @@ fn the_mark_keeps_a_dim_preamble_in_both_its_forms() {
     // 120x24 装不下块字，所以这里先是收起来的那一版：拼音加一个汉字。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
-        frame[(17, 2)].symbol(),
+        frame[(17, 4)].symbol(),
         "h",
         "拼音起于收起来那版标记的第二行（往里十六列处）"
     );
     assert_eq!(
-        frame[(18, 3)].symbol(),
+        frame[(18, 5)].symbol(),
         "衡",
         "汉字在它下一行，与拼音中心对齐"
     );
-    assert_eq!(frame[(1, 2)].fg, Color::Magenta, "标着拼音的那一行退一档");
-    assert_eq!(frame[(1, 3)].fg, Color::LightMagenta, "汉字那一行是亮的");
+    assert_eq!(frame[(1, 4)].fg, Color::Magenta, "标着拼音的那一行退一档");
+    assert_eq!(frame[(1, 5)].fg, Color::LightMagenta, "汉字那一行是亮的");
 
-    // 高到 32 行往上（`BLOCK_LOGO_MIN_PAGE_ROWS`）就换成篆书：二十三行全在屏幕上，且与
-    // `wording::logo_lines` 逐格相同；拼音在第一行、字形从第二行起。
+    // 高到 34 行往上（`BLOCK_LOGO_MIN_PAGE_ROWS` 加上顶部页签条那两行）就换成篆书：
+    // 二十三行全在屏幕上，且与 `wording::logo_lines` 逐格相同；拼音在第一行、字形从第二行起。
     let mut tall = state();
-    let block = mark_rows_at(120, 32, 23, &mut tall);
+    let block = mark_rows_at(120, 34, 23, &mut tall);
     assert_eq!(
         block,
         wording::logo_lines().map(str::to_owned).to_vec(),
-        "120x32 画的就是 `logo_lines` 那二十三行"
+        "120x34 画的就是 `logo_lines` 那二十三行"
     );
-    let frame = buffer(120, 32, &mut state());
-    assert_eq!(frame[(1, 1)].fg, Color::Magenta, "块字的拼音那一行也退一档");
-    assert_eq!(frame[(1, 2)].fg, Color::LightMagenta, "字形第一行是亮的");
+    let frame = buffer(120, 34, &mut state());
+    assert_eq!(frame[(1, 3)].fg, Color::Magenta, "块字的拼音那一行也退一档");
+    assert_eq!(frame[(1, 4)].fg, Color::LightMagenta, "字形第一行是亮的");
 
     // 标记是宽档独占的：100 列拿到的是 28 列宽的左栏
     // （标记塞不进去），60 列干脆没有左栏。
@@ -414,7 +420,7 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
             assert!(!text.contains("调用量"), "{width} 列时没有左栏：{text}");
         } else {
             assert_eq!(
-                frame[(divider, 0)].symbol(),
+                frame[(divider, 2)].symbol(),
                 "┆",
                 "{width} 列时分隔线在第 {divider} 列"
             );
@@ -431,7 +437,7 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
     // 左栏在 80x14 下也画 —— 四行字段不再是地板了，
     // 因为左栏自己的高度就是终端高度减掉顶上那一行留白。
     let smallest = buffer(80, 14, &mut state());
-    assert_eq!(smallest[(28, 0)].symbol(), "┆", "左栏在 80x14 下也画");
+    assert_eq!(smallest[(28, 2)].symbol(), "┆", "左栏在 80x14 下也画");
 }
 
 #[test]
@@ -683,29 +689,29 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
     // 它上面那条横线在第 4 行，提示行在第 9 行。
     assert_eq!(transcript_rows(&rows), 1, "一行转录：{rows:#?}");
     assert!(
-        rows[5].trim().is_empty(),
+        rows[6].trim().is_empty(),
         "输入区的第一行是一份空草稿：{:?}",
-        rows[5]
-    );
-    assert!(
-        rows[6].trim_matches(' ').is_empty(),
-        "它下面还有一行空白：{:?}",
         rows[6]
     );
     assert!(
-        rows[3].contains("询问 ┆") && rows[3].contains("上下文 —"),
+        rows[7].trim_matches(' ').is_empty(),
+        "它下面还有一行空白：{:?}",
+        rows[7]
+    );
+    assert!(
+        rows[4].contains("询问 ┆") && rows[4].contains("上下文 —"),
         "在地板上状态行先让出模型：{:?}",
-        rows[3]
+        rows[4]
     );
     assert!(
-        !rows[3].contains("模型"),
+        !rows[4].contains("模型"),
         "模型是第一个让位的字段：{:?}",
-        rows[3]
+        rows[4]
     );
     assert!(
-        !rows[3].contains("claude-sonnet"),
+        !rows[4].contains("claude-sonnet"),
         "这是它丢掉的第一个东西：{:?}",
-        rows[3]
+        rows[4]
     );
     assert!(rows[9].contains("ctrl-d"), "提示行：{:?}", rows[9]);
     assert!(
@@ -1010,7 +1016,8 @@ fn any_mark_on_screen(text: &str) -> bool {
 /// 120x24 装不下篆书（二十三行），所以这里量的总是收起来的那一版。
 fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     let frame = buffer(120, 24, state);
-    (1..=5u16).map(|y| frame[(1, y)].fg).collect()
+    // 身份从顶部页签条与左栏顶上那一行空行之下起（票 15）。
+    (3..=7u16).map(|y| frame[(1, y)].fg).collect()
 }
 
 /// 人眼里看到的整块标记：从一帧上读出的那几行、它预留的整幅宽度。
@@ -1020,7 +1027,11 @@ fn mark_colours(state: &mut TuiState) -> Vec<Color> {
 fn mark_rows_at(width: u16, height: u16, rows: u16, state: &mut TuiState) -> Vec<String> {
     let frame = buffer(width, height, state);
     let width = heng::render::layout::LOGO_WIDTH;
-    (1..=rows).map(|y| cells(&frame, y, 1, 1 + width)).collect()
+    // 左栏的身份从顶部页签条（2 行）与顶上留的那一行空行之下起（票 15）。
+    let top = 3;
+    (top..top + rows)
+        .map(|y| cells(&frame, y, 1, 1 + width))
+        .collect()
 }
 
 /// 120x24 里那版收起来的标记。
@@ -1145,8 +1156,9 @@ fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
     // 屏幕上的那一份：空闲时标记里没有一格是白的；一次运行中，某一帧必然有。
     use heng::render::layout::LOGO_WIDTH;
     let white_cells = |state: &mut TuiState| -> Vec<(u16, u16)> {
-        let frame = buffer(120, 32, state);
-        (1..=23u16)
+        // 篆书这一档从 34 行起（顶部页签条吃掉两行），身份从第 3 行起。
+        let frame = buffer(120, 34, state);
+        (3..3 + 23u16)
             .flat_map(|y| (1..1 + LOGO_WIDTH).map(move |x| (x, y)))
             .filter(|(x, y)| frame[(*x, *y)].fg == Color::White)
             .collect()
@@ -1176,10 +1188,11 @@ fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
     }
     assert!(!seen.is_empty(), "运行一轮里那束光总该扫过标记");
     let (frame, first) = &seen[0];
-    // 屏幕坐标换成标记自己的格：左栏在 x=1 处居中（120 列宽档），身份从 y=1 起。
+    // 屏幕坐标换成标记自己的格：左栏在 x=1 处居中（120 列宽档），身份从 y=3 起
+    // （顶部页签条两行 + 顶上那一行空行）。
     let progress: Vec<i64> = first
         .iter()
-        .map(|(x, y)| sweep_progress((x - 1) as usize, (y - 1) as usize, 38, 23))
+        .map(|(x, y)| sweep_progress((x - 1) as usize, (y - 3) as usize, 38, 23))
         .collect();
     assert!(
         progress.iter().all(|s| *s < 12),
@@ -1558,18 +1571,18 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // 以及外壳让出的转录行数（spec §1–§2）。
     let cases = [
         // 宽、高、左栏档位、身份、状态行上有没有模型、转录行数
-        // 输入区的地板是三行，所以每个档位给转录 `h - 6 - 3` —— 那 6
-        // 行里含主列页签条的两行（`.scratch/trace-in-main/spec.md` §1）。
+        // 输入区的地板是三行，所以每个档位给转录 `h - 2 - 6 - 3` —— 那 2 行是顶部页签条
+        // （票 15），6 行里含主列页签条的两行（`.scratch/trace-in-main/spec.md` §1）。
         (40u16, 10u16, None, "", false, 1usize),
-        (40, 24, None, "", false, 15),
-        (60, 24, None, "", true, 15),
+        (40, 24, None, "", false, 13),
+        (60, 24, None, "", true, 13),
         // 80 列下状态行放不下「模型 + 档位」那一格了（2026-10-08：状态行多了一段档位，
         // `.scratch/model-switching/spec.md` §11），于是它在 100 列才回来。
-        (80, 14, Some(28u16), "heng", false, 5),
-        (80, 24, Some(28), "heng", false, 15),
-        (100, 24, Some(28), "heng", true, 15),
-        (120, 24, Some(40), "mark", true, 15),
-        (174, 50, Some(40), "mark", true, 41),
+        (80, 14, Some(28u16), "heng", false, 4),
+        (80, 24, Some(28), "heng", false, 13),
+        (100, 24, Some(28), "heng", true, 13),
+        (120, 24, Some(40), "mark", true, 13),
+        (174, 50, Some(40), "mark", true, 39),
     ];
     for (width, height, tier, identity, model, rows_expected) in cases {
         let rows = screen(width, height, &mut state());
@@ -1601,21 +1614,27 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         // 转录下面紧贴的是状态行（它上方那条线已经离开，
         // `.scratch/tui-chrome/spec.md` §2），再下一行才是输入区
         // 上面那条横线。
+        let top = if height < 20 {
+            TRANSCRIPT_TOP - 1
+        } else {
+            TRANSCRIPT_TOP
+        };
         assert!(
-            rows[TRANSCRIPT_TOP + rows_expected].contains("询问 ┆"),
+            rows[top + rows_expected].contains("询问 ┆"),
             "{width}x{height} 转录正下方是状态行：{:?}",
-            rows[rows_expected]
+            rows[top + rows_expected]
         );
         assert!(
-            rows[TRANSCRIPT_TOP + rows_expected + 1].ends_with('┄'),
+            rows[top + rows_expected + 1].ends_with('┄'),
             "{width}x{height} 把那条横线画在状态行正下方：{:?}",
-            rows[rows_expected + 1]
+            rows[top + rows_expected + 1]
         );
         match tier {
             Some(tier) => {
                 let frame = buffer(width, height, &mut state());
+                let top = if height < 20 { 1 } else { 2 };
                 assert_eq!(
-                    frame[(tier, 0)].symbol(),
+                    frame[(tier, top)].symbol(),
                     "┆",
                     "{width}x{height} 把分隔线画在第 {tier} 列"
                 );
@@ -1656,13 +1675,13 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     use ratatui::layout::Rect;
 
     let cases = [
-        // 高度、身份、页区行数
-        (32u16, SidebarKind::Mark, 5u16), // 31 − 23 − 3：篆书与它那 5 行页区地板刚好都够
-        (31, SidebarKind::MarkCompact, 22), // 30 − 5 − 3：篆书让位，页区几乎全拿回来
-        (24, SidebarKind::MarkCompact, 15), // 23 − 5 − 3
-        (12, SidebarKind::MarkCompact, 3), // 11 − 5 − 3，正好是地板
-        (11, SidebarKind::Text, 6),       // 10 − 1 − 3：收起来那版让位换回页高
-        (10, SidebarKind::Text, 5),       // 9 − 1 − 3
+        // 高度、身份、页区行数（顶部页签条在 < 20 行时只占一行，> = 20 时两行）
+        (34u16, SidebarKind::Mark, 5u16), // 31 − 23 − 3：篆书与它那 5 行页区地板刚好都够
+        (33, SidebarKind::MarkCompact, 22), // 30 − 5 − 3：篆书让位，页区几乎全拿回来
+        (24, SidebarKind::MarkCompact, 13), // 21 − 5 − 3
+        (12, SidebarKind::Text, 6),       // 10 − 1 − 3：收起来那版让位换回页高
+        (11, SidebarKind::Text, 5),       // 9 − 1 − 3
+        (10, SidebarKind::Text, 4),       // 8 − 1 − 3
     ];
     for (height, kind, page_rows) in cases {
         let mut state = state();
@@ -1712,11 +1731,11 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
     use ratatui::layout::Rect;
 
     let cases = [
-        // 宽、高、身份、页区行数
-        (120u16, 24u16, SidebarKind::MarkCompact, 15u16), // 23 − 5 − 3
-        (120, 32, SidebarKind::Mark, 5),                  // 31 − 23 − 3：篆书这一档的页区地板
-        (80, 24, SidebarKind::Text, 19),                  // 23 − 1 − 3
-        (80, 10, SidebarKind::Text, 5),                   // 9 − 1 − 3
+        // 宽、高、身份、页区行数（顶部页签条让出两行或一行）
+        (120u16, 24u16, SidebarKind::MarkCompact, 13u16), // 21 − 5 − 3
+        (120, 34, SidebarKind::Mark, 5),                  // 31 − 23 − 3：篆书这一档的页区地板
+        (80, 24, SidebarKind::Text, 17),                  // 21 − 1 − 3
+        (80, 10, SidebarKind::Text, 4),                   // 8 − 1 − 3
     ];
     for (width, height, kind, page_rows) in cases {
         let regions = plan(Rect::new(0, 0, width, height), 1, true, false);
@@ -2917,7 +2936,7 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
     // 行，所以一行是标记、十四行是格子 —— 单元 16 到 29，自上
     // 而下。所以偏移 1 是单元 16，偏移 5 是单元 20。每一个都在
     // 全新状态里点，因为跳转会移动视口 —— 也移动格子的窗口。
-    for (offset, unit) in [(1usize, 16u64), (5, 20)] {
+    for (offset, unit) in [(1usize, 18u64), (5, 22)] {
         let mut state = TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None);
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
@@ -3424,7 +3443,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let mut state = state();
     let empty = screen(80, 24, &mut state);
     let rows = transcript_rows(&empty);
-    assert_eq!(rows, 15, "输入区三行给转录留下十五行：{empty:#?}");
+    assert_eq!(rows, 13, "输入区三行给转录留下十三行：{empty:#?}");
     // 转录下面依次是状态行与输入区上方那条横线，所以输入区
     // 从转录底往下数第三行开始。
     let input = TRANSCRIPT_TOP + rows + 2;
@@ -3446,7 +3465,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
-    assert_eq!(rows, 15, "三行草稿在地板之内，所以几何不动：{three:#?}");
+    assert_eq!(rows, 13, "三行草稿在地板之内，所以几何不动：{three:#?}");
     let input = TRANSCRIPT_TOP + rows + 2;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
     assert!(
@@ -3471,7 +3490,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let five = screen(80, 24, &mut state);
     assert_eq!(
         transcript_rows(&five),
-        13,
+        11,
         "超地板两行让转录少两行：{five:#?}"
     );
     assert!(
@@ -3522,9 +3541,12 @@ fn turn_ended(seq: u64) -> heng::render::RenderEvent {
 /// 身份那一行，或者什么都没有 —— 所以数字段的测试要的是这一页
 /// 而不是某个一旦阶梯挪动就得重算的行号。
 fn sidebar_page(rows: &[String]) -> usize {
+    // 真正的页签条在顶部页签条（票 15）之下：那一行也是屏幕上以 `┄` 起头的行，先跳过
+    // 顶部条的两行，免得把它的虚线当成页签条的上横线。
     let mut rules = rows
         .iter()
         .enumerate()
+        .skip(2)
         .filter(|(_, row)| row.starts_with('┄'))
         .map(|(y, _)| y);
     rules.next().expect("页签条的上横线");
@@ -3792,7 +3814,7 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
-    assert_eq!(transcript_rows(&rows), 8, "草稿吃掉的是转录的行：{rows:#?}");
+    assert_eq!(transcript_rows(&rows), 6, "草稿吃掉的是转录的行：{rows:#?}");
     assert!(text.contains("上下文"), "左栏保住它的读数：{text}");
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
@@ -4513,11 +4535,11 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
         .count();
     let overflow = rows.last().cloned().unwrap_or_default();
     assert_eq!(
-        shown, 13,
-        "15 行的页区里进度行拿一行、溢出行拿一行，条目十四行里画得下十三行：{rows:#?}"
+        shown, 11,
+        "13 行的页区里进度行拿一行、溢出行拿一行，条目十四行里画得下十一行：{rows:#?}"
     );
     assert!(
-        overflow.contains("＋17 项"),
+        overflow.contains("＋19 项"),
         "末行说的是**一条都没露过面**的那几条（这一条露过，所以不算）：{overflow}"
     );
 }
@@ -13240,9 +13262,11 @@ fn leaving_the_filter_puts_the_viewport_back() {
         ));
     }
     open_trace_tab(&mut state, 120, 24);
-    // 让视口离开底部：贴着底时「回到原处」与「回到底部」看不出区别。
-    state.key(Key::PageUp);
-    state.key(Key::PageUp);
+    // 让视口离开底部：贴着底时「回到原处」与「回到底部」看不出区别。票 15 之后页面矮了
+    // 两行，多翻几页才到顶。
+    for _ in 0..6 {
+        state.key(Key::PageUp);
+    }
     let before = trace_page(&mut state, 120, 24);
     assert!(
         before.iter().any(|row| row.contains("第 0 句话")),
@@ -13689,8 +13713,8 @@ fn a_folded_turn_keeps_what_arrives_out_of_the_ledger() {
 // `tests/render_timeline.rs` 里逐条钉着。
 // ---------------------------------------------------------------------------
 
-/// 横带在屏幕上的第一行：主列页签条那两行之下。
-const BAND_TOP: u16 = 2;
+/// 横带在屏幕上的第一行：顶部页签条两行 + 主列页签条那两行之下。
+const BAND_TOP: u16 = 4;
 
 /// 横带某一行在屏幕上的那一行号（0 = 刻度、1 = 模型泳道、2 = 工具泳道）。
 fn band_row(index: u16) -> u16 {
@@ -13822,7 +13846,7 @@ fn the_trace_page_pins_a_three_row_band_under_the_tabs() {
         "账本从横带下面起"
     );
     assert!(
-        rows[usize::from(band_row(3))].starts_with(&wording::clock(base)),
+        rows[usize::from(band_row(3))].chars().nth(2) == Some(':'),
         "账本第一行仍是它自己的时刻戳：{:?}",
         rows[usize::from(band_row(3))]
     );
@@ -13837,8 +13861,11 @@ fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
         Some(layout::BAND_ROWS),
         "轨迹页顶上留着三行"
     );
-    assert_eq!(panes.transcript.height, 15, "对话页的转录仍是 15 行");
-    assert_eq!(panes.trace.height, 12, "轨迹页的可视从 15 行变成 12 行");
+    assert_eq!(
+        panes.transcript.height, 13,
+        "对话页的转录在顶部条之后是 13 行"
+    );
+    assert_eq!(panes.trace.height, 10, "轨迹页的可视从 13 行变成 10 行");
     assert_eq!(
         panes.trace.y,
         panes.transcript.y + layout::BAND_ROWS,
@@ -14864,5 +14891,142 @@ fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
         cells(&frame, 2, divide, divide + 1),
         "┆",
         "右栏还开着 —— Esc 退的是键盘，不是栏"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 顶部页签条（票 15）
+// ---------------------------------------------------------------------------
+
+/// 把一份宿主表与它的标题推进状态里：顺序就是 `ids` 的顺序（票 15 的排序判据）。
+fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
+    use heng::events::SessionId;
+    use heng::render::ConsoleRequest;
+    use heng::session::listing::{SessionListing, SessionMark, SessionRow};
+    let rows: Vec<SessionRow> = entries
+        .iter()
+        .map(|(id, title)| SessionRow {
+            id: SessionId::new(*id),
+            cwd: Some("/x/heng".to_owned()),
+            title: (*title).to_owned(),
+            group_key: "heng".to_owned(),
+            group: "heng".to_owned(),
+            written: None,
+            broken: false,
+            missing_cwd: false,
+            foreground: false,
+            mark: SessionMark::Idle,
+        })
+        .collect();
+    let ids: Vec<SessionId> = entries.iter().map(|(id, _)| SessionId::new(*id)).collect();
+    state.request(ConsoleRequest::Sessions {
+        listing: SessionListing {
+            rows,
+            total: entries.len(),
+            unreadable: false,
+        },
+    });
+    state.request(ConsoleRequest::Hosted { ids });
+}
+
+/// 120×40：第 0 行是标签、第 1 行是一条横跨整屏的虚线；左栏与右栏都从第 2 行起。
+#[test]
+fn the_top_tabs_strip_lists_every_hosted_session() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(
+        &mut state,
+        &[
+            ("01J8ZQ4K7M", "会话 A"),
+            ("s-b", "会话 B"),
+            ("s-c", "会话 C"),
+        ],
+    );
+    let frame = buffer(120, 40, &mut state);
+    let top = row_text(&frame, 0, 120);
+    for title in ["会话 A", "会话 B", "会话 C"] {
+        assert!(top.contains(title), "标签上写着 {title}：{top}");
+    }
+    assert!(top.contains('◆'), "焦点带 `◆`：{top}");
+    assert!(
+        top.contains("平铺") && top.contains("右栏"),
+        "右端两个按钮：{top}"
+    );
+    assert_eq!(
+        row_text(&frame, 1, 120).trim_end_matches(' '),
+        "┄".repeat(120),
+        "第 1 行是一条横跨整屏的虚线"
+    );
+    // 三块都从第 2 行起：两条竖分隔线都在第 2 行上。
+    assert_eq!(frame[(40, 2)].symbol(), "┆", "左栏分隔线从顶部条之下起");
+    assert_eq!(frame[(91, 2)].symbol(), "┆", "右栏分隔线也从第 2 行起");
+}
+
+/// 状态类不上标签：同一个会话在跑，标签一个字都不变（等人类由状态行承担）。
+#[test]
+fn the_top_tabs_never_show_a_sessions_state() {
+    use heng::render::ConsoleRequest;
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A"), ("s-b", "会话 B")]);
+    let before = row_text(&buffer(120, 40, &mut state), 0, 120);
+    state.request(ConsoleRequest::SessionState {
+        id: state.front().clone(),
+        state: heng::session::host::SessionState::RunningTurn,
+    });
+    let after = row_text(&buffer(120, 40, &mut state), 0, 120);
+    assert_eq!(before, after, "跑起来不往标签上加任何状态字形");
+    assert!(!after.contains("跑"), "标签里没有状态字：{after}");
+    assert!(!after.contains("等"), "标签里没有等人类：{after}");
+}
+
+/// 放不下的标签从尾部收成 `+N`，靠右端；`+N` 不可点。
+#[test]
+fn the_top_tabs_fold_the_overflow_into_a_plus_n() {
+    let mut state = state_with_roster(&["kimi"]);
+    let ids: Vec<String> = (0..8).map(|index| format!("s-{index}")).collect();
+    let mut entries: Vec<(&str, &str)> = vec![("01J8ZQ4K7M", "会话零号")];
+    entries.extend(ids.iter().enumerate().map(|(index, id)| {
+        (
+            id.as_str(),
+            if index % 2 == 0 {
+                "会话甲甲"
+            } else {
+                "会话乙乙"
+            },
+        )
+    }));
+    host_sessions(&mut state, &entries);
+    let frame = buffer(120, 40, &mut state);
+    let top = row_text(&frame, 0, 120);
+    assert!(top.contains("+"), "溢出收成 `+N`：{top}");
+    assert!(top.contains("会话零号"), "排在前面的标签留着：{top}");
+
+    // `+N` 不可点：点它前后屏幕完全一样（它没有进命中表）。
+    let x = top.find('+').expect("`+N` 在行里") as u16;
+    let before = screen(120, 40, &mut state);
+    click(&mut state, x, 0);
+    let after = screen(120, 40, &mut state);
+    assert_eq!(before, after, "`+N` 点了什么都不发生");
+}
+
+/// 屏高 < 20 时顶部条收成一行、没有那条虚线；到 20 行恢复两行。
+#[test]
+fn the_top_tabs_shrink_to_one_row_on_a_short_screen() {
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A")]);
+    let short = screen(120, 19, &mut state);
+    assert!(short[0].contains("会话 A"), "标签还在第 0 行：{short:#?}");
+    assert!(
+        !short[1].starts_with('┄'),
+        "矮屏上不画顶部条那条虚线：{:?}",
+        short[1]
+    );
+
+    let tall = screen(120, 20, &mut state);
+    assert!(tall[0].contains("会话 A"), "标签还在第 0 行：{tall:#?}");
+    assert!(
+        tall[1].starts_with('┄'),
+        "20 行起是两行顶部条：{:?}",
+        tall[1]
     );
 }

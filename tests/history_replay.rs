@@ -278,7 +278,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。它只在对话页上画，所以这一列从转录的
 /// 第一行起量；主列页签条自己那条线也画到屏幕右缘，量进去就什么都不剩
 /// （`.scratch/trace-in-main/spec.md` §3）。
-const TRANSCRIPT_TOP: u16 = 2;
+const TRANSCRIPT_TOP: u16 = 4;
 
 fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
@@ -379,9 +379,11 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
 /// 这一页从页签条下面开始 —— 它下横线的后一行 —— 而字段是
 /// 那些行里属于左栏自己的那一半，于是每个字段都以分隔线那一列收尾。
 fn panel_field(rows: &[String], offset: usize) -> String {
+    // 顶部页签条那一行也以 `┄` 起头（票 15），先跳过它那两行。
     let mut rules = rows
         .iter()
         .enumerate()
+        .skip(2)
         .filter(|(_, row)| row.starts_with('┄'))
         .map(|(y, _)| y);
     rules.next().expect("页签条的上横线");

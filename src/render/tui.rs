@@ -2538,6 +2538,10 @@ pub struct TuiState {
     /// 两层 —— 这一位说偏好，[`layout::sidebar_tier`] 说可行性 —— 两者相乘才是屏幕上真的有
     /// 的那一栏。
     sidebar_wanted: bool,
+    /// 平铺集合（票 17、18）：一个显式的有序集合，屏幕上的格按它排。
+    ///
+    /// 票 15 先在顶部页签条上用它画集合成员标记；格本身的几何由票 17 接。
+    tiles: Vec<crate::events::SessionId>,
     /// 用户想不想看见**右栏**（票 13 起默认开，票 14 的 `Ctrl-V` 切换）。
     ///
     /// 与 [`TuiState::sidebar_wanted`] 同一档的纯视图意愿：只活在这一次进程里，不落配置、
@@ -3144,6 +3148,15 @@ enum HitAction {
     SwitchEffort,
     /// 点详情覆盖层标签条上的一个标签：切到那一面（票 13 第 3 条）。
     DetailFace(usize),
+    /// 点顶部页签条上的一个标签（宿主表下标）：切前台（票 15）。
+    ///
+    /// 与 [`HitAction::SessionRow`] 同一条理由存下标：命中表只在画出来那一帧有效，
+    /// 而 `HitAction` 要保持 `Copy`。
+    TopSession(usize),
+    /// 点顶部条右端的平铺按钮（动作由票 17 接）。
+    ToggleTiles,
+    /// 点顶部条右端的右栏开关：与 `Ctrl-V` 同一条动作（票 15）。
+    ToggleRail,
     /// 点轨迹页上的一行**折叠把手**（组头那一行，或者一行折行）：折 / 展它代表的那一块
     /// （票 21 第 5 条）。
     ///
@@ -3922,6 +3935,7 @@ impl TuiState {
             // 右栏默认开（冻结项 6）：轨迹住在它里面，关掉只是收起来，不是不画轨迹。
             // 这里留关，真进程在 `Tui::run` 里打开 —— 集成测试的既有帧因此留在旧基线上。
             right_wanted: false,
+            tiles: Vec::new(),
             picker: None,
             notice: None,
             last_session_click: None,
@@ -3966,6 +3980,49 @@ impl TuiState {
     /// 当前前台是哪一个会话。
     pub fn front(&self) -> &crate::events::SessionId {
         &self.front
+    }
+
+    /// 顶部页签条这一帧要画的标签：`(文本, 宿主表下标, 是不是焦点)`，以及被收起来的数量。
+    ///
+    /// 顺序 = **宿主表装载顺序**（票 15 决定 39），稳定；可用宽度放不下时从**尾部**收，
+    /// 收起来的那一段由 [`wording::top_more`] 靠右端写出来。判据是这一段文字自己的显示
+    /// 列数，不是一个估算。
+    fn top_tab_entries(&self, room: u16) -> (Vec<(String, usize, bool)>, usize) {
+        let mut entries: Vec<(String, usize, bool)> = Vec::new();
+        let mut used = 0usize;
+        for (index, id) in self.sessions.hosted.iter().enumerate() {
+            let title = self.hosted_title(id);
+            let focused = id == &self.front;
+            let tiled = self.tiles.contains(id);
+            let text = wording::top_tab(focused, tiled, &fit_title(&title, TOP_TAB_TITLE_MAX));
+            let width = text_columns(&text);
+            if used + width + 1 > room as usize {
+                break;
+            }
+            used += width + 1;
+            entries.push((text, index, focused));
+        }
+        let hidden = self.sessions.hosted.len().saturating_sub(entries.len());
+        if hidden > 0 {
+            // `+N` 也得放得下：放不下就再让一个标签出去。
+            let more = text_columns(&wording::top_more(hidden));
+            if used + more > room as usize
+                && let Some((text, ..)) = entries.pop()
+            {
+                used = used.saturating_sub(text_columns(&text) + 1);
+            }
+        }
+        (entries, hidden)
+    }
+
+    /// 一个宿主表会话在顶部标签上写什么：与左栏**同一份**标题；列表里还没扫到它时退回 id。
+    fn hosted_title(&self, id: &crate::events::SessionId) -> String {
+        self.sessions
+            .rows
+            .iter()
+            .find(|row| &row.id == id)
+            .map(|row| row.title.clone())
+            .unwrap_or_else(|| id.as_str().to_owned())
     }
 
     /// 右栏想不想看见（票 13 起默认开，票 14 的 `Ctrl-V` 走这里）。
@@ -4828,6 +4885,19 @@ impl TuiState {
                     }
                 }
             }
+            // 顶部页签条（票 15）：点标签 = 切前台。能不能切（cwd 还在不在、流坏没坏）
+            // 是循环那一侧的判断，渲染层只上报「有人点了这一个」。
+            Some(HitAction::TopSession(index)) => {
+                if let Some(id) = self.sessions.hosted.get(index).cloned()
+                    && id != self.front
+                {
+                    self.events.push(FrontEndEvent::OpenSession { id });
+                }
+            }
+            // 右端那个开关与 `Ctrl-V` 是同一条动作（票 15）。平铺按钮的动作由票 17 接：
+            // 这一版只画出来，点它什么都不做。
+            Some(HitAction::ToggleRail) => self.toggle_right_rail(),
+            Some(HitAction::ToggleTiles) => {}
             Some(HitAction::SwitchMainTab(tab)) => self.set_main_tab(tab),
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
@@ -7047,7 +7117,7 @@ impl TuiState {
                     self.close_blocked = None;
                 }
                 self.light.remove(&id);
-                self.sessions.hosted.remove(&id);
+                self.sessions.hosted.retain(|held| held != &id);
                 self.sessions.host_empty = empty;
                 // 空宿主：输入区禁用（提交时循环回一句）。
                 self.muted = empty;
@@ -7063,7 +7133,8 @@ impl TuiState {
             }
             // 宿主表里装着哪几个（票 29）：会话页那三档标题色。
             ConsoleRequest::Hosted { ids } => {
-                self.sessions.hosted = ids.into_iter().collect();
+                // 顺序 = 宿主表的装载顺序（票 15：顶部页签条按它排，稳定）。
+                self.sessions.hosted = ids;
                 self.dirty = true;
             }
             // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
@@ -8593,6 +8664,7 @@ fn draw_shell(
     state: &mut TuiState,
     area: Rect,
 ) {
+    draw_top_tabs(frame, panes, state);
     draw_divide(frame, panes, area);
     draw_right_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
@@ -8603,6 +8675,96 @@ fn draw_shell(
     let (left, right) = (panes.main.x, panes.main.right());
     for y in [panes.input.y - 1, panes.hints.y - 1] {
         paint_rule(frame, y, left, right);
+    }
+}
+
+/// 顶部页签条（票 15）：横跨整屏的一行标签 + 它下面那条虚线。
+///
+/// 只写**标题、焦点标记、集合成员标记** —— 状态类一个都不上标签。右端是两个按钮：平铺
+/// （票 17 接动作）与右栏（与 `Ctrl-V` 同一条）。放不下的标签从尾部收成 `+N`，靠右端、
+/// **不可点**。屏高 < 20 时只画这一行、没有那条虚线。
+fn draw_top_tabs(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let area = panes.top_tabs;
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    // 右端那两个按钮先占位：标签区在它们左边。
+    let tiling = wording::TOP_TILING;
+    let rail = wording::TOP_RAIL;
+    let gap = 2u16;
+    let rail_width = text_columns(rail) as u16;
+    let rail_x = area.right().saturating_sub(rail_width + 1);
+    let tiling_width = text_columns(tiling) as u16;
+    let tiling_x = rail_x.saturating_sub(tiling_width + gap);
+    paint_text(
+        frame,
+        tiling_x,
+        area.y,
+        tiling,
+        Style::default().fg(palette::MUTED),
+    );
+    state.regions.push(
+        Rect::new(tiling_x, area.y, tiling_width, 1),
+        HitAction::ToggleTiles,
+    );
+    paint_text(
+        frame,
+        rail_x,
+        area.y,
+        rail,
+        Style::default().fg(palette::MUTED),
+    );
+    state.regions.push(
+        Rect::new(rail_x, area.y, rail_width, 1),
+        HitAction::ToggleRail,
+    );
+
+    // 标签：左端留一格空气，右端停在平铺按钮之前一格。
+    let room = tiling_x.saturating_sub(area.x + 2);
+    let (entries, hidden) = state.top_tab_entries(room);
+    let mut x = area.x + 1;
+    for (text, index, focused) in entries {
+        let width = text_columns(&text) as u16;
+        let style = if focused {
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette::PLAIN)
+        };
+        paint_text(frame, x, area.y, &text, style);
+        state
+            .regions
+            .push(Rect::new(x, area.y, width, 1), HitAction::TopSession(index));
+        x = x.saturating_add(width + 1);
+    }
+    if hidden > 0 {
+        // `+N` 不可点：它不进命中表 —— 收起来的那几个在左栏会话页里找得到。
+        paint_text(
+            frame,
+            x,
+            area.y,
+            &wording::top_more(hidden),
+            Style::default().fg(palette::MUTED),
+        );
+    }
+    if panes.top_tabs_rows >= 2 {
+        paint_rule(frame, area.y + 1, area.x, area.right());
+    }
+}
+
+/// 从 `(x, y)` 起按显示列写一段文字。
+fn paint_text(frame: &mut ratatui::Frame, x: u16, y: u16, text: &str, style: Style) {
+    let buffer = frame.buffer_mut();
+    let mut column = x;
+    for symbol in text.chars() {
+        if column >= buffer.area.right() {
+            break;
+        }
+        buffer[(column, y)]
+            .set_symbol(&symbol.to_string())
+            .set_style(style);
+        column += char_columns(symbol) as u16;
     }
 }
 
@@ -8628,8 +8790,9 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
     // 竖虚线跟左栏同高：画到屏幕最后一行（`.scratch/tui-feedback/spec.md` §2 —— 提示行回到
-    // 主列之后，左栏不再为它让出底下那一行）。
-    for y in area.y..area.bottom() {
+    // 主列之后，左栏不再为它让出底下那一行）。它从**顶部页签条之下**起（票 15）—— 顶部条
+    // 横跨整屏，那上面没有两条栏的分界。
+    for y in panes.main.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
@@ -8644,7 +8807,7 @@ fn draw_right_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: 
     };
     let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
-    for y in area.y..area.bottom() {
+    for y in panes.main.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
@@ -9673,7 +9836,7 @@ struct SessionsPage {
     ///
     /// 它是**渲染器自己的轻状态**，与 `light` 同一格 —— 数据经 `ConsoleRequest::Hosted` 推过来，
     /// 渲染层自己不问宿主表要什么在场。
-    hosted: std::collections::HashSet<crate::events::SessionId>,
+    hosted: Vec<crate::events::SessionId>,
     /// 过滤态；`None` 就是没在过滤（`.scratch/session-tab/spec.md` §3、决策票 10）。
     filter: Option<SessionsFilter>,
     /// 这一页**现在要画**的那些行：没过滤时就是 `rows`，过滤时只剩命中的那些（且不钉顶）。
@@ -10150,6 +10313,9 @@ const GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500
 /// 复制与打开共用它 —— 两类回执是同一件事的两种，没有理由各走一条寿命
 /// （`.scratch/clickable-links/spec.md` §4）。
 const RECEIPT_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 顶部页签条上一个标签的标题最多占多少列（票 15）：再长就按左栏那套 `fit_title` 截断。
+const TOP_TAB_TITLE_MAX: usize = 24;
 
 /// 一次复制留下的那句话，还在寿命内的话：`None` 就是「这一帧不该有回执」。
 ///

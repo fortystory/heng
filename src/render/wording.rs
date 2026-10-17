@@ -1783,6 +1783,32 @@ pub fn trace_status_line_with(
     hint_row(receipt, &TRACE_HINTS, exit_hint(busy, raised), width)
 }
 
+/// 顶部页签条上一个会话标签（票 15）：`[◆ 标题]` / `[▪ 标题]` / `[ 标题]`。
+///
+/// 两种标记：**焦点**用 `◆`、**平铺集合成员**用 `▪`。状态类（忙 / 闲 / 等人类、未读、
+/// 装载色）**一个都不上标签** —— 等人类由状态行的全局读数承担（票 15 决定 37）。
+pub fn top_tab(focused: bool, tiled: bool, title: &str) -> String {
+    let mark = if focused {
+        "◆"
+    } else if tiled {
+        "▪"
+    } else {
+        " "
+    };
+    format!("[{mark} {title}]")
+}
+
+/// 顶部页签条放不下时收在右端的那一段：`+N`，不可点（票 15）。
+pub fn top_more(hidden: usize) -> String {
+    format!("+{hidden}")
+}
+
+/// 顶部条右端的平铺按钮（动作由票 17 接上）。
+pub const TOP_TILING: &str = "▤ 平铺";
+
+/// 顶部条右端的右栏开关（动作与 `Ctrl-V` 同一条）。
+pub const TOP_RAIL: &str = "▥ 右栏";
+
 /// 右栏在这个宽度下放不下（票 14）：`Ctrl-V` 只回一句，布局一个字节都不动。
 ///
 /// 与「按了没反应」区分开 —— 那会让人以为是按键没送到。
