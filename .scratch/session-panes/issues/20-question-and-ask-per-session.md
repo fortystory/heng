@@ -1,7 +1,7 @@
 # 20: 问卷与权限门每会话
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 19
 
