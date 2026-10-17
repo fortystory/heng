@@ -13,8 +13,8 @@ Blocked by: 19
 
 ## 验收
 
-- [ ] `tile_limit = 2` 时集合上限 2（第 3 个被拒并提示「最多 2 个」）—— **留给票 19**：
-  回执与集合上限在那一票里读 `config.tile_limit`，本票只把配置值交出去。
+- [x] `tile_limit = 2` 时集合上限 2（第 3 个被拒并提示「最多 2 个」）—— 回执与上限在票 19 /
+  25 的接线里读 `tile_limit`；`the_tile_limit_caps_the_set_and_puts_the_limit_in_the_receipt` 钉住。
 - [x] `tile_limit = 1` / `5` / 非整数 → 启动失败并指名该项。
 - [x] `sidebar = "never"` 启动时左栏不画；`"always"` 在 herdr 里也画。
 - [x] `sidebar = "sometimes"` → 启动失败并列出合法字面量。

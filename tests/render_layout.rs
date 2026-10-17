@@ -11480,3 +11480,17 @@ fn the_tab_strip_reports_the_hidden_sessions_in_its_plus_count() {
         "N 与隐藏数一致（隐藏 {hidden}）：{top:?}"
     );
 }
+
+/// `[ui] tile_limit = 2`：集合上限 2，第三个装载进来被拒并提示（票 19 的满员回执读票 26 的配置）。
+#[test]
+fn the_tile_limit_caps_the_set_and_puts_the_limit_in_the_receipt() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_tile_limit(2);
+    host_sessions(
+        &mut state,
+        &[("01J8ZQ4K7M", "甲"), ("s-b", "乙"), ("s-c", "丙")],
+    );
+    assert_eq!(state.tiles().len(), 2, "上限 2：第三个不进集合");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("平铺最多 2 个"), "回执点名上限：{text}");
+}
