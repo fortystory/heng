@@ -326,15 +326,15 @@ impl Transcript {
         // hook，所以先到的任何别的东西都意味着 hook 不来了 —— 而一个此后很久才冒出来的
         // hook 绝不能钉到一次它从没批注过的调用上。只有下面那条匹配结果的臂会重新武装它。
         let expected_hook = std::mem::take(&mut self.awaiting_hook);
-        if let EventPayload::HookExecuted { point, outcome, .. } = &event.payload {
-            if point == hook_format::POINT_POST {
-                let mut blocks = self.flush();
-                if expected_hook || !blocks.is_empty() {
-                    blocks.push(Block::ToolFeedback {
-                        outcome: outcome.clone(),
-                    });
-                    return blocks;
-                }
+        if let EventPayload::HookExecuted { point, outcome, .. } = &event.payload
+            && point == hook_format::POINT_POST
+        {
+            let mut blocks = self.flush();
+            if expected_hook || !blocks.is_empty() {
+                blocks.push(Block::ToolFeedback {
+                    outcome: outcome.clone(),
+                });
+                return blocks;
             }
         }
 

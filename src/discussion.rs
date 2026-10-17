@@ -264,10 +264,11 @@ fn debate_rounds(events: &[Event]) -> Vec<(u32, RoundMode)> {
     let mut seen = BTreeSet::new();
     let mut rounds = Vec::new();
     for event in events {
-        if let EventPayload::RoundStarted { round, mode } = &event.payload {
-            if *mode != RoundMode::Synthesis && seen.insert(*round) {
-                rounds.push((*round, *mode));
-            }
+        if let EventPayload::RoundStarted { round, mode } = &event.payload
+            && *mode != RoundMode::Synthesis
+            && seen.insert(*round)
+        {
+            rounds.push((*round, *mode));
         }
     }
     rounds

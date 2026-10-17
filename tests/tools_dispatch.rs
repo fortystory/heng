@@ -109,15 +109,14 @@ impl Fixture {
                 if outcome.is_ok() {
                     read_set.record_all(allowed.read_paths.iter().cloned());
                 }
-                if outcome.invalidated_reads {
-                    if let Some(path) = outcome
+                if outcome.invalidated_reads
+                    && let Some(path) = outcome
                         .result
                         .as_ref()
                         .err()
                         .and_then(heng::tools::ToolError::invalidated_path)
-                    {
-                        read_set.invalidate(path);
-                    }
+                {
+                    read_set.invalidate(path);
                 }
                 outcome
             }

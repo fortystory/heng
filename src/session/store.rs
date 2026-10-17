@@ -293,10 +293,11 @@ pub(super) fn modified(path: &Path) -> SystemTime {
 /// 祖先保持原样。模式由 `mkdir` 本身施加，所以没有任何目录曾经短暂地世界可读。`0700` 没有组位
 /// 或其他位可供 `umask 022` 放宽（spec §11、§20）；在不存在 unix 模式的地方，这次调用是空操作。
 fn create_private_dirs(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            create_private_dirs(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        create_private_dirs(parent)?;
     }
     create_private_dir(path).map(|_| ())
 }

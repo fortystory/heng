@@ -1882,10 +1882,10 @@ fn hint_row(receipt: Option<&str>, hints: &[&str], exit: &str, width: u16) -> St
         (candidate.cell_width() + SEP.cell_width() + exit_columns <= width).then_some(candidate)
     };
     let mut chosen = String::new();
-    if let Some(receipt) = receipt {
-        if let Some(candidate) = fits(&chosen, receipt) {
-            chosen = candidate;
-        }
+    if let Some(receipt) = receipt
+        && let Some(candidate) = fits(&chosen, receipt)
+    {
+        chosen = candidate;
     }
     for hint in hints {
         match fits(&chosen, hint) {

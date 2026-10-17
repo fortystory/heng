@@ -10265,11 +10265,6 @@ fn band_row(index: u16) -> u16 {
     BAND_TOP + index
 }
 
-/// 横轴第一格在屏幕上的列（120 列终端）：主列左缘 + 行首九列时刻 + 泳道标签五列。
-fn axis_left_at_120() -> u16 {
-    MAIN_LEFT_AT_120 + heng::render::layout::STAMP_COLUMNS + heng::render::timeline::LABEL_COLUMNS
-}
-
 /// 一条带固定时刻的 `TurnStarted`。
 fn turn_at(
     seq: u64,

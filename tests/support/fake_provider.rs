@@ -135,16 +135,15 @@ impl Provider for FakeProvider {
     }
 
     async fn send(&self, request: ChatRequest) -> Result<EventStream, ProviderError> {
-        if let Some(barrier) = &self.inner.rendezvous {
-            if tokio::time::timeout(RENDEZVOUS_TIMEOUT, barrier.wait())
+        if let Some(barrier) = &self.inner.rendezvous
+            && tokio::time::timeout(RENDEZVOUS_TIMEOUT, barrier.wait())
                 .await
                 .is_err()
-            {
-                panic!(
-                    "FakeProvider: {RENDEZVOUS_TIMEOUT:?} 之内没有别的调用到达，\
+        {
+            panic!(
+                "FakeProvider: {RENDEZVOUS_TIMEOUT:?} 之内没有别的调用到达，\
                      所以这次调用与别的调用并不并发"
-                );
-            }
+            );
         }
         self.inner
             .requests

@@ -359,10 +359,10 @@ async fn a_real_server_declares_prompt_templates_for_the_menu() {
 /// 这一路心跳在跳吗：文件在，而且 mtime 最近动过。
 async fn heartbeat_alive(path: &Path) -> bool {
     for _ in 0..50 {
-        if let Ok(modified) = std::fs::metadata(path).and_then(|meta| meta.modified()) {
-            if modified.elapsed().unwrap_or_default() < Duration::from_secs(2) {
-                return true;
-            }
+        if let Ok(modified) = std::fs::metadata(path).and_then(|meta| meta.modified())
+            && modified.elapsed().unwrap_or_default() < Duration::from_secs(2)
+        {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

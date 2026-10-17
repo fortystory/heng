@@ -393,13 +393,13 @@ fn try_highlight(config: &HighlightConfiguration, source: &str) -> Option<Vec<Ve
                         if index > 0 {
                             lines.push(Vec::new());
                         }
-                        if !part.is_empty() {
-                            if let Some(line) = lines.last_mut() {
-                                line.push(Span {
-                                    text: part.to_owned(),
-                                    class,
-                                });
-                            }
+                        if !part.is_empty()
+                            && let Some(line) = lines.last_mut()
+                        {
+                            line.push(Span {
+                                text: part.to_owned(),
+                                class,
+                            });
                         }
                     }
                 }

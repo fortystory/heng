@@ -287,12 +287,10 @@ fn changed_files(events: &[Event], executor: &ParticipantId) -> Vec<String> {
             output: Some(output),
             ..
         } = &event.payload
+            && let Some(path) = output.strip_prefix(WROTE_PATH_PREFIX)
+            && let Some(path) = path.lines().next().filter(|line| !line.is_empty())
         {
-            if let Some(path) = output.strip_prefix(WROTE_PATH_PREFIX) {
-                if let Some(path) = path.lines().next().filter(|line| !line.is_empty()) {
-                    changed.insert(path.to_owned());
-                }
-            }
+            changed.insert(path.to_owned());
         }
     }
     changed.into_iter().collect()

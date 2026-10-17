@@ -555,10 +555,10 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
     };
 
     // ③ 模式的地板（只有 `readonly` 有）在规则替换掉模式的缺省之后也要一并取最大。
-    if !matching.is_empty() {
-        if let Some(floor) = stance.floor {
-            parts.push((floor, stance.reason.to_owned()));
-        }
+    if !matching.is_empty()
+        && let Some(floor) = stance.floor
+    {
+        parts.push((floor, stance.reason.to_owned()));
     }
 
     // ④ 属于策略缺省、而不是来自文件的规则的约束：工作区的路径上限、绝不自动放行的
@@ -583,35 +583,35 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
     // （那一档连跑都不让）之外各档都有效。写死的安全默认不给任何通道 —— 挂载表里那条
     // 遮罩或只读挂载会盖掉批准，批准等于白批，而用户会以为自己批准了
     // （`.scratch/workspace-mode/spec.md` §4、§5）。
-    if let Some(escalation) = call.escalation {
-        if policy.mode != Mode::Readonly {
-            let sealed = escalation
-                .writable_paths
-                .iter()
-                .find(|path| sandbox::sealed(path, call.cwd, call.masks));
-            match sealed {
-                Some(path) => parts.push((
-                    Decision::Deny,
+    if let Some(escalation) = call.escalation
+        && policy.mode != Mode::Readonly
+    {
+        let sealed = escalation
+            .writable_paths
+            .iter()
+            .find(|path| sandbox::sealed(path, call.cwd, call.masks));
+        match sealed {
+            Some(path) => parts.push((
+                Decision::Deny,
+                format!(
+                    "沙箱升级被拒：{} 是写死的安全默认，这一条没有任何通道放宽",
+                    path.display()
+                ),
+            )),
+            None => {
+                let paths: Vec<String> = escalation
+                    .writable_paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+                parts.push((
+                    Decision::Ask,
                     format!(
-                        "沙箱升级被拒：{} 是写死的安全默认，这一条没有任何通道放宽",
-                        path.display()
+                        "沙箱升级（一次批准）：申请写 {}；理由：{}",
+                        paths.join("、"),
+                        escalation.justification
                     ),
-                )),
-                None => {
-                    let paths: Vec<String> = escalation
-                        .writable_paths
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect();
-                    parts.push((
-                        Decision::Ask,
-                        format!(
-                            "沙箱升级（一次批准）：申请写 {}；理由：{}",
-                            paths.join("、"),
-                            escalation.justification
-                        ),
-                    ));
-                }
+                ));
             }
         }
     }

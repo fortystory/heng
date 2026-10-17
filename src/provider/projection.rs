@@ -176,10 +176,8 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 error,
                 ..
             } => {
-                if mine {
-                    if let Some(pending) = pending.as_mut() {
-                        pending.add_result(tool_call_id, output, error);
-                    }
+                if mine && let Some(pending) = pending.as_mut() {
+                    pending.add_result(tool_call_id, output, error);
                 }
                 // 另一位发言者的结果正文从不投影。
             }
@@ -188,16 +186,16 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             EventPayload::PermissionAsked { .. } => {}
             EventPayload::PermissionDecided { .. } => {}
             EventPayload::HookExecuted { point, outcome, .. } => {
-                if mine && point == hook_format::POINT_POST {
-                    if let Some(feedback) = hook_format::feedback_text(outcome) {
-                        if let Some(pending) = pending.as_mut() {
-                            // 钩子的后续反馈是一条追加的事件，但 provider 对每条 `tool_call` 只
-                            // 允许一条 `tool` 消息，所以它合并进它所评注的那条结果。
-                            // `HookExecuted` 没有 `tool_call_id`，而循环紧接结果之后就发出它，所
-                            // 以「最近的那条结果」就是配对关系。
-                            pending.add_feedback(feedback);
-                        }
-                    }
+                if mine
+                    && point == hook_format::POINT_POST
+                    && let Some(feedback) = hook_format::feedback_text(outcome)
+                    && let Some(pending) = pending.as_mut()
+                {
+                    // 钩子的后续反馈是一条追加的事件，但 provider 对每条 `tool_call` 只
+                    // 允许一条 `tool` 消息，所以它合并进它所评注的那条结果。
+                    // `HookExecuted` 没有 `tool_call_id`，而循环紧接结果之后就发出它，所
+                    // 以「最近的那条结果」就是配对关系。
+                    pending.add_feedback(feedback);
                 }
             }
             // 这次派生归到执行者头上（`parent` 指的是派发者），而它在投影上的唯一效果落在执行者自

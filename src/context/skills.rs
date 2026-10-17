@@ -248,10 +248,10 @@ pub fn loaded_skill_names(events: &[Event]) -> Vec<String> {
                 ok: true,
                 ..
             } => {
-                if let Some(name) = pending.remove(tool_call_id.as_str()) {
-                    if !names.contains(&name) {
-                        names.push(name);
-                    }
+                if let Some(name) = pending.remove(tool_call_id.as_str())
+                    && !names.contains(&name)
+                {
+                    names.push(name);
                 }
             }
             _ => {}

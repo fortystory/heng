@@ -886,7 +886,8 @@ mod tests {
             ]
         );
         // 旧名字恰好长得像一条记录时也不误读。
-        let nasty = "2 R. N... 100644 100644 100644 aaa bbb R100 b.txt\01 leading\0";
+        // NUL 后的 `1` 是普通字符（不是八进制转义）：写成 `\x001` 让意图明确。
+        let nasty = "2 R. N... 100644 100644 100644 aaa bbb R100 b.txt\x001 leading\x00";
         assert_eq!(parse_status(nasty).len(), 1);
     }
 

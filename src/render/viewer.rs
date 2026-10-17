@@ -280,10 +280,10 @@ impl Viewer for NvimViewer {
     }
 
     fn alive(&mut self) -> bool {
-        if !self.exited {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                self.exited = true;
-            }
+        if !self.exited
+            && let Ok(Some(_)) = self.child.try_wait()
+        {
+            self.exited = true;
         }
         !self.exited
     }

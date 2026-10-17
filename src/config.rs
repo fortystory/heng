@@ -2126,16 +2126,16 @@ fn resolve_providers(
             .env_var()
             .and_then(vendor_of_key_env)
             .or_else(|| builtin.map(|builtin| builtin.vendor));
-        if let (Some(vendor), KeySource::Env(key_env)) = (key_vendor, &key_source) {
-            if !vendor.hosts().contains(&host.as_str()) {
-                return Err(ConfigError::CrossVendorKey {
-                    provider: name.clone(),
-                    host,
-                    key_env: key_env.clone(),
-                    vendor: vendor.as_str(),
-                    expected: vendor.hosts().join(" or "),
-                });
-            }
+        if let (Some(vendor), KeySource::Env(key_env)) = (key_vendor, &key_source)
+            && !vendor.hosts().contains(&host.as_str())
+        {
+            return Err(ConfigError::CrossVendorKey {
+                provider: name.clone(),
+                host,
+                key_env: key_env.clone(),
+                vendor: vendor.as_str(),
+                expected: vendor.hosts().join(" or "),
+            });
         }
 
         providers.insert(
@@ -2167,10 +2167,10 @@ fn resolve_key(
         .or_else(|| builtin.map(|builtin| builtin.key_env.to_owned()))
         .unwrap_or_else(|| format!("{}_API_KEY", env_prefix(name)));
 
-    if let Some(key) = section.and_then(|section| section.api_key.clone()) {
-        if !key.is_empty() {
-            return (Some(key), KeySource::Config, recommended);
-        }
+    if let Some(key) = section.and_then(|section| section.api_key.clone())
+        && !key.is_empty()
+    {
+        return (Some(key), KeySource::Config, recommended);
     }
 
     let mut candidates: Vec<String> = Vec::new();

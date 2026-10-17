@@ -302,7 +302,7 @@ async fn more_paths_than_the_limit_are_counted_rather_than_dumped() {
         .collect();
     assert_eq!(listed.len(), MAX_PATHS, "列到上限就停：{}", listed.len());
     assert!(
-        output.contains(&format!("还有 20 条未列出")),
+        output.contains(&"还有 20 条未列出".to_string()),
         "末尾如实写清省掉了多少，并给一句能照做的事：{output}"
     );
     fixture.shutdown().await;

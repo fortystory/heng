@@ -389,10 +389,10 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 
     // MCP 这一层加载成什么样，作为一条上下文注入进流（票 19）：与技能清单同形 —— 模型因此知道
     // 手里有哪些外部 server，而转录里那行**点得开**、详情就是同一段数据。
-    if let Some(catalog) = mcp.catalog_text() {
-        if let Err(error) = harness.inject_context(ContextSource::McpCatalog, &catalog) {
-            eprintln!("heng: {}", render::wording::error_report(&error));
-        }
+    if let Some(catalog) = mcp.catalog_text()
+        && let Err(error) = harness.inject_context(ContextSource::McpCatalog, &catalog)
+    {
+        eprintln!("heng: {}", render::wording::error_report(&error));
     }
 
     // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪个会话。它走渲染器而不是 stderr：
@@ -480,10 +480,11 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         session_asker.attach(entry.state_tx.clone());
     }
     // 恢复（§10）：只对**重新打开**的会话做，而且只对认领过目标的那些。
-    if parsed.resume.is_some() && front.goal.is_some() {
-        if let Some(entry) = host.get(&session_id) {
-            let _ = entry.cmd.send(CliCommand::ResumeGoal).await;
-        }
+    if parsed.resume.is_some()
+        && front.goal.is_some()
+        && let Some(entry) = host.get(&session_id)
+    {
+        let _ = entry.cmd.send(CliCommand::ResumeGoal).await;
     }
 
     // **输入归主循环**（`.scratch/session-tab/spec.md` §1、决策票 04 §3）：前端事件接收端是
@@ -1703,14 +1704,14 @@ pub(crate) fn submission(
         _ => {
             // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那份菜单
             // （票 17）。冒号是它与人打出来的技能名的分界。
-            if let Some((server, prompt)) = name.split_once(':') {
-                if prompts.iter().any(|entry| entry.name == name) {
-                    return Submission::McpPrompt {
-                        server: server.to_owned(),
-                        prompt: prompt.to_owned(),
-                        inline: task,
-                    };
-                }
+            if let Some((server, prompt)) = name.split_once(':')
+                && prompts.iter().any(|entry| entry.name == name)
+            {
+                return Submission::McpPrompt {
+                    server: server.to_owned(),
+                    prompt: prompt.to_owned(),
+                    inline: task,
+                };
             }
             if has_skill(name) {
                 Submission::Skill {
@@ -1802,14 +1803,12 @@ pub(crate) async fn run_mcp_prompt(
                 .answers
                 .iter()
                 .find(|answer| answer.id == question.id)
-            {
-                if let Some(value) = answer
+                && let Some(value) = answer
                     .custom
                     .clone()
                     .or_else(|| answer.selected.first().cloned())
-                {
-                    arguments.insert(question.id.clone(), serde_json::Value::String(value));
-                }
+            {
+                arguments.insert(question.id.clone(), serde_json::Value::String(value));
             }
         }
     }
@@ -1945,6 +1944,11 @@ pub(crate) async fn mcp_prompt_entries(service: &McpService) -> Vec<McpPromptEnt
 /// 第三条启动边界读的那个值。
 ///
 /// `Err` 是一句说给人听的拒绝或失败。
+///
+/// 八个参数一起描述一次目标循环的入口（会话、控制台、命令、请求、目标目录、名字、运行位、
+/// 退出举手）—— 它们各自来自不同的持有者，拆成一个结构只会把同一批搬家。clippy 的
+/// 「参数太多」在这里是有意为之。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_goal_loop(
     harness: &mut Harness,
     console: &ConsoleHandle,

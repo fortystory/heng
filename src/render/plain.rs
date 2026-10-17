@@ -278,13 +278,13 @@ impl Plain {
         self.line(&head);
         match &tool.outcome {
             Some(outcome) if outcome.ok => {
-                if let Some(output) = &outcome.output {
-                    if !output.trim().is_empty() {
-                        self.line(&indent(
-                            &wording::tool_output_preview(output, TOOL_PREVIEW),
-                            2,
-                        ));
-                    }
+                if let Some(output) = &outcome.output
+                    && !output.trim().is_empty()
+                {
+                    self.line(&indent(
+                        &wording::tool_output_preview(output, TOOL_PREVIEW),
+                        2,
+                    ));
                 }
             }
             Some(outcome) => {

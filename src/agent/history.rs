@@ -115,15 +115,16 @@ fn last_undoable_edit(events: &[Event]) -> Option<UndoableEdit> {
             EventPayload::ToolCallCompleted {
                 tool_call_id, ok, ..
             } => {
-                if let Some((started_seq, tool_name, args)) = open.remove(tool_call_id) {
-                    if *ok && tool_name == EDIT_FILE {
-                        last = Some(UndoableEdit {
-                            tool_call_id: tool_call_id.clone(),
-                            started_seq,
-                            completed_seq: event.seq,
-                            args,
-                        });
-                    }
+                if let Some((started_seq, tool_name, args)) = open.remove(tool_call_id)
+                    && *ok
+                    && tool_name == EDIT_FILE
+                {
+                    last = Some(UndoableEdit {
+                        tool_call_id: tool_call_id.clone(),
+                        started_seq,
+                        completed_seq: event.seq,
+                        args,
+                    });
                 }
             }
             _ => {}

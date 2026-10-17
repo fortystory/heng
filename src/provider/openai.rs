@@ -423,10 +423,10 @@ fn message_json(message: &Message) -> Value {
 }
 
 fn insert_name(object: &mut Map<String, Value>, name: &Option<String>) {
-    if let Some(name) = name {
-        if !name.is_empty() {
-            object.insert("name".to_owned(), json!(name));
-        }
+    if let Some(name) = name
+        && !name.is_empty()
+    {
+        object.insert("name".to_owned(), json!(name));
     }
 }
 
@@ -616,10 +616,10 @@ impl StreamDecoder {
             if call.name.is_empty() {
                 call.name = name;
             }
-            if let Some(function) = fragment.function {
-                if let Some(arguments) = function.arguments {
-                    call.arguments.push_str(&arguments);
-                }
+            if let Some(function) = fragment.function
+                && let Some(arguments) = function.arguments
+            {
+                call.arguments.push_str(&arguments);
             }
         }
     }

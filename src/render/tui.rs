@@ -527,10 +527,8 @@ impl Tui {
         // 推过来，紧接组装之后、横幅之前；与此同时组装已经在渲染通道上发出了那些恢复
         // 结果，而它们已经在那份重放快照里了。在这里等，正是为了不让它们被画在历史之上、
         // 然后再被重放画一遍。端口没了就放弃等待。
-        if reopened {
-            if let Some(request) = port.recv().await {
-                state.request(request);
-            }
+        if reopened && let Some(request) = port.recv().await {
+            state.request(request);
         }
 
         // 两个定时器（`.scratch/tui-input-pulse/spec.md` §2b，`.scratch/exit-gesture/spec.md` §6）：
@@ -2401,32 +2399,30 @@ impl View {
                 timing,
                 ..
             } = &block
+                && matches!(role, Role::Assistant)
             {
-                if matches!(role, Role::Assistant) {
-                    // 消息的整段 trace 把还开着的定下来。provider 一个增量都没发时，这行改在
-                    // 这里开出来、且已经完成；已经开过并定过的那条（正文在流中途把它冻住了）
-                    // 不再加新的，因为一段思考就是一行（票 02 §1）。trace 缺席时把开着的行按
-                    // 「未记录」定下来 —— 那是合成器的形状，增量流过了，什么都没记下来。
-                    match reasoning {
-                        Some(text) => {
-                            let text = text.clone();
-                            if !self.thinking_open && !self.thinking_done {
-                                produced +=
-                                    usize::from(self.open_thinking(speaker.clone(), at, id));
-                            }
-                            self.settle_thinking(Some(text), at, *timing);
+                // 消息的整段 trace 把还开着的定下来。provider 一个增量都没发时，这行改在
+                // 这里开出来、且已经完成；已经开过并定过的那条（正文在流中途把它冻住了）
+                // 不再加新的，因为一段思考就是一行（票 02 §1）。trace 缺席时把开着的行按
+                // 「未记录」定下来 —— 那是合成器的形状，增量流过了，什么都没记下来。
+                match reasoning {
+                    Some(text) => {
+                        let text = text.clone();
+                        if !self.thinking_open && !self.thinking_done {
+                            produced += usize::from(self.open_thinking(speaker.clone(), at, id));
                         }
-                        None => {
-                            if self.thinking_open {
-                                self.settle_thinking(None, at, *timing);
-                            }
+                        self.settle_thinking(Some(text), at, *timing);
+                    }
+                    None => {
+                        if self.thinking_open {
+                            self.settle_thinking(None, at, *timing);
                         }
                     }
-                    // 已经落定的那一段是同一次调用的一部分：把它那份计时补齐（实时路径上它是
-                    // 被第一个正文增量冻住的，那时首 token 与用量都还没到）。
-                    self.refresh_settled_thinking(*timing);
-                    self.thinking_done = true;
                 }
+                // 已经落定的那一段是同一次调用的一部分：把它那份计时补齐（实时路径上它是
+                // 被第一个正文增量冻住的，那时首 token 与用量都还没到）。
+                self.refresh_settled_thinking(*timing);
+                self.thinking_done = true;
             }
             // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
             if matches!(&block, Block::TurnStarted { .. }) {
@@ -4692,10 +4688,10 @@ impl TuiState {
         // 补齐不重不漏：重放期间到达的事件全在 `live_buffer` 里，而快照已经持有
         // `seq <= S` 的那些 —— 只放出快照还没铺过的那一段。
         for event in std::mem::take(&mut self.live_buffer) {
-            if let RenderEvent::Logged { event, .. } = &event {
-                if event.seq <= replay.max_seq {
-                    continue;
-                }
+            if let RenderEvent::Logged { event, .. } = &event
+                && event.seq <= replay.max_seq
+            {
+                continue;
             }
             self.apply(event);
         }
@@ -5334,10 +5330,10 @@ impl TuiState {
             }
             Key::CtrlZ => false,
             other => {
-                if let Some(bytes) = viewer::key_bytes(&other) {
-                    if let Some(pane) = &mut self.file_viewer {
-                        pane.viewer.feed(&bytes);
-                    }
+                if let Some(bytes) = viewer::key_bytes(&other)
+                    && let Some(pane) = &mut self.file_viewer
+                {
+                    pane.viewer.feed(&bytes);
                 }
                 true
             }
@@ -5359,10 +5355,10 @@ impl TuiState {
             self.close_file_viewer();
             return;
         }
-        if let Some(bytes) = viewer::mouse_bytes(mouse, grid) {
-            if let Some(pane) = &mut self.file_viewer {
-                pane.viewer.feed(&bytes);
-            }
+        if let Some(bytes) = viewer::mouse_bytes(mouse, grid)
+            && let Some(pane) = &mut self.file_viewer
+        {
+            pane.viewer.feed(&bytes);
         }
     }
 
@@ -6388,7 +6384,7 @@ impl TuiState {
             Tab::Files => self.files_key(key),
             Tab::Changes => self.changes_key(key),
             // 另外一页没有能用方向键走的东西：键盘本来也不该扣在它上面。
-            _ => return false,
+            _ => false,
         }
     }
 
@@ -7520,10 +7516,10 @@ impl TuiState {
     fn terminal_event(&mut self, event: Option<std::io::Result<CtEvent>>) {
         match event {
             Some(Ok(CtEvent::Key(key))) => {
-                if key.kind == KeyEventKind::Press {
-                    if let Some(key) = map_key(key) {
-                        self.key(key);
-                    }
+                if key.kind == KeyEventKind::Press
+                    && let Some(key) = map_key(key)
+                {
+                    self.key(key);
                 }
             }
             Some(Ok(CtEvent::Paste(text))) => self.paste(&text),

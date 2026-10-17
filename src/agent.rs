@@ -627,17 +627,15 @@ pub async fn run_turn(
         let budget = session.config().budget.clone();
         let spent = spent_tokens(session);
         let gated = scope != TurnScope::Executor;
-        if gated {
-            if let Some(note) = budget.exhausted_note(spent) {
-                render.diagnostic(&note);
-                return end_turn(
-                    session,
-                    render,
-                    speaker,
-                    StopReason::BudgetExhausted,
-                    last_text,
-                );
-            }
+        if gated && let Some(note) = budget.exhausted_note(spent) {
+            render.diagnostic(&note);
+            return end_turn(
+                session,
+                render,
+                speaker,
+                StopReason::BudgetExhausted,
+                last_text,
+            );
         }
 
         if iteration >= max_iterations {
@@ -1359,15 +1357,14 @@ async fn finish_call(
         if outcome.is_ok() {
             session.record_reads(&allowed.read_paths);
         }
-        if outcome.invalidated_reads {
-            if let Some(path) = outcome
+        if outcome.invalidated_reads
+            && let Some(path) = outcome
                 .result
                 .as_ref()
                 .err()
                 .and_then(ToolError::invalidated_path)
-            {
-                session.invalidate_read(path);
-            }
+        {
+            session.invalidate_read(path);
         }
     }
 

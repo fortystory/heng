@@ -226,10 +226,10 @@ impl HttpFetch {
         // 意义，连接也不该固定到它 —— 解析与连接都交给代理。**字面 IP 仍然校验**：`192.168.3.1`
         // 这条判据不需要 DNS，而实测里代理**会**把局域网请求转发出去（返回 200）。
         if self.trust_proxy_dns {
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                if !is_public_unicast_with(ip, None) {
-                    return Err(blocked_error(&host, ip));
-                }
+            if let Ok(ip) = host.parse::<IpAddr>()
+                && !is_public_unicast_with(ip, None)
+            {
+                return Err(blocked_error(&host, ip));
             }
             return Ok(Vec::new());
         }
@@ -400,10 +400,10 @@ fn is_public_v6(ip: Ipv6Addr, dns64: Option<Ipv6Addr>) -> bool {
     if let Some(v4) = embedded_v4_in_nat64(ip) {
         return is_public_v4(v4);
     }
-    if let Some(prefix) = dns64 {
-        if let Some(v4) = embedded_v4_under(ip, prefix) {
-            return is_public_v4(v4);
-        }
+    if let Some(prefix) = dns64
+        && let Some(v4) = embedded_v4_under(ip, prefix)
+    {
+        return is_public_v4(v4);
     }
 
     let octets = ip.octets();

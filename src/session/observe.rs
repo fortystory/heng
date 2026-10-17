@@ -680,10 +680,10 @@ impl Timeline {
             groups: Vec::new(),
         };
         for group in &self.groups {
-            if let Some(round) = filter.round {
-                if group.round != Some(round) {
-                    continue;
-                }
+            if let Some(round) = filter.round
+                && group.round != Some(round)
+            {
+                continue;
             }
             let entries: Vec<Entry> = group
                 .entries
@@ -709,15 +709,15 @@ fn matches_filter(entry: &Entry, filter: &Filter) -> bool {
     if filter.only_error && !entry.is_error() {
         return false;
     }
-    if let Some(speaker) = &filter.speaker {
-        if entry.speaker() != Some(speaker) {
-            return false;
-        }
+    if let Some(speaker) = &filter.speaker
+        && entry.speaker() != Some(speaker)
+    {
+        return false;
     }
-    if let Some(kind) = &filter.kind {
-        if !entry.kind_matches(kind) {
-            return false;
-        }
+    if let Some(kind) = &filter.kind
+        && !entry.kind_matches(kind)
+    {
+        return false;
     }
     if let Some(tool) = &filter.tool {
         match entry {
@@ -1068,10 +1068,10 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
                     .or_default()
                     .accumulate(*usage);
                 *agent_calls.entry(event.speaker_id.clone()).or_default() += 1;
-                if let Some(round) = round {
-                    if let Some(index) = round_index.get(&round) {
-                        rounds[*index].calls += 1;
-                    }
+                if let Some(round) = round
+                    && let Some(index) = round_index.get(&round)
+                {
+                    rounds[*index].calls += 1;
                 }
                 if matches!(event.speaker_id, SpeakerId::Executor(_)) {
                     executors.tokens.accumulate(*usage);
