@@ -460,6 +460,10 @@ pub struct Config {
     /// `[ui] diff_viewer` 与 `diff_viewer_args`：看一份 diff 时交给哪个外部命令
     /// （`.scratch/diff-page/spec.md` §8）。缺省是内置那一档 —— 渲染器自己排、自己上色。
     pub diff_viewer: DiffViewerSettings,
+    /// `[ui] tile_limit`：平铺集合的上限（2–4，缺省 4；票 19、26）。
+    pub tile_limit: usize,
+    /// `[ui] sidebar`：左栏的启动意愿（`auto` / `always` / `never`；票 26、27）。
+    pub sidebar: SidebarMode,
     /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。组装期读一次，
     /// 决定那两个工具在不在工具表里。
     pub web: WebSettings,
@@ -514,7 +518,7 @@ pub const MAX_PROVIDER_RETRIES: u32 = 10;
 /// 这一节是**为以后留的口子**：颜色、密度、数字制式这类「只是给人看」的选择都住在这里，
 /// 而不是散进 `[permissions]` 那种语义小节。缺省只有一个值，所以 `Default` 就是那处缺省
 /// —— [`NumberStyle::default`] 说的那套制式。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiSettings {
     /// 界面上那些计数用哪套书写制式（万 / 亿，或 k / M / G）；缺省由
     /// [`NumberStyle`] 自己说。
@@ -523,7 +527,62 @@ pub struct UiSettings {
     pub file_viewer: FileViewerSettings,
     /// 看一份 diff 时交给哪个外部命令；缺省由 [`DiffViewerSettings`] 说（内置）。
     pub diff_viewer: DiffViewerSettings,
+    /// 平铺集合的上限（票 19、26）：`2..=4`，缺省 4。上限 4 因为排法只到 4；下限 2 因为
+    /// 一个格会自动回标签态，那个「平铺」不成立。
+    pub tile_limit: usize,
+    /// 左栏的启动意愿（票 26、27）：`auto` 在 herdr 里收起，`always` / `never` 是显式覆盖。
+    pub sidebar: SidebarMode,
 }
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            number_style: NumberStyle::default(),
+            file_viewer: FileViewerSettings::default(),
+            diff_viewer: DiffViewerSettings::default(),
+            tile_limit: DEFAULT_TILE_LIMIT,
+            sidebar: SidebarMode::default(),
+        }
+    }
+}
+
+/// `[ui] sidebar`：左栏的**启动初值**（票 26、27）。
+///
+/// 它只回答「这一次进程开始时想不想看见左栏」：`Ctrl-O` 照旧随时改它，而意愿只活在进程
+/// 内、不落盘（`.scratch/sidebar-toggle/spec.md` §2）。`Auto` 是唯一会去读环境的档。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidebarMode {
+    /// 在 herdr 里收起、别处打开（票 27：判据 `HERDR_ENV == "1"`）。
+    #[default]
+    Auto,
+    /// 一律打开。
+    Always,
+    /// 一律收起。
+    Never,
+}
+
+impl SidebarMode {
+    /// 这一次进程启动时左栏想不想看见。
+    ///
+    /// `herdr` 由调用方**读一次环境**传进来（票 27：只在 TUI 组装那一刻读，plain / headless
+    /// 不读）—— 于是这一条是纯函数，测试不必起终端。
+    pub fn initial_wanted(self, herdr: bool) -> bool {
+        match self {
+            SidebarMode::Auto => !herdr,
+            SidebarMode::Always => true,
+            SidebarMode::Never => false,
+        }
+    }
+}
+
+/// `[ui] tile_limit` 的缺省值：排法只到四格，所以缺省就贴着上限。
+pub const DEFAULT_TILE_LIMIT: usize = 4;
+
+/// 平铺集合的下限（票 19 的决定 45）：一个格会自动回标签态，那不能叫平铺。
+pub const MIN_TILE_LIMIT: usize = 2;
+
+/// 平铺集合的上限：排法只到四格。
+pub const MAX_TILE_LIMIT: usize = 4;
 
 /// `[ui] file_viewer`：点开一个工作区文件时，用哪一个查看器
 /// （`.scratch/nvim-file-viewer/spec.md` §2）。
@@ -1214,10 +1273,37 @@ fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
     if program.is_none() && !args.is_empty() {
         return Err(ConfigError::DiffViewerArgsWithoutProgram);
     }
+    // 票 26 的两个 `[ui]` 键：写错一律拒绝启动，不静默回退 —— 与上面那几项同一条规矩。
+    let tile_limit = match raw.and_then(|raw| raw.tile_limit) {
+        None => DEFAULT_TILE_LIMIT,
+        Some(value) => {
+            let value = value as usize;
+            if !(MIN_TILE_LIMIT..=MAX_TILE_LIMIT).contains(&value) {
+                return Err(ConfigError::TileLimitOutOfRange {
+                    value,
+                    min: MIN_TILE_LIMIT,
+                    max: MAX_TILE_LIMIT,
+                });
+            }
+            value
+        }
+    };
+    let sidebar = match raw.and_then(|raw| raw.sidebar.as_deref()) {
+        None | Some("auto") => SidebarMode::Auto,
+        Some("always") => SidebarMode::Always,
+        Some("never") => SidebarMode::Never,
+        Some(other) => {
+            return Err(ConfigError::UnknownSidebarMode {
+                value: other.to_owned(),
+            });
+        }
+    };
     Ok(UiSettings {
         number_style,
         file_viewer: FileViewerSettings { kind, width },
         diff_viewer: DiffViewerSettings { program, args },
+        tile_limit,
+        sidebar,
     })
 }
 
@@ -1417,6 +1503,8 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         number_style: ui.number_style,
         file_viewer: ui.file_viewer,
         diff_viewer: ui.diff_viewer,
+        tile_limit: ui.tile_limit,
+        sidebar: ui.sidebar,
         web,
         mcp,
     })
@@ -1545,6 +1633,10 @@ struct RawUi {
     diff_viewer: Option<String>,
     /// 交给它的 argv，按整元素替换、绝不过 shell。
     diff_viewer_args: Option<Vec<String>>,
+    /// 平铺集合的上限：整数 `2..=4`（缺省 4）。
+    tile_limit: Option<u32>,
+    /// 左栏的启动意愿：`"auto"`（缺省）/ `"always"` / `"never"`。
+    sidebar: Option<String>,
 }
 
 /// 一张 `[web]` 表：两个联网工具的部署设置。
@@ -2491,6 +2583,16 @@ pub enum ConfigError {
          要么补上程序名（例如 `diff_viewer = \"delta\"`），要么把参数也去掉（不写就是用内置呈现）"
     )]
     DiffViewerArgsWithoutProgram,
+    #[error("`[ui] tile_limit = {value}` 越界：只接 {min} 到 {max}")]
+    TileLimitOutOfRange {
+        value: usize,
+        min: usize,
+        max: usize,
+    },
+    #[error(
+        "未知的 sidebar 值 `{value}`；`[ui] sidebar` 只接 `auto`（缺省：herdr 里收起）、`always` 或 `never`"
+    )]
+    UnknownSidebarMode { value: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(

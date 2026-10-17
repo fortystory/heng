@@ -10595,3 +10595,21 @@ fn the_page_keys_still_walk_the_only_main_page() {
         "翻上去之后最新那句不必还在"
     );
 }
+
+/// 左栏的启动初值落到帧上：被判为「不画」时整条列不在，主列拿走那些列（票 26、27）。
+#[test]
+fn a_hidden_starting_sidebar_leaves_the_frame_without_it() {
+    let mut state = state();
+    state.set_sidebar_wanted(false);
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(!text.contains("调用量"), "左栏整条不在：{text}");
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        (0..24u16)
+            .filter(|y| frame[(40, *y)].symbol() == "┆")
+            .count(),
+        0,
+        "分隔列也不画"
+    );
+}

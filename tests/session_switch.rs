@@ -224,3 +224,51 @@ fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
         "上一个会话的不泄过来：{text}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 每会话一份常驻投影（票 23）
+// ---------------------------------------------------------------------------
+
+/// 切走再切回**不重放**：那一份投影常驻着，屏幕文本一致，投影只建过一次。
+#[test]
+fn switching_back_reuses_the_resident_projection() {
+    let mut state = fresh();
+    switch(&mut state, "s-a", vec![said(1, "甲会话的原话")]);
+    let first = screen(120, 24, &mut state);
+    assert!(first.contains("甲会话的原话"), "{first}");
+
+    switch(&mut state, "s-b", vec![said(1, "乙会话的原话")]);
+    let after_first_switch = state.view_replays();
+
+    switch(&mut state, "s-a", vec![said(1, "甲会话的原话")]);
+    let back = screen(120, 24, &mut state);
+    assert!(back.contains("甲会话的原话"), "切回来看到的是它：{back}");
+    assert!(
+        !back.contains("乙会话的原话"),
+        "另一个会话的行没有混进来：{back}"
+    );
+    assert_eq!(back, first, "切走再切回的屏幕文本与第一次看到的一致");
+    assert_eq!(
+        state.view_replays(),
+        after_first_switch,
+        "常驻投影不该被重建（票 23 的判据）"
+    );
+}
+
+/// 只有**第一次**装载一个会话才建投影；其余会话那份原样留着。
+#[test]
+fn a_new_session_is_the_only_one_that_builds_a_projection() {
+    let mut state = fresh();
+    let before = state.view_replays();
+    switch(&mut state, "s-a", vec![said(1, "甲")]);
+    switch(&mut state, "s-b", vec![said(1, "乙")]);
+    assert_eq!(state.view_replays(), before + 2, "两个新会话各建一份投影");
+
+    switch(&mut state, "s-a", vec![said(1, "甲")]);
+    switch(&mut state, "s-b", vec![said(1, "乙")]);
+    assert_eq!(
+        state.view_replays(),
+        before + 2,
+        "来回切都是常驻的那两份，不再新建"
+    );
+}

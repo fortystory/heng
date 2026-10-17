@@ -414,6 +414,10 @@ pub struct TuiOptions {
     /// 会被画在它们本该从属的历史之上，然后又被重放画一遍
     /// （`.scratch/tui-history-replay/spec.md` §1、§3）。
     pub reopened: bool,
+    /// 左栏的**启动初值**（票 26、27）：由 [`SidebarMode::initial_wanted`] 算好传进来。
+    ///
+    /// 它只决定这一次进程开始时那一栏在不在；`Ctrl-O` 照旧改布局意愿、只活在进程内。
+    pub sidebar: bool,
 }
 
 /// TUI 渲染器。
@@ -432,11 +436,14 @@ impl Tui {
             facts,
             cwd,
             reopened,
+            sidebar,
         } = self.options;
         // 家目录在这里读一次，不进 `TuiState::new` 的调用方：标题那一层是纯函数，读环境
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut state = TuiState::new(facts, cwd, home);
+        // 左栏的启动初值（票 25/27）：`auto` 在 herdr 里收起，`always` / `never` 是显式覆盖。
+        state.set_sidebar_wanted(sidebar);
         // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
         // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
         state.set_right_rail(true);
@@ -2438,8 +2445,17 @@ impl View {
 
 /// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
 pub struct TuiState {
-    /// 这个会话的投影。切换会话就是**整块换掉**它（`.scratch/session-tab/spec.md` §6）。
+    /// **焦点会话**的投影。切换会话是把这一个换成目标会话那一份 —— 而其余会话的投影
+    /// 常驻在 [`TuiState::views`] 里，切回来时原样取回（票 23：不再 `View::new` + 整条重放）。
     view: View,
+    /// 每会话一份**常驻**投影（键 = 会话 id）。焦点那一份在 [`TuiState::view`] 里，
+    /// 这里放的是切走时收进来的那些。
+    ///
+    /// 判据是「重放这个会话的事件流能不能重建出它」：能重建的都住 [`View`]，于是切走再切回
+    /// 只换读哪一份，屏幕上的行、选中的块、过滤与折叠一个字都不动（票 23）。
+    views: std::collections::HashMap<crate::events::SessionId, View>,
+    /// 新建过多少份投影 —— 票 23 的验收判据：切回一个会话**不**该让它长一。
+    view_replays: u64,
     /// 当前**前台**是哪一个会话。进程级的一个值：渲染器只有一份，而它面前可以同时活着
     /// 不止一个会话（`.scratch/session-tab/spec.md` §6）。渲染通道上那些带会话身份的事件
     /// 按它分派 —— 前台的进投影，别的只更新状态读数。
@@ -3894,6 +3910,8 @@ impl TuiState {
         let front = crate::events::SessionId::new(facts.session_id.clone());
         Self {
             view: View::new(facts),
+            views: std::collections::HashMap::new(),
+            view_replays: 1,
             front,
             cwd,
             home,
@@ -3976,6 +3994,11 @@ impl TuiState {
         &self.front
     }
 
+    /// 这个渲染器新建过多少份投影。切换会话**不**该让它长一 —— 票 23 的验收判据。
+    pub fn view_replays(&self) -> u64 {
+        self.view_replays
+    }
+
     /// 顶部页签条这一帧要画的标签：`(文本, 宿主表下标, 是不是焦点)`，以及被收起来的数量。
     ///
     /// 顺序 = **宿主表装载顺序**（票 15 决定 39），稳定；可用宽度放不下时从**尾部**收，
@@ -4015,6 +4038,14 @@ impl TuiState {
             .find(|row| &row.id == id)
             .map(|row| row.title.clone())
             .unwrap_or_else(|| id.as_str().to_owned())
+    }
+
+    /// 左栏想不想看见（票 26、27 的启动初值；`Ctrl-O` 之后直接改字段）。
+    pub fn set_sidebar_wanted(&mut self, wanted: bool) {
+        if self.sidebar_wanted != wanted {
+            self.sidebar_wanted = wanted;
+            self.dirty = true;
+        }
     }
 
     /// 右栏想不想看见（票 13 起默认开，票 14 的 `Ctrl-V` 走这里）。
@@ -6992,7 +7023,10 @@ impl TuiState {
                     self.finish_replay(old);
                 }
                 self.stash_light();
-                self.front = crate::events::SessionId::new(facts.session_id.clone());
+                let old_front = std::mem::replace(
+                    &mut self.front,
+                    crate::events::SessionId::new(facts.session_id.clone()),
+                );
                 // 切过去之后那条「先切走」的提示没有意义了（票 32）。
                 self.close_blocked = None;
                 // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
@@ -7002,11 +7036,21 @@ impl TuiState {
                 for row in &mut self.sessions.shown {
                     row.foreground = row.id == self.front;
                 }
-                self.view = View::new(facts);
+                // 目标会话的投影如果已经常驻，直接取回来 —— **不重放**它那条流（票 23）。
+                // 只有第一次装载才建一份新的、才铺一遍历史。
+                let resident = self.views.remove(&self.front);
+                let first_load = resident.is_none();
+                let incoming = resident.unwrap_or_else(|| {
+                    self.view_replays += 1;
+                    View::new(facts)
+                });
+                // 切走的那一份收进表里常驻，下次切回来不再重放。
+                let outgoing = std::mem::replace(&mut self.view, incoming);
+                self.views.insert(old_front, outgoing);
                 self.load_light();
                 // 上一个会话攒下的实时事件不带过去。
                 self.live_buffer.clear();
-                if !events.is_empty() {
+                if first_load && !events.is_empty() {
                     let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
                     self.replay = Some(Replay {
                         events,
@@ -7088,6 +7132,7 @@ impl TuiState {
                     self.close_blocked = None;
                 }
                 self.light.remove(&id);
+                self.views.remove(&id);
                 self.sessions.hosted.retain(|held| held != &id);
                 self.sessions.host_empty = empty;
                 // 空宿主：输入区禁用（提交时循环回一句）。

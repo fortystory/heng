@@ -54,6 +54,13 @@ impl AgentState {
     }
 }
 
+/// 这个进程是不是跑在 herdr 的 pane 里（票 27 的判据）：**`HERDR_ENV == "1"` 精确等值**。
+///
+/// 官方承认这个变量但没有稳定性承诺，所以读不到 / 非 `1` / 不存在都当不在 herdr。
+pub fn in_herdr(env: &EnvMap) -> bool {
+    env.get("HERDR_ENV").map(String::as_str) == Some("1")
+}
+
 /// 上报器。`Reporter::from_env` 返回 `None` 就表示不在 herdr 里。
 #[derive(Debug, Clone)]
 pub struct Reporter {
@@ -65,7 +72,7 @@ impl Reporter {
     /// 从环境里认 herdr。判据是 `HERDR_ENV == "1"`（官方承认，但没有稳定性承诺），且两个
     /// 句柄都在；缺一个就当不在 herdr —— **检测失败绝不产生副作用**。
     pub fn from_env(env: &EnvMap) -> Option<Self> {
-        if env.get("HERDR_ENV").map(String::as_str) != Some("1") {
+        if !in_herdr(env) {
             return None;
         }
         let bin = env.get("HERDR_BIN_PATH")?.clone();
@@ -174,6 +181,21 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn herdr_is_detected_only_by_the_exact_env_value() {
+        // 票 27 的判据：`HERDR_ENV == "1"` **精确等值** —— 读不到、`0`、`true` 都当不在 herdr。
+        let mut inside = EnvMap::new();
+        inside.insert("HERDR_ENV".to_owned(), "1".to_owned());
+        assert!(in_herdr(&inside), "1 就是在 herdr 里");
+
+        for value in ["0", "true", "yes", ""] {
+            let mut map = EnvMap::new();
+            map.insert("HERDR_ENV".to_owned(), value.to_owned());
+            assert!(!in_herdr(&map), "{value:?} 不算 herdr");
+        }
+        assert!(!in_herdr(&EnvMap::new()), "没有这个变量也不算");
     }
 
     #[test]

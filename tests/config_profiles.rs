@@ -1279,3 +1279,88 @@ fn diff_viewer_args_without_a_program_is_a_startup_error() {
     assert!(error.contains("diff_viewer_args"), "{error}");
     assert!(error.contains("diff_viewer"), "{error}");
 }
+
+// --- `[ui]`：平铺上限与左栏启动初值（票 26、27） -----------------------------
+
+#[test]
+fn the_tile_limit_defaults_to_four_and_accepts_two_to_four() {
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.tile_limit, 4, "缺省贴着排法的上限");
+
+    for value in [2, 3, 4] {
+        let text = format!("[ui]\ntile_limit = {value}\n");
+        let config = resolve(Some(&text), &env(&[])).unwrap();
+        assert_eq!(config.tile_limit, value, "tile_limit = {value}");
+    }
+}
+
+#[test]
+fn a_tile_limit_outside_two_to_four_is_a_startup_error() {
+    for value in [0, 1, 5, 99] {
+        let text = format!("[ui]\ntile_limit = {value}\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("tile_limit"), "{value}: {error}");
+        assert!(
+            error.contains('2') && error.contains('4'),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn the_sidebar_defaults_to_auto_and_takes_the_three_literals() {
+    use heng::config::SidebarMode;
+
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.sidebar, SidebarMode::Auto);
+
+    for (text, expected) in [
+        ("auto", SidebarMode::Auto),
+        ("always", SidebarMode::Always),
+        ("never", SidebarMode::Never),
+    ] {
+        let source = format!("[ui]\nsidebar = \"{text}\"\n");
+        let config = resolve(Some(&source), &env(&[])).unwrap();
+        assert_eq!(config.sidebar, expected, "sidebar = {text}");
+    }
+}
+
+#[test]
+fn an_unknown_sidebar_value_is_a_startup_error() {
+    for value in ["sometimes", "AUTO", ""] {
+        let text = format!("[ui]\nsidebar = \"{value}\"\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("sidebar"), "{value}: {error}");
+        for literal in ["auto", "always", "never"] {
+            assert!(error.contains(literal), "{value}: {error}");
+        }
+    }
+}
+
+/// 左栏启动初值：`auto` 只在 herdr 里收起，`always` / `never` 是显式覆盖（票 27）。
+#[test]
+fn the_sidebar_start_value_is_auto_except_in_herdr() {
+    use heng::config::SidebarMode;
+
+    assert!(
+        SidebarMode::Auto.initial_wanted(false),
+        "auto + 不在 herdr：开"
+    );
+    assert!(
+        !SidebarMode::Auto.initial_wanted(true),
+        "auto + herdr：收起（票 27 的全部意义）"
+    );
+    assert!(
+        SidebarMode::Always.initial_wanted(true),
+        "always 盖过 herdr 的缺省"
+    );
+    assert!(
+        SidebarMode::Always.initial_wanted(false),
+        "always 在外面也是开"
+    );
+    assert!(!SidebarMode::Never.initial_wanted(false), "never 盖过缺省");
+    assert!(
+        !SidebarMode::Never.initial_wanted(true),
+        "never 在 herdr 里也是关"
+    );
+}
