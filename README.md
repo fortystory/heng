@@ -181,33 +181,24 @@ TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按�
 
 ### TUI 长什么样
 
-备用屏幕（alt screen）全屏，**一条左栏 + 一条主列**（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）—— 没有外框，两栏之间只剩一条竖虚线：
+备用屏幕（alt screen）全屏，**左栏 + 主列 + 右栏**（右栏够宽才画），顶上一条横跨整屏的
+**页签条**（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)、
+[ADR 0023](docs/adr/0023-tiling-lives-in-one-process.md)）：没有外框，块之间只剩竖虚线。主列里
+是**对话视图**，右栏里是**轨迹账本**；`Ctrl-R` 切成平铺态、`Ctrl-V` 开关右栏、`Ctrl-O` 开关左栏。
 
 ```text
-                                        ┆对话┆轨迹┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-                                        ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-                 héng                   ┆
-                  衡                    ┆                                                                         [用户]
-                                        ┆                                                         看看这个仓库现在什么样
-                                        ┆
-                                        ┆[kimi]
-┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┆工作区是干净的。
-调用量┆文件┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┆
-┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┆[kimi]
-上下文 ▓░░░░░░░░░    1.2万 / 20万（6%） ┆我看了 git status：没有未提交的改动，也没有未跟踪的文件。
-token  ▓▓░░░░░░░░    1.6万 / 10万       ┆
-回合                                1   ┆
-输入                            1.2万   ┆
-输出                            3,345   ┆
-缓存                    9,000 / 3,345   ┆
-                                        ┆
-                                        ┆模型 kimi-k3 ┆ 询问 ┆ 上下文 6% ┆ 🌕 就绪
-                                        ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-                                        ┆
-                                        ┆
-                                        ┆
-                                        ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-o 左栏 · ctrl-d 退出
+ [◆ 会话 A] [▪ 会话 B]                                  ▤ 平铺  ▥ 右栏
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                  héng                   ┆ 对话视图（转录）        ┆ 右栏：轨迹账本
+                   衡                    ┆                         ┆
+                                         ┆ [kimi]                  ┆ 回合 1 · 49 s
+                                         ┆ 工作区是干净的。        ┆ kimi ▸ 调用 bash
+                                         ┆                         ┆
+                                         ┆ 模型 X · high ┆ 询问 ┆ 上下文 12% ┆ 🌕 就绪
+                                         ┆ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                                         ┆ 输入区
+                                         ┆ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                                         ┆ 提示行
 ```
 
 **左栏**的宽度档、身份、六个读数与页签逐项在 [`docs/render.md`](docs/render.md) 的「外壳」一节，去留见 [`CONTEXT.md`](CONTEXT.md) 的「左栏」。
@@ -273,7 +264,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
   （`grep` 带 `after` / `before` / `count`，`glob` 按模式列文件）、`repo_map`、`skill`、`todo`、
   `goal_note`、`task`、`ask_user_question`、`git`（一条入口，`op` 读侧 `ReadOnly`、写侧
   `Exclusive`）、联网两个与 MCP 四个元工具，而 `bash` 是唯一那个 `Exclusive` 的通用出口。
-- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是一条左栏 + 一条主列（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）、**没有外框**：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏（见上面的「TUI 长什么样」）。
+- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是一条左栏 + 一条主列 + 一条右栏（右栏够宽才画；[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)、[ADR 0024](docs/adr/0024-trace-lives-in-the-right-rail.md)）、**没有外框**：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏；顶上一条横跨整屏的页签条（见上面的「TUI 长什么样」）。
 
 默认数值：单 agent 100 回合、执行者 25 回合（这两个用 `[turn]` 调）、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
 
@@ -285,7 +276,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的「明确不做」 |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`git`](docs/git.md) · [`glob`](docs/glob.md) · [`goals`](docs/goals.md) · [`grep`](docs/grep.md) · [`observability`](docs/observability.md) · [`permissions`](docs/permissions.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) · [`web`](docs/web.md) · [`mcp`](docs/mcp.md) · [`herdr`](docs/herdr.md) |
 | [`docs/lifecycle.md`](docs/lifecycle.md) | **运行时生命周期**：从敲下命令到进程退出的五张图（一张鸟瞰 + 四张分层详图）与逐节点的 `文件:行号` 证据表，把上面各份逐面说明接起来；护栏是 [`scripts/lifecycle-check.py`](scripts/lifecycle-check.py)（守指称完整性，见它的用法） |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） · [输入框里的记号是不可分割的一块](docs/adr/0012-input-tokens-are-atomic.md)（`@路径` 与 `/命令` 整块删、整块移） · [文件页那一档可以换成一块外来屏幕（内嵌 nvim）](docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)（`[ui] file_viewer = "nvim"`） · [名字从 `fs-agent` 改成衡（`heng`）](docs/adr/0014-renamed-to-heng.md)（汉字是正身、`heng` 是拼音） · [标记上的扫光](docs/adr/0015-mark-light-sweep.md)（只在运行中扫过；峰值白） · [用量长在产生它的那次调用的行上](docs/adr/0016-usage-rides-the-row-of-its-call.md)（尾巴与回合合计都由渲染层算；诊断通道一个字不动） · [模型与思考强度是会话中途可变的会话值](docs/adr/0017-model-and-effort-switch-mid-session.md)（走 `FrontEndEvent` + `Picker`，不进事件流；推翻 `minimax-provider` 的「会话开始定死」） · [外部 diff 工具的颜色不经过语义色板](docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md)（`[ui] diff_viewer` 那一档：外来的**输出**，不是一块外来的屏幕） · [命令留在流上，但不进模型上下文](docs/adr/0019-command-records-are-log-only.md)（`/clear` 这类手势：log-only，模型读不到） · [首 token 的时刻搭在它那次调用的完成事件上](docs/adr/0020-first-token-time-rides-the-completion.md)（`MessageCompleted` 的可选 `first_token_ms`：时间轴据此把模型调用切成「等首 token」与「吐字」，老流读不到就不列那个数） · [行身份来自事件信封](docs/adr/0021-line-identity-comes-from-the-event-envelope.md)（`seq` 派生块身份） · [会话的量词是「会话」，不是「场」](docs/adr/0022-the-session-noun-is-session.md)（宿主表读数改说「已装载 N 个 · M 个在跑」，窄档只报数；历史票与 ADR 不动） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） · [输入框里的记号是不可分割的一块](docs/adr/0012-input-tokens-are-atomic.md)（`@路径` 与 `/命令` 整块删、整块移） · [文件页那一档可以换成一块外来屏幕（内嵌 nvim）](docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)（`[ui] file_viewer = "nvim"`） · [名字从 `fs-agent` 改成衡（`heng`）](docs/adr/0014-renamed-to-heng.md)（汉字是正身、`heng` 是拼音） · [标记上的扫光](docs/adr/0015-mark-light-sweep.md)（只在运行中扫过；峰值白） · [用量长在产生它的那次调用的行上](docs/adr/0016-usage-rides-the-row-of-its-call.md)（尾巴与回合合计都由渲染层算；诊断通道一个字不动） · [模型与思考强度是会话中途可变的会话值](docs/adr/0017-model-and-effort-switch-mid-session.md)（走 `FrontEndEvent` + `Picker`，不进事件流；推翻 `minimax-provider` 的「会话开始定死」） · [外部 diff 工具的颜色不经过语义色板](docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md)（`[ui] diff_viewer` 那一档：外来的**输出**，不是一块外来的屏幕） · [命令留在流上，但不进模型上下文](docs/adr/0019-command-records-are-log-only.md)（`/clear` 这类手势：log-only，模型读不到） · [首 token 的时刻搭在它那次调用的完成事件上](docs/adr/0020-first-token-time-rides-the-completion.md)（`MessageCompleted` 的可选 `first_token_ms`：时间轴据此把模型调用切成「等首 token」与「吐字」，老流读不到就不列那个数） · [行身份来自事件信封](docs/adr/0021-line-identity-comes-from-the-event-envelope.md)（`seq` 派生块身份） · [会话的量词是「会话」，不是「场」](docs/adr/0022-the-session-noun-is-session.md)（宿主表读数改说「已装载 N 个 · M 个在跑」，窄档只报数；历史票与 ADR 不动） · [平铺活在一个进程里](docs/adr/0023-tiling-lives-in-one-process.md)（一个进程画四个格；不交给 herdr / tmux 的 pane） · [轨迹的落点：主列 → 右栏，第三版](docs/adr/0024-trace-lives-in-the-right-rail.md)（主列只剩对话视图；两态切换不重放轨迹） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下六份是五份上游正文加一份中文的单题深挖，合计约 840KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档往哪写、语言怎么选、提交怎么写）；它的四条细则（issue tracker / triage labels / domain docs / docs）在 [`docs/agents/`](docs/agents/) 的四份约定（`issue-tracker` / `triage-labels` / `domain` / `commits`）与上表 |

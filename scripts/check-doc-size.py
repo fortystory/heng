@@ -92,6 +92,8 @@ DOC_FILES = [
     "docs/adr/0020-first-token-time-rides-the-completion.md",
     "docs/adr/0021-line-identity-comes-from-the-event-envelope.md",
     "docs/adr/0022-the-session-noun-is-session.md",
+    "docs/adr/0023-tiling-lives-in-one-process.md",
+    "docs/adr/0024-trace-lives-in-the-right-rail.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
