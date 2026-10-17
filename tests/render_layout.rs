@@ -11139,3 +11139,117 @@ fn the_tiled_state_keeps_one_bottom_row_spanning_the_panes() {
     let hints = row_text(&frame, panes.hints.y, 120);
     assert!(hints.contains("esc 取消"), "提示行在：{hints:?}");
 }
+
+// ---------------------------------------------------------------------------
+// 宽度重放保真（票 24）
+// ---------------------------------------------------------------------------
+
+/// 平铺态 ⇄ 标签态 = 焦点格的一次宽度变化：顶端来源行不变、两个态的轨迹缓存都不重建。
+#[test]
+fn switching_modes_keeps_the_top_source_and_never_replays_the_rail() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    for index in 0..30 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("第 {index} 句"),
+            None,
+        ));
+    }
+    let _ = screen(120, 40, &mut state);
+    // 离开底部，把视口停在一个中间位置。
+    state.key(Key::PageUp);
+    state.key(Key::PageUp);
+    let before = conversation_rows(&mut state, 120, 40);
+    let top_before = before
+        .iter()
+        .find(|row| !row.trim().is_empty())
+        .cloned()
+        .expect("转录里有行");
+    let replays = state.trace_replays();
+
+    // 平铺态：一格 45 列；再切回：主列 50 列。两次都是宽度变化。
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(state.trace_replays(), replays, "进平铺不动轨迹缓存");
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    assert_eq!(state.trace_replays(), replays, "出平铺也不动轨迹缓存");
+
+    let after = conversation_rows(&mut state, 120, 40);
+    let top_after = after
+        .iter()
+        .find(|row| !row.trim().is_empty())
+        .cloned()
+        .expect("转录里有行");
+    assert_eq!(top_before, top_after, "顶端来源行在宽度往返里活了下来");
+}
+
+/// 屏幕宽度跨右栏档（119 → 122）时轨迹**重放一次且只一次**（票 24）。
+#[test]
+fn crossing_the_rail_tier_replays_the_trace_exactly_once() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(message(1, "一句话", None));
+    let _ = screen(119, 40, &mut state);
+    let replays = state.trace_replays();
+    let _ = screen(122, 40, &mut state);
+    assert_eq!(
+        state.trace_replays(),
+        replays + 1,
+        "跨档重放一次（28 → 40）"
+    );
+    let _ = screen(122, 40, &mut state);
+    assert_eq!(state.trace_replays(), replays + 1, "同一档里再画一帧不重放");
+    let _ = screen(119, 40, &mut state);
+    assert_eq!(
+        state.trace_replays(),
+        replays + 2,
+        "跨回去再重放一次（40 → 28）"
+    );
+}
+
+/// 切平铺再切回：选中的块、过滤与折叠都还在（按 `BlockId` 记，宽度无关）。
+#[test]
+fn the_selection_filter_and_fold_survive_a_mode_round_trip() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..3 {
+        state.apply(user_message(index * 2 + 1, &format!("问题 {index}")));
+        state.apply(message(index * 2 + 2, &format!("答案 {index}"), None));
+    }
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "答案 1");
+    let filtered = trace_page(&mut state, 120, 40).join("\n");
+    assert!(filtered.contains("答案 1"), "过滤生效：{filtered}");
+
+    // 搜索立着时过滤就在；`Esc` 会连查询串一起取消（票 20），所以这里不按它。
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    let back = trace_page(&mut state, 120, 40).join("\n");
+    assert_eq!(filtered, back, "两态往返之后过滤仍停在同一个集合上");
+}
+
+/// 选中的块与折叠在两态往返里都不动（都按 `BlockId` 记，与宽度无关；票 24）。
+#[test]
+fn the_selection_and_fold_survive_a_mode_round_trip() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..3 {
+        state.apply(user_message(index * 2 + 1, &format!("问题 {index}")));
+        state.apply(message(index * 2 + 2, &format!("答案 {index}"), None));
+    }
+    open_trace_tab(&mut state, 120, 40);
+    // 跳到一级组头（贴底时那一行可能不在窗口里也没关系：`g` 自己滚过去），再折起来。
+    state.key(Key::Char('g'));
+    state.key(Key::Char(' '));
+    let folded = trace_page(&mut state, 120, 40).join("\n");
+    assert!(folded.contains("▸"), "折叠把手出现了：{folded}");
+
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+    let back = trace_page(&mut state, 120, 40).join("\n");
+    assert_eq!(folded, back, "折叠与选中都活过了两态往返");
+}

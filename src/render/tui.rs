@@ -861,8 +861,10 @@ pub struct View {
     /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
     /// 它是重放判据的一半，另一半是 [`TuiState::trace_width`]。
     conversation_width: u16,
-    /// 轨迹视图的源行是按多宽排的 —— 主列的内容宽（两个视图同源，也都常驻）。
+    /// 轨迹视图的源行是按多宽排的 —— **右栏**内宽（票 13：轨迹的家是右栏）。
     trace_width: u16,
+    /// 这份投影按新宽度重放过几次（票 24 的判据：两态切换**不**该让它长一）。
+    trace_replays: u64,
     /// 对话视图的跨块排版状态（上一个发言者、上一条是不是消息）：换人空一行、同一人连发的
     /// 多段正文只留一个名字，都靠它（`.scratch/tui-visual-language/spec.md` §23）。窗格清空
     /// 重放时它跟着一起清。
@@ -1007,6 +1009,7 @@ impl View {
             turn_totals: Vec::new(),
             conversation_width: SHARED_RENDER_WIDTH,
             trace_width: SHARED_RENDER_WIDTH,
+            trace_replays: 0,
             conversation_flow: Flow::default(),
             trace_flow: Flow::default(),
             trace_tier_width: 0,
@@ -4039,6 +4042,12 @@ impl TuiState {
         self.view_replays
     }
 
+    /// 焦点会话的轨迹按多宽重放过几次（票 24 的判据：**两态切换不重放**，只有屏幕宽度跨
+    /// 右栏档才重放，而且只重放一次）。
+    pub fn trace_replays(&self) -> u64 {
+        self.view.trace_replays
+    }
+
     /// 顶部页签条这一帧要画的标签：`(文本, 宿主表下标, 是不是焦点)`，以及被收起来的数量。
     ///
     /// 顺序 = **宿主表装载顺序**（票 15 决定 39），稳定；可用宽度放不下时从**尾部**收，
@@ -4423,6 +4432,7 @@ impl TuiState {
         }
         if trace {
             // 与过滤那一次重放共用同一份清账（票 20）。
+            self.view.trace_replays += 1;
             self.view.clear_trace_for_replay();
         }
         if self.view.painted.is_empty() {
