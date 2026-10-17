@@ -461,6 +461,7 @@ impl Tui {
         // 右栏默认开（冻结项 6）。`TuiState::new` 里的缺省是关 —— 那是给集成测试留的旧基线
         // （票 13：两百条与右栏无关的帧断言不该被一次外壳改造一起推倒）；真进程在这里打开它。
         state.set_right_rail(true);
+        state.take_trace_keyboard();
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -3989,7 +3990,9 @@ impl TuiState {
             notice: None,
             last_session_click: None,
             close_blocked: None,
-            trace_keyboard: true,
+            // 默认**不**持有：票 16 之后轨迹只在右栏，而右栏默认开；键盘一开始归输入区，
+            // `Ctrl-V` 或点右栏才交过去（票 14）。
+            trace_keyboard: false,
             trace_rect: None,
             detail: None,
             file_viewer: None,
@@ -4085,6 +4088,26 @@ impl TuiState {
     /// 这一帧是平铺态吗（票 17）。
     pub fn tiled(&self) -> bool {
         self.tiled
+    }
+
+    /// 状态行末尾那段全局读数（票 21）：焦点之外有几个在跑、几个等人类。
+    ///
+    /// 数据是 `SessionState` 那张每会话的表（循环推的），所以它读的是**真状态**而不是
+    /// 前端猜的忙闲；焦点自己不算进去。
+    fn background_readout(&self) -> Option<String> {
+        let mut running = 0usize;
+        let mut waiting = 0usize;
+        for (id, state) in &self.states {
+            if id == &self.front {
+                continue;
+            }
+            match state {
+                crate::session::host::SessionState::RunningTurn => running += 1,
+                crate::session::host::SessionState::AwaitingHuman => waiting += 1,
+                crate::session::host::SessionState::Idle => {}
+            }
+        }
+        wording::background_readout(running, waiting)
     }
 
     /// 平铺集合的上限（票 19、26）：`Tui::run` 从配置读一次，测试也可以直接设。
@@ -9873,6 +9896,13 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         state.view.facts.context_window,
     );
     let width = panes.status.width as usize;
+    // 全局读数（票 21）优先占住行尾：有它在时状态行按**剩余**宽度降档 —— 一段「另有 N 个
+    // 在跑 / M 个等人类」比模型那一段更急（它是唯一一个说得出屏幕外动静的地方）。
+    let readout = state.background_readout();
+    let readout_columns = readout
+        .as_ref()
+        .map(|text| text_columns(text) + 2)
+        .unwrap_or(0);
     let parts = wording::status_row(
         &state.view.facts.model,
         &state.effort_label(),
@@ -9883,7 +9913,7 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
             wording::status_spinner(state.pulse, state.busy()),
             wording::status_word(state.busy())
         ),
-        width,
+        width.saturating_sub(readout_columns),
     );
     let spans: Vec<Span<'static>> = parts
         .iter()
@@ -9898,7 +9928,14 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         .collect();
     // 两格的位置按**这一帧真正画出去的**那些段落算，所以截断之后它们的矩形也跟着短。
     let drawn = parts.clone();
-    let line = Line::from(spans);
+    let mut line = Line::from(spans);
+    // 读数已经按上面的「剩余宽度」预留了位置，这里直接挂到行尾。
+    if let Some(readout) = readout {
+        line.spans.push(Span::styled(
+            format!("  {readout}"),
+            Style::default().fg(palette::MUTED),
+        ));
+    }
     // 状态行永远画得出来（[`wording::status_row`] 没有一档把整行拿走），所以截断只在比它的
     // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断归 [`super::width`]，但
     // [`ellipsize_line`] 是**给确定要截的调用方**的（它无条件加 `…`），所以这里先量一下：
@@ -16260,6 +16297,7 @@ mod tests {
     fn a_page_with_a_failed_call() -> TuiState {
         let mut page = state();
         page.set_right_rail(true);
+        page.take_trace_keyboard();
         page.apply(logged(
             1,
             EventPayload::ToolCallStarted {
@@ -16412,6 +16450,7 @@ mod tests {
     fn enter_on_a_row_without_a_detail_opens_nothing() {
         let mut page = state();
         page.set_right_rail(true);
+        page.take_trace_keyboard();
         // 一条注入既是开场段的一块（于是那一页顶上多一行小标题），又是一条点得开的记录。
         page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         let header = page
@@ -17798,6 +17837,7 @@ mod tests {
     fn a_page_with_two_levels() -> TuiState {
         let mut page = state();
         page.set_right_rail(true);
+        page.take_trace_keyboard();
         let kimi = crate::events::SpeakerId::Debater("kimi".into());
         page.apply(RenderEvent::identity(s(), "你是衡（heng）"));
         page.apply(logged(
@@ -18165,6 +18205,7 @@ mod tests {
         // 另一个回合里的调用才是「那个组一个成员都没命中」的样子。
         let mut two_turns = state();
         two_turns.set_right_rail(true);
+        two_turns.take_trace_keyboard();
         let kimi = crate::events::SpeakerId::Debater("kimi".into());
         two_turns.apply(logged(
             1,

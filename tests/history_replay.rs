@@ -354,7 +354,9 @@ fn click(state: &mut TuiState, column: u16, row: u16) {
 
 /// 打开右栏：工具行与思考行现在只住在那里（票 16 删掉了主列页签条）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
-    state.set_right_rail(true);
+    // 票 16 之后轨迹只在右栏里：`Ctrl-V` 一次按下 = 开栏 + 把键盘交给它（票 14）。
+    let _ = screen(width, height, state);
+    state.key(Key::CtrlV);
     let _ = screen(width, height, state);
 }
 

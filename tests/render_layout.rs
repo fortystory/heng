@@ -867,18 +867,20 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     );
 }
 
-/// 窄档下轨迹页的提示按阶梯丢，而出口永远在场 —— 那一条契约两页共用
-/// （`.scratch/trace-shortcuts/spec.md` §2）。
+/// 右栏拿住键盘时提示行按阶梯丢，而出口永远在场（票 16：两套提示共用那条契约）。
 #[test]
 fn the_trace_page_gives_up_hints_before_it_gives_up_the_way_out() {
     let mut state = state_with_roster(&["kimi"]);
     a_session_with_process_rows(&mut state);
-    open_trace_tab(&mut state, 40, 24);
-    let row = hint_items_of(40, &mut state).join(" · ");
-    assert_eq!(row, "↑↓/j/k 移动 · enter 详情 · ctrl-d 退出", "{row}");
+    open_trace_tab(&mut state, 120, 24);
+    let row = hint_items_of(120, &mut state).join(" · ");
+    assert_eq!(
+        row, "↑↓/j/k 移动 · enter 详情 · / 搜索 · ctrl-d 退出",
+        "120 列、右栏开时提示行 50 列，放下三条与出口：{row}"
+    );
     assert!(
-        !row.contains("/ 搜索"),
-        "40 列（最小帧）那一档放不下第三条：{row}"
+        !row.contains("space 折叠"),
+        "50 列那一档放不下第四条：{row}"
     );
 }
 
@@ -8124,8 +8126,9 @@ fn divide_column(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
 /// 切换之后**再画一帧**：`trace_rect` 记的是上一帧真画出来的东西，指针分派就靠它
 /// （票 04 §1 的那条纪律）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
-    // 票 16 之后轨迹只在右栏里：打开右栏，再画一帧让 `trace_rect` 记上位置。
-    state.set_right_rail(true);
+    // 票 16 之后轨迹只在右栏里：`Ctrl-V` 一次按下 = 开栏 + 把键盘交给它（票 14）。
+    let _ = screen(width, height, state);
+    state.key(Key::CtrlV);
     let _ = screen(width, height, state);
 }
 
@@ -11069,4 +11072,70 @@ fn a_newly_loaded_session_joins_the_end_of_the_set() {
         "新会话在末尾：{:?}",
         tile_heading(&frame, cells[2], 120)
     );
+}
+
+// ---------------------------------------------------------------------------
+// 状态行全局读数与平铺态的底部一行（票 21）
+// ---------------------------------------------------------------------------
+
+/// 状态行末尾的「另有 N 个在跑 / M 个等人类」只算**焦点之外**的会话（票 21）。
+#[test]
+fn the_status_row_reports_the_other_sessions() {
+    use heng::session::host::SessionState;
+    let mut state = state_with_roster(&["kimi"]);
+    state.request(ConsoleRequest::SessionState {
+        id: heng::events::SessionId::new("s-b"),
+        state: SessionState::RunningTurn,
+    });
+    state.request(ConsoleRequest::SessionState {
+        id: heng::events::SessionId::new("s-c"),
+        state: SessionState::AwaitingHuman,
+    });
+    let rows = screen(120, 24, &mut state);
+    let status = rows
+        .iter()
+        .find(|row| row.contains("询问 ┆"))
+        .expect("状态行在");
+    assert!(
+        status.contains("另有 1 个在跑 · 1 个等人类"),
+        "两个后台都在读数里：{status}"
+    );
+    assert!(!status.contains("另有 2"), "各算各的：{status}");
+
+    // 焦点换成那个在跑的：它不再算进「另有」，只剩等人类的那个。
+    switch_session(&mut state, "s-b");
+    let rows = screen(120, 24, &mut state);
+    let status = rows
+        .iter()
+        .find(|row| row.contains("询问 ┆") || row.contains("工作区 ┆"))
+        .unwrap_or_else(|| panic!("状态行在：{rows:#?}"));
+    assert!(
+        status.contains("另有 1 个等人类") && !status.contains("个在跑"),
+        "焦点自己不算进去：{status}"
+    );
+}
+
+/// 平铺态的底部三行只有一份、横跨整个 pane 区（票 21）。
+#[test]
+fn the_tiled_state_keeps_one_bottom_row_spanning_the_panes() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲会话"), ("s-b", "乙会话")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = screen(120, 40, &mut state);
+
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 40), 1, false, true);
+    let frame = buffer(120, 40, &mut state);
+    // 输入区上方那条横线从平铺区左缘起、到右栏分隔线为止。
+    let rule = row_text(&frame, panes.input.y - 1, 120);
+    assert!(
+        rule.starts_with('┄')
+            && rule.chars().filter(|ch| *ch == '┄').count() >= panes.input.width as usize / 2,
+        "横线横跨 pane 区：{rule:?}"
+    );
+    // 提示行同样只有一份。
+    let hints = row_text(&frame, panes.hints.y, 120);
+    assert!(hints.contains("esc 取消"), "提示行在：{hints:?}");
 }

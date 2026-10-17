@@ -1806,6 +1806,19 @@ pub const TOP_TILING: &str = "▤ 平铺";
 /// 顶部条右端的右栏开关（动作与 `Ctrl-V` 同一条）。
 pub const TOP_RAIL: &str = "▥ 右栏";
 
+/// 状态行末尾那段全局读数（票 21）：**只算焦点之外**的会话在跑 / 等人类。
+///
+/// 两样都没有时返回 `None`（不占宽度）。两样都有时第二段省略「另有」，读起来是一句话
+/// 而不是两句：`另有 1 个在跑 · 1 个等人类`。
+pub fn background_readout(running: usize, waiting: usize) -> Option<String> {
+    match (running, waiting) {
+        (0, 0) => None,
+        (running, 0) => Some(format!("另有 {running} 个在跑")),
+        (0, waiting) => Some(format!("另有 {waiting} 个等人类")),
+        (running, waiting) => Some(format!("另有 {running} 个在跑 · {waiting} 个等人类")),
+    }
+}
+
 /// 平铺态一格的标题行：焦点格 `◆ 标题`，其余 `· 标题`（票 17）。
 ///
 /// 状态类一个都不上格标题：忙 / 闲 / 等人类只有两个家 —— 左栏与状态行的全局读数。
