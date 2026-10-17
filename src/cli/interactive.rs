@@ -487,6 +487,11 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
     // 宿主表里**装着哪几个**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
     let mut before_hosted: Option<Vec<SessionId>> = None;
+    // herdr 的自接入上报（`src/herdr.rs`）：只在 `HERDR_ENV=1` 时存在。外面是 `None`，
+    // 一次调用都不发。
+    let herdr = crate::herdr::Reporter::from_env(env);
+    // 上一次报给 herdr 的「前台会话 + 它的状态」。只报前台 —— herdr 一个 pane 只有一个 agent。
+    let mut herdr_last: Option<(SessionId, crate::session::host::SessionState)> = None;
     // 那一行提示**只发一次、跨多轮 `select` 挂着**。
     //
     // 每轮重新 `console.prompt()` 会发出一个新的请求、把上一份应答端丢掉，而那 80ms 的
@@ -593,6 +598,20 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 if before_hosted.as_ref() != Some(&hosted) {
                     before_hosted = Some(hosted.clone());
                     console.hosted(hosted);
+                }
+                // herdr 的自接入：**只报前台会话**的状态，变了才发（一个 pane 只有一个 agent）。
+                if let Some(reporter) = &herdr {
+                    let state = host
+                        .get(&foreground)
+                        .map(|entry| *entry.state.borrow())
+                        .unwrap_or_default();
+                    if herdr_last.as_ref() != Some(&(foreground.clone(), state)) {
+                        reporter.report(
+                            crate::herdr::AgentState::from_session(state),
+                            foreground.as_str(),
+                        );
+                        herdr_last = Some((foreground.clone(), state));
+                    }
                 }
             }
             // 会话页上点了别的哪个会话：切过去（票 20）。宿主表在主循环手里。
@@ -703,6 +722,11 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         .collect();
     for id in &ids {
         let _ = host.close_with(id, CliCommand::Close).await;
+    }
+    // 退出时把 pane 还回 herdr（`src/herdr.rs`）：不清的话 herdr 要等 pane 回到 shell
+    // 提示符才察觉，慢一两秒。同步执行 —— 异步线程会被进程退出带走。
+    if let Some(reporter) = &herdr {
+        reporter.release();
     }
     render_channel.shutdown().await;
     // 终端交还之后那一行（`.scratch/exit-gesture/spec.md` §5）：stdout 只承载最终产物，

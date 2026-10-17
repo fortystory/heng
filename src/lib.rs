@@ -15,9 +15,9 @@
 //!
 //! # 边界
 //!
-//! 十六个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` · `web` ·
+//! 十七个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` · `web` ·
 //! `mcp` · `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` ·
-//! `goals` · `session` · `render` · `cli`。`events` 不依赖任何内部模块；
+//! `goals` · `session` · `herdr` · `render` · `cli`。`events` 不依赖任何内部模块；
 //! [`provider::projection`] 是 `provider` 的子模块、不是一条边界。`discussion` 永远不碰
 //! `provider`：它持着协议的规则，而每一次调用都由 `agent` 层驱动。
 //!
@@ -32,6 +32,7 @@ pub mod context;
 pub mod discussion;
 pub mod events;
 pub mod goals;
+pub mod herdr;
 pub mod hooks;
 pub mod mcp;
 pub mod permissions;

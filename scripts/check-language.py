@@ -203,6 +203,7 @@ DOCS_MIN_RATIO = {
     "docs/goals.md": 39,
     "docs/executor.md": 38,
     "docs/grep.md": 38,
+    "docs/herdr.md": 17,
     "docs/highlight.md": 35,
     # 2026-10-03 生命周期图那一批：全部落地后实测 20.2%。
     "docs/lifecycle.md": 18,
