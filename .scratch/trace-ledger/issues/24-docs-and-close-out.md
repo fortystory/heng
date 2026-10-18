@@ -1,7 +1,7 @@
 # 24 — 文档、走查与收口（tracer bullet）
 
 Type: implement
-Status: ready-for-walkthrough
+Status: resolved
 Part of: ../map.md
 Blocked by: 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
 
@@ -192,3 +192,9 @@ OK；`python3 scripts/check-language.py` OK；`python3 scripts/wayfinder-check.p
 .scratch/trace-ledger/map.md` PASS（24 条任务清单 == 24 张子票）；`python3
 scripts/tui-startup-check.py` **14/15 red** —— 与基线同（唯一绿的是 busy 两下 `Ctrl-C` 那条；
 红的是「会话没挺过空回车」与挂起那两条，本环境里本来就红）。
+
+## 评论
+
+### 维护者 — 2026-10-19
+2026-10-19 维护者确认关闭。票面唯一未勾的验收是真机走查（`docs/tui-manual-checklist.md` ㉙ 第 14–23 条），维护者按清单自行复核，不再作为本票的阻塞项。文档与代码均已落地，票随之关闭。
+

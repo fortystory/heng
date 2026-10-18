@@ -106,13 +106,13 @@ DSH 里真用过的能力 / 范围铺多宽 / TTFT 的数据路 / 轨迹页的�
 - [x] [21 — 折叠三档与全折全展](issues/21-folding.md)
 - [x] [22 — 时间轴的三行横带](issues/22-timeline-band.md)
 - [x] [23 — 命中在轴上的底色](issues/23-hit-band-on-timeline.md)
-- [ ] [24 — 文档、走查与收口](issues/24-docs-and-close-out.md)
+- [x] [24 — 文档、走查与收口](issues/24-docs-and-close-out.md)
 
-共 **24** 张票（3 research + 4 prototype + 7 grilling + 13 implement），**24 张都走过了** ——
-十一张决策票全部 `resolved`（**图已走完**）；十三张实现票里 **12 张 `done`**，最后一张
-[24 — 文档、走查与收口](issues/24-docs-and-close-out.md) 收成 **`ready-for-walkthrough`**：
-能自动化的那一半全部做完并跑绿，只剩 [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md)
-的 [㉙](../../docs/tui-manual-checklist.md) 那一条要人在真终端上逐项勾。实现票住在同一个目录里，
+共 **24** 张票（3 research + 4 prototype + 7 grilling + 13 implement），**24 张全部关闭** ——
+十一张决策票全部 `resolved`（**图已走完**）；十三张实现票全部落地，最后一张
+[24 — 文档、走查与收口](issues/24-docs-and-close-out.md) 已于 **2026-10-19 关闭**：
+能自动化的那一半全部做完并跑绿，真机走查由维护者按 [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md)
+的 [㉙](../../docs/tui-manual-checklist.md) 自行复核，不再作为票的阻塞项。实现票住在同一个目录里，
 由 `/implement` 认领，不由 wayfinder 会话认领。
 
 这一轮另有两笔**清单外**的账：**工具详情的第六面 `Schema`**（规格 §6 与用户故事 39 要它，
