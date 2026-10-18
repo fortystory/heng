@@ -2487,6 +2487,443 @@ impl View {
 }
 
 /// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
+/// 键盘 / 指针归属的七个 layer —— 判据只有一份，`key` / `click_at` / `wheel_at` 与
+/// `keyboard_in_the_input` 都从这里读。
+///
+/// 层的排列顺序编码「谁先试」：dispatch 反向迭代，所以表尾那一层最先试。顺序与
+/// `TuiState::key` 改造前的阶梯逐段对应：
+/// 重放 > 文件查看器 > 选择器 > 详情覆盖层 > 左栏 > 轨迹页 > 输入区。
+///
+/// `CtrlZ` 与「拖选中的 `Esc`」是 seam 外的第八层（`DragSuspend`），没有「被谁持有」的
+/// 判据，所以没有 impl —— 它们留在 [`TuiState::key`] 的两条早返回里。
+mod keyboard_layers {
+    use super::*;
+    use crate::render::keyboard::{KeyOutcome, KeyboardLayer};
+
+    /// 一次分派用的层表。7 个 unit struct；除了这个 `Vec` 本身没有别的状态。
+    pub(super) fn table() -> Vec<Box<dyn KeyboardLayer<TuiState>>> {
+        vec![
+            Box::new(InputLayer),
+            Box::new(TraceLayer),
+            Box::new(SidebarLayer),
+            Box::new(DetailLayer),
+            Box::new(PickerLayer),
+            Box::new(FileViewerLayer),
+            Box::new(ReplayLayer),
+        ]
+    }
+
+    /// 输入区之外还有没有层持有键盘 —— 输入区光标可见性的唯一判据。
+    ///
+    /// 与 [`table`] 同一组 `owns_keyboard`，只是把恒持有的兜底 `InputLayer` 排除掉。
+    pub(super) fn any_overlay_owns_keyboard(state: &TuiState) -> bool {
+        ReplayLayer.owns_keyboard(state)
+            || FileViewerLayer.owns_keyboard(state)
+            || PickerLayer.owns_keyboard(state)
+            || DetailLayer.owns_keyboard(state)
+            || SidebarLayer.owns_keyboard(state)
+            || TraceLayer.owns_keyboard(state)
+    }
+
+    /// 指针落在问卷 / 中间模态自己那块区域里吗（滚轮分派的共用判据）。
+    pub(super) fn pending_owns_pointer(state: &TuiState, column: u16, row: u16) -> bool {
+        let Some(pending) = state.pending.as_ref() else {
+            return false;
+        };
+        let point = (column, row).into();
+        if matches!(pending, Pending::Questionnaire(_)) {
+            state
+                .questionnaire_bottom
+                .is_some_and(|rect| rect.contains(point))
+        } else {
+            state.modal_rect.is_some_and(|rect| rect.contains(point))
+        }
+    }
+
+    /// 重放：历史还在铺的时候独占键盘（`spec` §5）。
+    pub(super) struct ReplayLayer;
+    impl KeyboardLayer<TuiState> for ReplayLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.replay.is_some()
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            state.replay_key(key);
+            KeyOutcome::Handled
+        }
+    }
+
+    /// 文件查看器：一块外来的屏幕，除了 `Ctrl-C` 别的键都原样进去
+    /// （`.scratch/nvim-file-viewer/spec.md` §4）。`CtrlZ` 由 `viewer_key` 交还 seam 外。
+    pub(super) struct FileViewerLayer;
+    impl KeyboardLayer<TuiState> for FileViewerLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.file_viewer.is_some()
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            if state.viewer_key(key) {
+                KeyOutcome::Handled
+            } else {
+                KeyOutcome::NotMine
+            }
+        }
+    }
+
+    /// 选择器：立着时键盘归它（spec §10）；指针不独占（框外点击关掉、框内点行选中）。
+    pub(super) struct PickerLayer;
+    impl KeyboardLayer<TuiState> for PickerLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.picker.is_some()
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            state.picker_key(key);
+            KeyOutcome::Handled
+        }
+        fn handle_mouse(&mut self, state: &mut TuiState, column: u16, row: u16) -> KeyOutcome {
+            if state.picker.is_some() && state.picker_click(column, row) {
+                KeyOutcome::Handled
+            } else {
+                KeyOutcome::NotMine
+            }
+        }
+    }
+
+    /// 详情覆盖层：自成一体的视图模式，立着时独占键盘与指针（票 02 §4）。
+    pub(super) struct DetailLayer;
+    impl KeyboardLayer<TuiState> for DetailLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.detail_open()
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            match key {
+                // 「别的都被忽略」的唯一例外：`Ctrl-D` 关掉覆盖层，而不是退出、更不是发问
+                // （票 06 §5）。`Ctrl-C` **不是**例外：它是被忽略的键之一（票 02 §4）。
+                Key::Esc | Key::CtrlD => state.close_detail(),
+                Key::Up => state.detail_scroll(-1),
+                Key::Down => state.detail_scroll(1),
+                Key::PageUp => state.detail_scroll(-(state.detail_page() as isize)),
+                Key::PageDown => state.detail_scroll(state.detail_page() as isize),
+                // `Tab` / `Shift+Tab` 在覆盖层立着时换面（票 13 第 3 条）。
+                Key::Tab => state.detail_face_cycle(1),
+                Key::BackTab => state.detail_face_cycle(-1),
+                _ => {}
+            }
+            KeyOutcome::Handled
+        }
+        fn handle_mouse(&mut self, state: &mut TuiState, column: u16, row: u16) -> KeyOutcome {
+            if !state.detail_open() {
+                return KeyOutcome::NotMine;
+            }
+            // 框外的一次点击关掉它（票 02 §4）；框内只有标签条上那几个标签是按钮。
+            let inside = state
+                .detail_rect
+                .is_some_and(|rect| rect.contains((column, row).into()));
+            if !inside {
+                state.close_detail();
+                // 关掉它的这一下如果落在输入区上，那同时就是「我要打字」。
+                state.take_input_keyboard(column, row);
+                return KeyOutcome::Handled;
+            }
+            if let Some(HitAction::DetailFace(index)) = state.regions.action_at(column, row) {
+                state.detail_face_to(index);
+            }
+            KeyOutcome::Handled
+        }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            _column: u16,
+            _row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            if state.detail_open() {
+                state.detail_scroll(if up { -1 } else { 1 });
+                KeyOutcome::Handled
+            } else {
+                KeyOutcome::NotMine
+            }
+        }
+    }
+
+    /// 左栏：点一下交给它、`Esc` 还回去（`.scratch/files-page/spec.md` §5）。
+    pub(super) struct SidebarLayer;
+    impl KeyboardLayer<TuiState> for SidebarLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.sidebar_keyboard
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            if state.sidebar_key(key) {
+                KeyOutcome::Handled
+            } else {
+                KeyOutcome::NotMine
+            }
+        }
+        fn handle_mouse(&mut self, state: &mut TuiState, column: u16, row: u16) -> KeyOutcome {
+            // 非问卷的模态占着指针时，左栏不吃这一下 —— 与原 `click_at` 的提前返回同一条。
+            if state.pending.is_some() && state.questionnaire().is_none() {
+                return KeyOutcome::NotMine;
+            }
+            // 问卷立着时左栏照旧可以被点，但键盘仍归问卷（原判据的 `!questioning` 那一半）。
+            if state.questionnaire().is_none() {
+                state.take_sidebar_keyboard(column, row);
+            }
+            KeyOutcome::NotMine
+        }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            column: u16,
+            row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            // 问卷 / 中间模态自己那块区域先归它们（原 `wheel_at` 的 `owned` 那一支）。
+            if pending_owns_pointer(state, column, row) {
+                return KeyOutcome::NotMine;
+            }
+            if state
+                .sidebar_page_rect()
+                .is_some_and(|page| page.contains((column, row).into()))
+            {
+                // 改动页**没有滚动机制**：滚轮落在它上面时这一格归它，但什么都不动。
+                if state.tab == Tab::Files {
+                    state.files_wheel(up);
+                }
+                return KeyOutcome::Handled;
+            }
+            KeyOutcome::NotMine
+        }
+    }
+
+    /// 轨迹页那一层：只认自己收编的那几个键，别的照旧落到输入区（部分持有）。
+    pub(super) struct TraceLayer;
+    impl KeyboardLayer<TuiState> for TraceLayer {
+        fn owns_keyboard(&self, state: &TuiState) -> bool {
+            state.right_wanted && state.trace_keyboard && state.pending.is_none()
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            if state.trace_key(key) {
+                KeyOutcome::Handled
+            } else {
+                KeyOutcome::NotMine
+            }
+        }
+        fn handle_mouse(&mut self, state: &mut TuiState, column: u16, row: u16) -> KeyOutcome {
+            // 点账本任何位置都把键盘拿回来（`.scratch/trace-ledger/spec.md` §4）；它不独占
+            // 这一下，点一行开详情仍归 `regions` 的动作分派。
+            if state.questionnaire().is_none()
+                && state.pending.is_none()
+                && state
+                    .trace_rect
+                    .is_some_and(|rect| rect.contains((column, row).into()))
+            {
+                state.take_trace_keyboard();
+            }
+            KeyOutcome::NotMine
+        }
+    }
+
+    /// 输入区：兜底层，加上所有「不属于任何视图」的全局手势。
+    ///
+    /// 原 `key()` 末段那整段阶梯（问卷 / 静音 / 模式循环 / 记号菜单 / 编辑与提交）都在
+    /// 这里；它下面的 `Ctrl-C` / `Ctrl-D` 以 `BubbleUp` 表示「交给主循环那一档」。
+    pub(super) struct InputLayer;
+    impl KeyboardLayer<TuiState> for InputLayer {
+        fn owns_keyboard(&self, _state: &TuiState) -> bool {
+            true
+        }
+        fn is_input_fallback(&self) -> bool {
+            true
+        }
+        fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）、模型选择器（spec §7）、
+            // 标签 / 平铺手势：与「层持有」无关的同一档全局手势。
+            if key == Key::CtrlT {
+                // 讨论会话里的模型是名册里的配置事实，不换：给一句说明。
+                state.ask_picker(PickerKind::Model);
+                return KeyOutcome::Handled;
+            }
+            if matches!(key, Key::CtrlLeft | Key::CtrlRight) {
+                // 标签态按宿主表顺序换标签（spec 决定 15/18）；平铺态不在这里抢。
+                if !state.tiled {
+                    state.switch_tab(key == Key::CtrlRight);
+                }
+                return KeyOutcome::Handled;
+            }
+            if let Key::CtrlDigit(slot) = key {
+                // 它只在平铺态是手势（票 18）：标签态按下去什么都不该发生。
+                if state.tiled {
+                    state.focus_tile((slot as usize).saturating_sub(1));
+                }
+                return KeyOutcome::Handled;
+            }
+            if key == Key::CtrlR {
+                state.toggle_tiles();
+                return KeyOutcome::Handled;
+            }
+            if key == Key::CtrlO {
+                state.sidebar_wanted = !state.sidebar_wanted;
+                // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
+                if !state.sidebar_wanted {
+                    state.release_sidebar_keyboard();
+                }
+                return KeyOutcome::Handled;
+            }
+            if key == Key::CtrlV {
+                // 问卷 / 中间那几种确认立着时键盘归它们（与轨迹层同一条让位）。
+                if state.pending.is_some() {
+                    return KeyOutcome::Handled;
+                }
+                state.toggle_right_rail();
+                return KeyOutcome::Handled;
+            }
+            // 别的键先清掉旧的举手（spec §1）。`Ctrl-D` 自己不在这里清；`Ctrl-C` 在
+            // [`TuiState::exit_key`] 里清；问卷立着时的 `Esc` 摸的是槽位里另一把。
+            match key {
+                Key::CtrlD => {}
+                Key::Esc if matches!(state.pending, Some(Pending::Questionnaire(_))) => {}
+                _ => state.expire_exit_gesture(),
+            }
+            // 两键共用一把举手，按当前视图的意思是空闲还是忙碌分派（spec §1、§7）。
+            if matches!(key, Key::CtrlC | Key::CtrlD) {
+                state.exit_key(key);
+                // 「这一下不在层内」：交给主循环那一档，与 `exit_key` 的语义对齐。
+                return KeyOutcome::BubbleUp;
+            }
+            if key == Key::Esc {
+                if matches!(state.pending, Some(Pending::Questionnaire(_))) {
+                    state.questionnaire_escape();
+                    return KeyOutcome::Handled;
+                }
+                if state.busy() {
+                    if !state.muted {
+                        state.events.push(FrontEndEvent::Cancel);
+                    } else {
+                        // 目标循环跑着：**默认停在「继续跑」**（`.scratch/goal-loop/spec.md` §5）。
+                        match state.pending {
+                            // 已经问出来了：关掉它就是那个安全的答案。
+                            Some(Pending::GoalStop) => state.pending = None,
+                            // 别的框属于这次运行，所以 `Esc` 对它是取消手势。
+                            Some(_) => state.events.push(FrontEndEvent::Cancel),
+                            // 没有框：先问一句。
+                            None => state.pending = Some(Pending::GoalStop),
+                        }
+                    }
+                } else if let Some(pending) = state.pending.take() {
+                    state.decline(pending);
+                } else if state.token_menu().is_some() {
+                    // 记号菜单是屏幕上最小的东西，所以 `Esc` 先关掉它（spec §6）。
+                    state.slash.dismissed = true;
+                } else if state.editor.has_multiple_lines() {
+                    // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句。
+                    state.pending = Some(Pending::ClearDraft);
+                } else {
+                    state.editor.clear();
+                }
+                return KeyOutcome::Handled;
+            }
+            if state.pending.is_some() {
+                // 问题占着键盘：它自己的键回答它，别的什么都进不来（spec §9）。
+                if matches!(state.pending, Some(Pending::Questionnaire(_))) {
+                    state.questionnaire_key(key);
+                } else if matches!(key, Key::Char(_) | Key::Enter) {
+                    state.answer_key(key);
+                }
+                return KeyOutcome::Handled;
+            }
+            // 输入区禁言（§5）：方向键、翻页、`Shift+Tab` 都还做事，编辑与提交进不来。
+            if state.muted && matches!(key, Key::Char(_) | Key::Enter | Key::Tab) {
+                return KeyOutcome::Handled;
+            }
+            if key == Key::BackTab {
+                // 模式是循环持有的一个会话值，前后端各挪自己那份（spec §1）。
+                state.view.mode = state.view.mode.next();
+                state.events.push(FrontEndEvent::CycleMode);
+                return KeyOutcome::Handled;
+            }
+            // 记号菜单立着时，它占着那四个本来会编辑或提交的键（spec §2、§6）。
+            if let Some(menu) = state.token_menu() {
+                match key {
+                    Key::Down => {
+                        state.menu_move(1);
+                        return KeyOutcome::Handled;
+                    }
+                    Key::Up => {
+                        state.menu_move(-1);
+                        return KeyOutcome::Handled;
+                    }
+                    Key::Tab | Key::Enter => {
+                        // `Tab` 填进高亮的候选就停在那里；`Enter` 在 `/` 菜单里填进去**并
+                        // 提交**；`@` 菜单里 `Enter` **只能接受**（spec §2）。
+                        let sigil = menu.sigil;
+                        state.menu_accept();
+                        if key == Key::Enter && sigil == '/' {
+                            state.submit();
+                        }
+                        return KeyOutcome::Handled;
+                    }
+                    _ => {}
+                }
+            }
+            match key {
+                Key::Enter => state.submit(),
+                // 键盘三键归**当前显示的那一页**（`.scratch/trace-in-main/spec.md` §4）。
+                Key::PageUp => state.page_current(true),
+                Key::PageDown => state.page_current(false),
+                Key::CtrlG => state.current_page_to_bottom(),
+                // 编辑器认的每一个别的键；两条路径共用它们。
+                _ => state.editor_key(key),
+            }
+            // 一个改了草稿的键，可能把菜单撑宽或收窄了 —— 在这里一次收进来。
+            state.sync_menu();
+            KeyOutcome::Handled
+        }
+        fn handle_mouse(&mut self, state: &mut TuiState, column: u16, row: u16) -> KeyOutcome {
+            let questioning = state.questionnaire().is_some();
+            if questioning {
+                let owned = state
+                    .questionnaire_bottom
+                    .is_some_and(|rect| rect.contains((column, row).into()));
+                if owned {
+                    state.question_click(QuestionClick::At(column, row));
+                    return KeyOutcome::Handled;
+                }
+                // 问卷只吃自己那块区域；别的点击照旧分派（`.scratch/questionnaire-keys/spec.md`
+                // §7 的补记）。
+                return KeyOutcome::NotMine;
+            }
+            if state.pending.is_some() {
+                // 中间那三种确认是覆盖层，占着指针：落在别处的点击什么都不做。
+                state.question_click(QuestionClick::At(column, row));
+                return KeyOutcome::Handled;
+            }
+            // 点回输入区 = 「我要打字」：键盘还给输入区（`.scratch/files-page/spec.md` §5）。
+            if state.take_input_keyboard(column, row) {
+                return KeyOutcome::Handled;
+            }
+            KeyOutcome::NotMine
+        }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            column: u16,
+            row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            let questionnaire = state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| matches!(pending, Pending::Questionnaire(_)));
+            if state.pending.is_some() && pending_owns_pointer(state, column, row) {
+                if questionnaire {
+                    state.question_click(QuestionClick::Wheel(up));
+                }
+                return KeyOutcome::Handled;
+            }
+            state.wheel_current(up);
+            KeyOutcome::Handled
+        }
+    }
+}
+
 pub struct TuiState {
     /// **焦点会话**的投影。切换会话是把这一个换成目标会话那一份 —— 而其余会话的投影
     /// 常驻在 [`TuiState::views`] 里，切回来时原样取回（票 23：不再 `View::new` + 整条重放）。
@@ -4808,50 +5245,14 @@ impl TuiState {
         }
     }
 
-    /// 滚轮一格：详情覆盖层直接占着它；否则是问题那一块（问卷挪高亮，中间的模态什么都不做）；
-    /// 否则是左栏的文件页（指针落在它的页区里时）；否则滚**当前显示的那一页**
+    /// 滚轮一格：整条链交给层表，由各层按落点认领（详情覆盖层直接占着它；问卷 / 中间
+    /// 模态只吃自己那块区域；左栏页区归那一页），都没认领时由输入区兜底滚**当前显示的那一页**
     /// （票 04 §2、`tui-chrome` §5、`.scratch/trace-in-main/spec.md` §4、
-    /// `.scratch/files-page/spec.md` §4）。
+    /// `.scratch/files-page/spec.md` §4）。与 `click_at` / `key()` 共用同一张 dispatch 表
+    /// （票 01 §验收 2）。
     fn wheel_at(&mut self, column: u16, row: u16, up: bool) {
-        if self.detail_open() {
-            self.detail_scroll(if up { -1 } else { 1 });
-            return;
-        }
-        if self.pending.is_some() {
-            let point = (column, row).into();
-            let questionnaire = self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| matches!(pending, Pending::Questionnaire(_)));
-            // 问卷用排版给的底部块，中间的模态用它自己那个矩形（它带边框）。
-            let owned = if questionnaire {
-                self.questionnaire_bottom
-                    .is_some_and(|rect| rect.contains(point))
-            } else {
-                self.modal_rect.is_some_and(|rect| rect.contains(point))
-            };
-            if owned {
-                if questionnaire {
-                    self.question_click(QuestionClick::Wheel(up));
-                }
-                return;
-            }
-        }
-        // 指针落在左栏页区里时这一格归那一页（`.scratch/files-page/spec.md` §4、
-        // `.scratch/diff-page/spec.md` §7）：与覆盖层、问卷分派同一条「指针在哪就管哪」的
-        // 规矩。别的页照旧滚主列当前那一页。
-        if self
-            .sidebar_page_rect()
-            .is_some_and(|page| page.contains((column, row).into()))
-        {
-            // 改动页**没有滚动机制**（那一份 spec 明确不做）：滚轮落在它上面时这一格归它，
-            // 但什么都不动 —— 不穿透去滚主列背后那一页。
-            if self.tab == Tab::Files {
-                self.files_wheel(up);
-            }
-            return;
-        }
-        self.wheel_current(up);
+        let mut layers = keyboard_layers::table();
+        super::keyboard::wheel_dispatch(self, &mut layers, column, row, up);
     }
 
     /// 文件页滚一格：一个可见行。
@@ -4941,80 +5342,23 @@ impl TuiState {
         self.mark_dirty();
     }
 
-    /// 一次点击落到哪儿：五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则
-    /// 是这一帧自己的那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西
-    /// 背后的转录（票 04 §2，`tui-sidebar` spec §7）。
+    /// 一次点击落到哪儿：先让层表按落点认领（覆盖层独占、问卷 / 中间模态、输入区归还、
+    /// 左栏与账本拿键盘都是各层的副作用），没有层独占时才做命中动作的分派。
+    ///
+    /// 指针归属与键盘归属共用同一张层表：`click_at` 不再自开一份「持指针者」分支
+    /// （票 01 §验收 2）。这里从不滚动某个立着的东西背后的转录（票 04 §2，
+    /// \`tui-sidebar\` spec §7）。
     fn click_at(&mut self, column: u16, row: u16) {
-        // 选择器**不独占指针**（spec §10）：框外点击关掉它（与详情覆盖层同一条），框内点一行
-        // 等于选中那行，其余点击照旧分派 —— 立着的时候输入区仍然可以被点，键盘归属才不变。
-        if self.picker.is_some() && self.picker_click(column, row) {
+        let mut layers = keyboard_layers::table();
+        if super::keyboard::mouse_dispatch(self, &mut layers, column, row) {
             return;
         }
-        if self.detail_open() {
-            // 框外的一次点击关掉它 —— 它来自的那一行、转录、页脚，什么都行
-            // （票 02 §4；2026-09-23 修正，原先只认「再点同一行」）。框内**只有标签条**上
-            // 那几个标签是按钮 —— 其余部分是覆盖层自己的正文，什么都不做（拖选它走另外
-            // 一条路）。
-            let inside = self
-                .detail_rect
-                .is_some_and(|rect| rect.contains((column, row).into()));
-            if !inside {
-                self.close_detail();
-                // 关掉它的这一下如果落在输入区上，那同时就是「我要打字」：键盘也一起还回去。
-                self.take_input_keyboard(column, row);
-                return;
-            }
-            // 只认标签那一个动作：覆盖层压在左栏与页签之上，那些区域里的命中不该在这里生效。
-            if let Some(HitAction::DetailFace(index)) = self.regions.action_at(column, row) {
-                self.detail_face_to(index);
-            }
-            return;
-        }
-        // 问卷占着的是**底部输入区**，不是整个指针：它只吃自己那块区域里的点击 —— 主列上方的
-        // 页签条、转录与左栏都还在屏幕上，点它们照旧归它们本来管的人。滚轮早就是这条判据
-        // （`wheel_at` 的 `owned`），点击跟上它（`.scratch/questionnaire-keys/spec.md` §7 的
-        // 补记）。
-        //
-        // 而**键盘**是另一条判据：没有浮层立着时它归问卷（`j`/`k` 移动高亮、回车提交、`Esc`
-        // 退出询问），一旦**浮层**立着就归浮层 —— `Esc` 与 `Ctrl-D` 把它关掉，问卷的作答原样
-        // 留在那里等你回来答（`.scratch/questionnaire-reading/spec.md`，取代原先「切页不打开
-        // 详情」那半句）。
+        // 命中动作分派：问卷立着时左栏 / 账本的键盘归属已在各层里跳过，这里只保留动作
+        // 分派对问卷的让位。
         let questioning = self.questionnaire().is_some();
-        if questioning {
-            let owned = self
-                .questionnaire_bottom
-                .is_some_and(|rect| rect.contains((column, row).into()));
-            if owned {
-                self.question_click(QuestionClick::At(column, row));
-                return;
-            }
-        } else if self.pending.is_some() {
-            // 中间那三种确认是**覆盖层**，它们占着**指针**：一次落在别处的点击什么都不做 ——
-            // 尤其是，它绝不许关掉一个读的人还没回答的问题（spec §7、§9）。
-            self.question_click(QuestionClick::At(column, row));
-            return;
-        }
-        // 点回输入区 = 「我要打字」：键盘还给输入区。它与「点左栏任意处把键盘交给这一页」
-        // 是同一条规矩的两半（`.scratch/files-page/spec.md` §5 的「归还」）—— 少了它，点开过
-        // 一个文件的人想接着打字，只能先按一下 `Esc`。输入区没有别的点击语义，所以到头了。
-        if !questioning && self.take_input_keyboard(column, row) {
-            return;
-        }
-        // 点账本任何位置都把键盘**拿回来**（`.scratch/trace-ledger/spec.md` §4）：点一行 =
-        // 拿回 + 开详情，点空白 = 拿回 + 清选中。鼠标用户于是不必另记一个手势 —— `Esc` 把它
-        // 还回去，点一下就回来。判据是「上一帧真画了轨迹页」（`trace_rect`），与滚轮、点击行
-        // 同一条纪律。问卷立着时拿走键盘的是问卷，所以这一支整支跳过 —— 与「点左栏」同一句。
         let over_trace = self
             .trace_rect
             .is_some_and(|rect| rect.contains((column, row).into()));
-        if !questioning && over_trace {
-            self.take_trace_keyboard();
-        }
-        // 点左栏任意处把键盘交给这一页 —— 页签条与页区都算，而这一下同时仍然是它本来
-        // 那件事（切页、展开、开弹窗）（`.scratch/files-page/spec.md` §5）。
-        if !questioning {
-            self.take_sidebar_keyboard(column, row);
-        }
         match self.regions.action_at(column, row) {
             Some(HitAction::SessionRow(line)) => self.sessions_row_click(line),
             Some(HitAction::CloseBlockedSwitch) => {
@@ -7590,6 +7934,12 @@ impl TuiState {
     }
 
     /// 处理一个按键。答案与提交通过待答的一次性通道发出去；手势排队交给循环。
+    /// 一个按键的入口：两条 seam 外的终端手势之后，整条阶梯交给层表。
+    ///
+    /// 「键盘在谁那里」的判据只在 `keyboard_layers` 一处；这里只留 `CtrlZ`（终端层挂起）
+    /// 与「拖选中的 `Esc` 撤选」两条 —— 它们是还没落地的指针手势，不进任何层
+    /// （map 冻结项 6/7，见 [`keyboard`](crate::render::keyboard) 的模块注）。第八个
+    /// layer `DragSuspend` 就是这两条，没有 trait 实现。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
         // 这一次按键也算「看过了」（票 25 的未读寿命）。
@@ -7598,264 +7948,21 @@ impl TuiState {
         // （`.scratch/input-tokens/spec.md` §4）。
         self.sync_tokens();
         // 挂起排在**一切**之前：它是终端层手势，重放、详情覆盖层、问卷、举手都拦不住它
-        // （`.scratch/suspend-gesture/spec.md` §2）。真正的终端动作由 [`Tui::run`] 做 ——
-        // 这里只置位，跟 `quit` 是同一种「状态机请求、循环执行」的形状。
+        // （`.scratch/suspend-gesture/spec.md` §2）。真正的终端动作由 [`Tui::run`] 做。
         if key == Key::CtrlZ {
             self.suspend = true;
             return;
         }
-        // 一次拖选最先被 `Esc` 取消：它是一次还没落地的指针手势，而 `Esc` 在任何视图里都是
-        // 「撤掉手上这一手」（`.scratch/tui-feedback/spec.md` §5）。
+        // 一次拖选最先被 `Esc` 取消：它是一次还没落地的指针手势
+        // （`.scratch/tui-feedback/spec.md` §5）。
         if key == Key::Esc && self.drag.is_some() {
             self.drag = None;
             return;
         }
-        // 重放在别的一切之前就占着键盘 —— 包括详情覆盖层，它在这个阶段不可能开着 ——
-        // 因为它的边界是它自己的：`Ctrl-C` 退出，`Ctrl-D` 与 `Esc` 不起作用，而编辑器照常
-        // 工作（`spec` §5）。
-        if self.replay.is_some() {
-            self.replay_key(key);
-            return;
-        }
-        // 文件查看器立着时**独占键盘**（`.scratch/nvim-file-viewer/spec.md` §4）：它是一块
-        // 外来的屏幕，除了 `Ctrl-C`，别的键都该原样进去 —— 不然在浮层里按 `j` 会落到草稿上。
-        // 它排在重放之后、详情之前：三者互斥，顺序与它们的来路一致。
-        if self.file_viewer.is_some() && self.viewer_key(key) {
-            return;
-        }
-        // 选择器立着时**键盘归它**（spec §10）：`j/k` 与上下键移动高亮、回车选中、`Esc`
-        // 取消，其余可打印字符不落进草稿。关掉之后键盘原样还回去 —— 与问卷立着时输入区禁言
-        // 是同一条纪律。
-        if self.picker.is_some() {
-            self.picker_key(key);
-            return;
-        }
-        // 详情覆盖层是一个自成一体的视图模式：它立着的时候占着键盘，而它下面的转录冻在
-        // 读的人离开的地方（票 02 §4）。问卷立着时也一样 —— 它排在问卷那一支**前面**，
-        // 所以 `Esc` / `Ctrl-D` 关掉的是这一层，而下面那道题的作答原样留着
-        // （`.scratch/questionnaire-reading/spec.md`）。
-        if self.detail_open() {
-            match key {
-                // 「别的都被忽略」的唯一例外：`Ctrl-D` 关掉覆盖层，而不是退出、更不是发问
-                // （票 06 §5）。`Ctrl-C` **不是**例外：它是被忽略的键之一（票 02 §4）。
-                Key::Esc | Key::CtrlD => self.close_detail(),
-                Key::Up => self.detail_scroll(-1),
-                Key::Down => self.detail_scroll(1),
-                Key::PageUp => self.detail_scroll(-(self.detail_page() as isize)),
-                Key::PageDown => self.detail_scroll(self.detail_page() as isize),
-                // `Tab` / `Shift+Tab` 在覆盖层立着时是空键（下面那些键位分派都排在它后面），
-                // 于是它们在这里换面 —— 不撞输入框的换行，也不撞 `Shift+Tab` 的模式循环
-                // （票 13 第 3 条）。
-                Key::Tab => self.detail_face_cycle(1),
-                Key::BackTab => self.detail_face_cycle(-1),
-                _ => {}
-            }
-            return;
-        }
-        // 键盘在左栏时，走树的那几个键归文件页（`.scratch/files-page/spec.md` §5）。它排在
-        // 详情覆盖层之后 —— 覆盖层立着时它上面的左栏读不到键盘，`Esc` 先关覆盖层、再还键盘。
-        if self.sidebar_keyboard && self.sidebar_key(key) {
-            return;
-        }
-        // 轨迹页那一层（`.scratch/trace-ledger/spec.md` §4）：排在详情覆盖层之下、记号菜单与
-        // `Esc` 的全局阶梯之上。这两个位置各有一条理由 —— 覆盖层立着时键盘归它、关掉之后
-        // 轨迹页那一层**原样**恢复（这一支根本没被摸到）；而 `Esc` 归这一层消化，才有
-        // 「一次手势一层」：清选中 → 交还键盘 → 再一下才是取消回合那一档。
-        //
-        // 它只认自己收编的那几个键（`↑`/`↓`/`j`/`k`/`Enter`/`g`/`G`/`Esc`），别的**照旧**
-        // 落到输入区：这一层是**部分持有**，不是一块模态浮层 —— 打字、`Backspace`、`Tab`、
-        // 翻页三键与所有 `Ctrl-*` 都照原样走。
-        //
-        // 问卷与中间那几种模态立着时它**整个让位**：那时候键盘归它们，「没有浮层时归问卷、
-        // 浮层立着时归浮层」是同一条纪律
-        // （`.scratch/questionnaire-reading/spec.md`），而这一层扣着 `Enter` 与方向键不放会
-        // 让一道正在等的题按不动。关掉它们之后原样还给轨迹页 —— 这一位没被动过。
-        // 票 14 起这一层归**右栏**（票 16 之后主列只剩对话，不再有第二个入口）。
-        if self.right_wanted && self.trace_keyboard && self.pending.is_none() && self.trace_key(key)
-        {
-            return;
-        }
-        // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）：排在两个「独占键盘的视图」之后
-        // —— 详情覆盖层与历史重放各自拦得住它 —— 而在清举手之前：它是纯视图手势，不该让
-        // 半分钟前那一下退出举手作废；问卷 / `/` 菜单立着时也照常生效。
-        // `Ctrl-T`：打开模型/档位的选择器（spec §7）。它排在左栏开关旁边 —— 同样不归任何
-        // 视图管，同样忙闲都生效 —— 而选择器立着时它归选择器（上面那一支已经提前返回）。
-        //
-        // `Ctrl-M` 不能用：它在终端里就是回车（`\r`），crossterm 报成 `KeyCode::Enter`，
-        // 与「提交」正面撞车（`map_key` 那里记着同一件事）。
-        if key == Key::CtrlT {
-            // 讨论会话里的模型是名册里的配置事实，不换：给一句说明。
-            self.ask_picker(PickerKind::Model);
-            return;
-        }
-        if matches!(key, Key::CtrlLeft | Key::CtrlRight) {
-            // 标签态按宿主表顺序换标签（spec 决定 15/18）；平铺态的焦点手势是 `Ctrl-1…4`
-            // 与点格，`Ctrl-左右` 不在这里抢。
-            if !self.tiled {
-                self.switch_tab(key == Key::CtrlRight);
-            }
-            return;
-        }
-        if let Key::CtrlDigit(slot) = key {
-            // 它只在平铺态是手势（票 18）：标签态按下去什么都不该发生。
-            if self.tiled {
-                self.focus_tile((slot as usize).saturating_sub(1));
-            }
-            return;
-        }
-        if key == Key::CtrlR {
-            self.toggle_tiles();
-            return;
-        }
-        if key == Key::CtrlO {
-            // 平铺态也能开关左栏（2026-10-17 维护者修订）：进平铺时它自动收起，`Ctrl-O` 把
-            // 它叫回来；格宽因此变窄到放不下时下一帧会回标签态并给回执。
-            self.sidebar_wanted = !self.sidebar_wanted;
-            // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
-            if !self.sidebar_wanted {
-                self.release_sidebar_keyboard();
-            }
-            return;
-        }
-        // 右栏开关（票 14，推翻 `trace-shortcuts` §1 的「主列两页翻一个来回」）：与左栏
-        // 开关同一档的纯视图手势 —— 忙闲都生效、不清举手；详情覆盖层与历史重放拦得住它
-        // （上面两支已经提前返回），选择器立着时归选择器（也已经在上面返回）。它排在轨迹
-        // 那一支之后：轨迹层只认自己收编的那几个键，这一枚照旧落到这里，而搜索模式里也不
-        // 许把它扣下。
-        if key == Key::CtrlV {
-            // 问卷 / 中间那几种确认立着时键盘归它们（与轨迹层同一条让位）：这时候动右栏
-            // 会把提示行换成 `RAIL_HINTS`，而按键其实还在问卷那里。
-            if self.pending.is_some() {
-                return;
-            }
-            self.toggle_right_rail();
-            return;
-        }
-        // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-D`
-        // 自己不在这里清 —— 它正是要摸这把举手的那一个键；`Ctrl-C` 在 [`exit_key`] 里清
-        // （它只取消，顺手把没兑现的退出手势作废）。问卷立着时的 `Esc` 也不是「别的
-        // 键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
-        match key {
-            Key::CtrlD => {}
-            Key::Esc if matches!(self.pending, Some(Pending::Questionnaire(_))) => {}
-            _ => self.expire_exit_gesture(),
-        }
-        // 两键共用一把举手，按当前视图的意思是空闲还是忙碌分派；详情覆盖层与重放各有自己
-        // 的分支，已经在上面提前返回（spec §1、§7）。
-        if matches!(key, Key::CtrlC | Key::CtrlD) {
-            self.exit_key(key);
-            return;
-        }
-        if key == Key::Esc {
-            // 问卷立着时 `Esc` 只管「退出这次询问」，不再按 busy / idle / 禁言分叉：那个手势
-            // 根本不掐回合，所以禁言那一支要保护的东西在这里不存在
-            // （`.scratch/questionnaire-keys/spec.md` §5）。
-            if matches!(self.pending, Some(Pending::Questionnaire(_))) {
-                self.questionnaire_escape();
-                return;
-            }
-            if self.busy() {
-                if !self.muted {
-                    self.events.push(FrontEndEvent::Cancel);
-                } else {
-                    // 目标循环跑着：**默认停在「继续跑」** —— 误按一下不该掐掉一个已经跑了
-                    // 两小时的目标（`.scratch/goal-loop/spec.md` §5）。
-                    match self.pending {
-                        // 已经问出来了：关掉它就是那个安全的答案。
-                        Some(Pending::GoalStop) => self.pending = None,
-                        // 别的框属于这次运行，所以 `Esc` 对它是取消手势，与别处一样。
-                        Some(_) => self.events.push(FrontEndEvent::Cancel),
-                        // 没有框：先问一句。
-                        None => self.pending = Some(Pending::GoalStop),
-                    }
-                }
-            } else if let Some(pending) = self.pending.take() {
-                self.decline(pending);
-            } else if self.token_menu().is_some() {
-                // 记号菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
-                // （spec §6）。它按记号记账：同一个记号里改字会重开（`sync_menu`），同一行
-                // 里另一个记号不受牵连。
-                self.slash.dismissed = true;
-            } else if self.editor.has_multiple_lines() {
-                // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句 —— 而安全的
-                // 答案是「不」（spec §7）。
-                self.pending = Some(Pending::ClearDraft);
-            } else {
-                self.editor.clear();
-            }
-            return;
-        }
-        if self.pending.is_some() {
-            // 问题占着键盘：它自己的键回答它，上面的 `Ctrl-C` 与 `Esc` 是出路，别的什么都进
-            // 不来 —— 一个乱按的字符不行，模式手势也不行（spec §9）。
-            //
-            // 问卷认的键盘比那些单键问题宽 —— 方向键移动与翻页，`Tab` 跳过，`Enter`/`Space`
-            // 确认 —— 所以它拿到每一个键并自己分发。别的种类保持那条窄规矩，正是它让一个
-            // 乱按的字符无法批准一次写入。
-            if matches!(self.pending, Some(Pending::Questionnaire(_))) {
-                self.questionnaire_key(key);
-            } else if matches!(key, Key::Char(_) | Key::Enter) {
-                self.answer_key(key);
-            }
-            return;
-        }
-        // 输入区禁言（§5）：键位照旧响应 —— 方向键、翻页、`Shift+Tab` 都还做事 —— 只是编辑
-        // 与提交进不来。这不是「暂停」，循环照常跑。
-        if self.muted && matches!(key, Key::Char(_) | Key::Enter | Key::Tab) {
-            return;
-        }
-        if key == Key::BackTab {
-            // 手势与显示是同一次循环的一步：模式是循环持有的一个会话值，而前端是唯一显示它
-            // 的东西 —— 所以它挪动自己那份副本，并请求同一次挪动。两者都对组装打底的那个值
-            // 施加 [`Mode::next`]，这让它们不会互相矛盾
-            // （`.scratch/todo-and-modes/spec.md` §1）。
-            self.view.mode = self.view.mode.next();
-            self.events.push(FrontEndEvent::CycleMode);
-            return;
-        }
-        // 记号菜单立着时，它占着那四个本来会编辑或提交的键：`↑`/`↓` 走过匹配，`Tab` 填进
-        // 一个，`Enter` 填进一个并把它发出去（`/`）或只填进去（`@`）。别的都落到编辑器，而
-        // 编辑器正是用户继续打字时过滤匹配的地方。
-        if let Some(menu) = self.token_menu() {
-            match key {
-                Key::Down => {
-                    self.menu_move(1);
-                    return;
-                }
-                Key::Up => {
-                    self.menu_move(-1);
-                    return;
-                }
-                Key::Tab | Key::Enter => {
-                    // `Tab` 填进高亮的那个候选就停在那里；`Enter` 在 `/` 菜单里填进去**并
-                    // 提交**，于是 `/ask` + Enter 跑起菜单指着的那条 skill。裸 `/` 什么都没
-                    // 高亮：`Enter` 把它按打出来的样子发出去，循环回一串名字。
-                    //
-                    // `@` 菜单里 `Enter` **只能接受**：插进去的路径只是句子的一部分，发送
-                    // 仍旧是再按一次（spec §2 那处刻意分叉）。
-                    let sigil = menu.sigil;
-                    self.menu_accept();
-                    if key == Key::Enter && sigil == '/' {
-                        self.submit();
-                    }
-                    return;
-                }
-                _ => {}
-            }
-        }
-        match key {
-            Key::Enter => self.submit(),
-            // 键盘三键归**当前显示的那一页**（`.scratch/trace-in-main/spec.md` §4）：轨迹视图
-            // 搬进主列之后不再是「只吃滚轮」那个例外（推翻 `trace-tab` 用户故事 32）。
-            Key::PageUp => self.page_current(true),
-            Key::PageDown => self.page_current(false),
-            Key::CtrlG => self.current_page_to_bottom(),
-            // 编辑器认的每一个别的键；两条路径共用它们。
-            _ => self.editor_key(key),
-        }
-        // 一个改了草稿（或只在 token 里挪了光标）的键，可能把菜单撑宽或收窄了。在这里一次
-        // 收进来，而不是在每个分支里各收一次。
-        self.sync_menu();
+        // 其余全部交给层表：从最外层（重放）反向迭代到输入区兜底。层本身的判据与顺序
+        // 见 [`keyboard_layers`]。
+        let mut layers = keyboard_layers::table();
+        let _ = super::keyboard::key_dispatch(self, &mut layers, key);
     }
 
     /// 键盘是不是在**忙** —— 而忙闲既看**一次运行**的边沿，也看**眼前这个会话**的三态。
@@ -15128,19 +15235,11 @@ const BLINK_FRAMES: u64 = 8;
 
 /// 键盘现在在输入区吗 —— 输入区那个光标据此决定露不露面。
 ///
-/// 三个「键盘不在输入区」的情形：键盘交给了文件页（`sidebar_keyboard`）、一块覆盖层立着
-/// （详情或文件查看器）、问卷占着底部（它有自己的光标与自己的区域）。
+/// 判据只有一份：除输入区兜底层之外，没有任何一层持有键盘。`pending` 一项属于
+/// `InputLayer` 内部的编辑态（问卷 / 中间模态立着时输入区自己的光标也收起来），
+/// 其余「键盘不在输入区」的情形全部来自 `keyboard_layers` 的 `owns_keyboard`。
 fn keyboard_in_the_input(state: &TuiState) -> bool {
-    state.pending.is_none()
-        && !state.sidebar_keyboard
-        // 右栏拿住键盘时输入区没有它（票 14）：`Ctrl-V` 与点右栏都会把这一位交过去。
-        && !(state.right_wanted && state.trace_keyboard)
-        // 选择器与历史重放立着时同样归它们 —— 这一条与 `key` 的阶梯同源（研究票 02 报的
-        // 漏项；此前它们独占键盘，光标却照旧露在输入区）。
-        && state.picker.is_none()
-        && state.replay.is_none()
-        && state.detail.is_none()
-        && state.file_viewer.is_none()
+    state.pending.is_none() && !keyboard_layers::any_overlay_owns_keyboard(state)
 }
 
 /// 选择器浮层：一块居中的盒子，标题 + 一列候选 + 页脚键位（spec §10）。
@@ -15501,6 +15600,40 @@ mod tests {
         assert!(page.right_wanted, "右栏默认开");
         assert!(!page.trace_keyboard, "右栏没拿键盘");
         assert_eq!(page.tile_limit, 4);
+    }
+
+    /// 层表与 `keyboard_in_the_input` 同源：除输入区兜底外没有任何层持有键盘时，光标才在
+    /// 输入区（票 01 §验收 1 的派生判据）。
+    #[test]
+    fn the_keyboard_layers_and_the_caret_read_the_same_owner() {
+        let mut page = state();
+        assert!(
+            !keyboard_layers::any_overlay_owns_keyboard(&page),
+            "开机只有输入区兜底层持有"
+        );
+        page.sidebar_keyboard = true;
+        assert!(
+            keyboard_layers::any_overlay_owns_keyboard(&page),
+            "左栏持有键盘算覆盖层"
+        );
+        assert!(!keyboard_in_the_input(&page), "左栏拿键盘时光标不在输入区");
+        page.sidebar_keyboard = false;
+        // 轨迹页：持有位默认为真，但右栏关着就不算持有（条件在层里，不在这里）。
+        page.right_wanted = false;
+        page.trace_keyboard = true;
+        assert!(keyboard_in_the_input(&page), "右栏关着时那一位不构成持有");
+        page.right_wanted = true;
+        assert!(!keyboard_in_the_input(&page), "右栏开着且持有 → 光标让位");
+    }
+
+    /// 部分持有的层把不认的键落到输入区：轨迹页拿键盘时 `↓` 归它，可打印字符仍进草稿。
+    #[test]
+    fn a_layer_that_only_owns_some_keys_falls_through_to_the_input() {
+        let mut page = state();
+        page.right_wanted = true;
+        page.trace_keyboard = true;
+        page.key(Key::Char('x'));
+        assert_eq!(page.editor.text(), "x", "轨迹页不认的字符落到输入区");
     }
 
     /// crossterm 解码：视图手势与标签手势都认得出来（Spec 轴审查：`map_key` 从没有单测）。

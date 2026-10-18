@@ -69,7 +69,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 
 **task 票**（四张，10-18 报告挑出的四块 seam 落地）：
 
-- [ ] [键盘归属收到一处](issues/01-keyboard-owner.md)
+- [x] [键盘归属收到一处](issues/01-keyboard-owner.md)
 - [ ] [同一会话状态，收到一处](issues/02-session-projection.md)
 - [ ] [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)
 - [x] [width module 的 seam 收齐](issues/04-width-seam.md)
@@ -81,14 +81,14 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - 02（`SessionProjection`）无前置、第三位；10-17 才冒出来的形态问题，趁没长更大。
 - 03（`HostFacts`）有**前置 spec**（在 ticket 内 `## 注意` 段自陈）；开工前要先在它的 §前置 spec 里钉死「宿主表空 / 单会话 / 多会话」三态的读数；之后才动 `ConsoleRequest` 与订阅流。
 
-**frontier（2026-10-18，04 已 resolved）= 01**：04 是 tracer bullet，已落 `width::truncate_chars` 与 6 处替换；frontier 进到 01（无前置、是 10-18 报告首选）。下一张按优先级是 01 → 02 → 03。
+**frontier（2026-10-19，01 与 04 已 resolved）= 02**：01 把键盘归属收到一处（7 层表 + `key()` / `click_at` / `wheel_at` 共表，见票底作答）；下一张按优先级是 02（同一会话状态收到一处），再 03（host 事实投影）。
 
 ## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里。按名字引用，不写裸编号。 -->
 
 - [任务清单](issues/) 这一节本身 = **destination 是 change 不是 spec**：四张 ticket 已经把验收写到代码级，每张可直接丢给 `/implement`；chart 这一层只判 destination 的形状、依赖、优先级与 03 的 spec 前置，不写新的 spec。
-- [键盘归属收到一处](issues/01-keyboard-owner.md) — seam 同 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 形状（`KeyboardLayer` trait + 三态 `KeyOutcome`），`key()` / `click_at` / `wheel_at` 走同一张 dispatch 表；保留 `trace_keyboard` 字段名（既有断言线不破），`keyboard_in_the_input` 跟 dispatch 共源；前置 `Ctrl-Z` 与 `Esc` 撤选两条早返回保留在 seam 外，不进 `KeyOutcome`。
+- [键盘归属收到一处](issues/01-keyboard-owner.md) — **resolved 2026-10-19**（上半 10-18 骨架、下半本轮接完）。seam 同 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 形状（`KeyboardLayer` trait + 三态 `KeyOutcome`），7 个 layer 收在 `tui.rs` 的 `keyboard_layers` 模块，`key()` / `click_at` / `wheel_at` 走同一张 dispatch 表；`TuiState::key()` 从 267 行降到约 30 行，只剩 `Ctrl-Z` 与 `Esc` 撤选两条 seam 外早返回；保留 `trace_keyboard` / `sidebar_keyboard` 字段名与既有断言线，`keyboard_in_the_input` 改为从层表派生；前置两条早返回保留在 seam 外，不进 `KeyOutcome`。
 - [同一会话状态，收到一处](issues/02-session-projection.md) — `View` + `SessionLight` 并入 `SessionProjection` module，`TuiState` 只持 `HashMap<SessionId, SessionProjection>`；`stash` / `load` 收成一份迁移函数；不碰 `session-panes` 票 23 / 25 给出的对外契约；测试断言的 5 张 `HashMap` 读法逐条改写。
 - [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md) — `HostFacts` 同时被 cli 与 tui 订阅；`ConsoleRequest` 22 变体收到 ≤ 5 个；**前置 spec** 钉「宿主表空 / 单会话 / 多会话」三态读数，后做订阅改造；三条规则（未读寿命、`N` 只算后台、单会话标题不变）落到单元测试，[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㊶ 同步改写。
 - [width module 的 seam 收齐](issues/04-width-seam.md) — **resolved 2026-10-18（tracer bullet）**。`src/render/width.rs` 新增 `pub fn truncate_chars` 作为按字符出口（与 `truncate_columns` 并列），module 顶 doc 写清「按显示列 / 按字符」两把尺子的判据；6 处 `chars().take`（`files.rs:118` / `changes.rs:589` / `transcript.rs:667` / `wording.rs:222` / `wording.rs:963` / `tui.rs:15059`）一律换 `truncate_chars`；`markdown::wrap_code` 已在 `width::char_columns` 上、不动。**修原票验收 2**：原写「`truncate_columns` ≥ 9」，实际 6 处全是按字符口径——以「`truncate_chars` 在 `src/render/` 命中 ≥ 6」等价收尾。**新增单测 3 条**钉这两把尺子不能互换（同串 `"衡a衡b"` 上 `truncate_columns(_, 4) == "衡a"` / `truncate_chars(_, 4) == "衡a衡b"`）。`render/` 外的 8 处 `chars().take` 不在本票范围。
@@ -118,4 +118,6 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 
 ## 进度
 
-**1/4（2026-10-18，04 已 resolved）。** tracer bullet [04 — width module 的 seam 收齐](issues/04-width-seam.md) 已落：`width::truncate_chars` 与 6 处替换，3 条新单测钉两把尺子；原票验收 2（`truncate_columns` ≥ 9）按口径与实际冲突改写为 `truncate_chars` ≥ 6，全测与 clippy、fmt 干净。frontier 进到 01（无前置、是 10-18 报告首选）。下一步还是 `/implement`：[01 — 键盘归属收到一处](issues/01-keyboard-owner.md)，按 `KeyboardLayer` trait + 三态 `KeyOutcome` + 共一张 dispatch 表，`trace_keyboard` 字段名保留既有的 14 处断言不破。
+**2/4（2026-10-19，01 与 04 已 resolved）。** [01 — 键盘归属收到一处](issues/01-keyboard-owner.md) 接完了上半留下的半个交付：`TuiState::key()` 从 267 行收到约 30 行，只剩 `Ctrl-Z` 与「拖选中的 `Esc`」两条 seam 外早返回；`click_at` / `wheel_at` 与 `keyboard_in_the_input` 都改从 `keyboard_layers` 那同一张 7 层表读（重放 > 文件查看器 > 选择器 > 详情覆盖层 > 左栏 > 轨迹页 > 输入区）。`TuiState` 上仍只有 `sidebar_keyboard` / `trace_keyboard` 两个 `*_keyboard` 字段。全量测试除 `tests/session_page.rs` 一条跨午夜的时间 flaky 外全绿（未改动的 HEAD 上复跑同样失败），clippy 0 warning、fmt 干净。
+
+frontier 进到 [02 — 同一会话状态，收到一处](issues/02-session-projection.md)。

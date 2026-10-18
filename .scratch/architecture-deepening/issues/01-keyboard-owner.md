@@ -1,7 +1,8 @@
 # 键盘归属收到一处
 
 Type: task
-Status: claimed
+Status: resolved
+Resolved-by: wayfinder session 2026-10-19（上半 2026-10-18 骨架 + 下半本轮接完，见 § 作答）
 Claimed-by: wayfinder session 2026-10-18 (after 04 resolved; half-done — see § 评论)
 Part of: ../map.md
 Blocked by: —
@@ -98,6 +99,27 @@ enum KeyOutcome {
 4. `click_at` / `wheel_at` 内部不再自取 `take_*`，改成读同一张 dispatch 表（按指针落点读对应层）。
 5. 加 seam 自身的 3 条单测：`Handled` / `NotMine` / `BubbleUp` 三态各一条。
 6. 既有 14 处 `page.trace_keyboard` 直读直写的测试照旧（`TuiState::trace_keyboard: bool` 保留、由 dispatch 派生）。
+
+## 作答（2026-10-19，下半接完）
+
+上半的骨架（`KeyboardLayer` + 三态 `KeyOutcome` + 3 条单测，commit `8e6de67`）这一轮接完了：
+
+- `src/render/keyboard.rs`：trait 泛型化到状态类型 `KeyboardLayer<S>`（生产是 `TuiState`，测试用空类型），`key_dispatch` 返回最后那个 `KeyOutcome`，`mouse_dispatch` 返回「有没有层吃掉这一下」。`handle_mouse` / `handle_wheel` 改用坐标（`click_at` / `wheel_at` 只有落点，不必伪造 `MouseEvent`）。
+- `src/render/tui.rs` 新增私有模块 `keyboard_layers`：7 个 layer 的 impl 全在那里，判据只有一份。表序 `[Input, Trace, Sidebar, Detail, Picker, FileViewer, Replay]`，dispatch 反向迭代 = 重放 > 文件查看器 > 选择器 > 详情覆盖层 > 左栏 > 轨迹页 > 输入区，与改造前的阶梯逐段对应。
+- `TuiState::key()` 从 267 行降到约 30 行：只剩 seam 外的 `CtrlZ` 与「拖选中的 `Esc`」两条早返回（map 冻结项 6/7，即票面列的第八层 `DragSuspend`），其余一句 `key_dispatch`。
+- `click_at` / `wheel_at` 不再自开「持指针者」分支：`mouse_dispatch` / `wheel_dispatch` 走同一张层表。覆盖层独占、问卷 / 中间模态只吃自己那块、输入区归还、左栏与账本拿键盘都是各层 `handle_mouse` / `handle_wheel` 的副作用。
+- `keyboard_in_the_input` 改成 `!keyboard_layers::any_overlay_owns_keyboard(state)`，与层表同一组 `owns_keyboard`；`pending` 一项留在外层（它是 `InputLayer` 内部的编辑态，不是「哪一层持有」）。
+- `TuiState` 的 `*_keyboard` 字段仍是原来两个（`sidebar_keyboard` / `trace_keyboard`），没有新增；`take_*` / `release_*` 仍是它们唯一的写点。
+- 测试：`keyboard.rs` 4 条（三态各一条 + 「全 `NotMine` 即无人认领」）；`tui.rs` 2 条（层表与光标判据同源、部分持有的层把不认的键落到输入区）。
+
+§ 验收对照：
+
+1. `key()` 不再写 16 段早期 return：只剩 seam 外两条。✅
+2. `click_at` / `wheel_at` 内部走同一张 dispatch 表，没有新增「持指针者」分支。✅
+3. `TuiState` 上没有新的 `*_keyboard` 字段（仍是 `sidebar_keyboard` / `trace_keyboard`）；`KeyOutcome` 三种落点各有单测。✅
+4. 与 ADR 0010 同形：trait + 三态 enum + 按层反向迭代。✅
+
+验证：`cargo test --no-fail-fast` 除 `tests/session_page.rs` 的 `the_session_tab_comes_first_and_lists_the_history` 外全绿；那一条是**跨午夜的时间显示 flaky**（「90 分钟前」在 00:33 跨到昨天，于是断言 `1 小时前` 失败），在未改动的 HEAD 上用 `git stash` 复跑同样失败，与本票无关。`cargo clippy --all-targets` 0 warning；`cargo fmt --check` 干净。
 
 ## 评论
 
