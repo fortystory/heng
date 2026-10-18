@@ -72,7 +72,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - [ ] [键盘归属收到一处](issues/01-keyboard-owner.md)
 - [ ] [同一会话状态，收到一处](issues/02-session-projection.md)
 - [ ] [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)
-- [ ] [width module 的 seam 收齐](issues/04-width-seam.md)
+- [x] [width module 的 seam 收齐](issues/04-width-seam.md)
 
 **优先级与依赖**：
 
@@ -81,7 +81,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - 02（`SessionProjection`）无前置、第三位；10-17 才冒出来的形态问题，趁没长更大。
 - 03（`HostFacts`）有**前置 spec**（在 ticket 内 `## 注意` 段自陈）；开工前要先在它的 §前置 spec 里钉死「宿主表空 / 单会话 / 多会话」三态的读数；之后才动 `ConsoleRequest` 与订阅流。
 
-**frontier（2026-10-18，建图时）= 04** —— 编号最小、半径最小、阻塞已满足。 按顺序其次是 01 → 02 → 03。
+**frontier（2026-10-18，04 已 resolved）= 01**：04 是 tracer bullet，已落 `width::truncate_chars` 与 6 处替换；frontier 进到 01（无前置、是 10-18 报告首选）。下一张按优先级是 01 → 02 → 03。
 
 ## 已定的决定
 
@@ -91,7 +91,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - [键盘归属收到一处](issues/01-keyboard-owner.md) — seam 同 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 形状（`KeyboardLayer` trait + 三态 `KeyOutcome`），`key()` / `click_at` / `wheel_at` 走同一张 dispatch 表；保留 `trace_keyboard` 字段名（既有断言线不破），`keyboard_in_the_input` 跟 dispatch 共源；前置 `Ctrl-Z` 与 `Esc` 撤选两条早返回保留在 seam 外，不进 `KeyOutcome`。
 - [同一会话状态，收到一处](issues/02-session-projection.md) — `View` + `SessionLight` 并入 `SessionProjection` module，`TuiState` 只持 `HashMap<SessionId, SessionProjection>`；`stash` / `load` 收成一份迁移函数；不碰 `session-panes` 票 23 / 25 给出的对外契约；测试断言的 5 张 `HashMap` 读法逐条改写。
 - [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md) — `HostFacts` 同时被 cli 与 tui 订阅；`ConsoleRequest` 22 变体收到 ≤ 5 个；**前置 spec** 钉「宿主表空 / 单会话 / 多会话」三态读数，后做订阅改造；三条规则（未读寿命、`N` 只算后台、单会话标题不变）落到单元测试，[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㊶ 同步改写。
-- [width module 的 seam 收齐](issues/04-width-seam.md) — 6 处 `chars().take` 一律换 `width::truncate_columns`；带样式的换 `width::ellipsize_line`；`markdown::wrap_code` 与 ADR 0008「换行归我们」一并收口；新增 `width::truncate_chars` 专给真按字符的少数几处出口，doc 注释写清「按列 / 按字」两把尺子的判据。
+- [width module 的 seam 收齐](issues/04-width-seam.md) — **resolved 2026-10-18（tracer bullet）**。`src/render/width.rs` 新增 `pub fn truncate_chars` 作为按字符出口（与 `truncate_columns` 并列），module 顶 doc 写清「按显示列 / 按字符」两把尺子的判据；6 处 `chars().take`（`files.rs:118` / `changes.rs:589` / `transcript.rs:667` / `wording.rs:222` / `wording.rs:963` / `tui.rs:15059`）一律换 `truncate_chars`；`markdown::wrap_code` 已在 `width::char_columns` 上、不动。**修原票验收 2**：原写「`truncate_columns` ≥ 9」，实际 6 处全是按字符口径——以「`truncate_chars` 在 `src/render/` 命中 ≥ 6」等价收尾。**新增单测 3 条**钉这两把尺子不能互换（同串 `"衡a衡b"` 上 `truncate_columns(_, 4) == "衡a"` / `truncate_chars(_, 4) == "衡a衡b"`）。`render/` 外的 8 处 `chars().take` 不在本票范围。
 
 ## 尚未明确
 
@@ -118,4 +118,4 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 
 ## 进度
 
-**决策 0/4（2026-10-18，charting 完成）。** 四张 task 票全在 frontier：`04 → 01 → 02 → 03` 的优先级已定、03 的前置 spec 已说明、`KeyboardLayer` 形态与 ADR 0010 形状对齐这一条已经落到冻结项 2。下一步是 `/implement` 拿一张 ticket（04 是 tracer bullet）开工，每张落地后写 `## 作答` + `Status: resolved` 并在这里收一行。
+**1/4（2026-10-18，04 已 resolved）。** tracer bullet [04 — width module 的 seam 收齐](issues/04-width-seam.md) 已落：`width::truncate_chars` 与 6 处替换，3 条新单测钉两把尺子；原票验收 2（`truncate_columns` ≥ 9）按口径与实际冲突改写为 `truncate_chars` ≥ 6，全测与 clippy、fmt 干净。frontier 进到 01（无前置、是 10-18 报告首选）。下一步还是 `/implement`：[01 — 键盘归属收到一处](issues/01-keyboard-owner.md)，按 `KeyboardLayer` trait + 三态 `KeyOutcome` + 共一张 dispatch 表，`trace_keyboard` 字段名保留既有的 14 处断言不破。
