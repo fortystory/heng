@@ -2,7 +2,7 @@
 
 Type: task
 Status: claimed
-Claimed-by: wayfinder session 2026-10-18 (after 04 resolved)
+Claimed-by: wayfinder session 2026-10-18 (after 04 resolved; half-done — see § 评论)
 Part of: ../map.md
 Blocked by: —
 
@@ -42,6 +42,28 @@ enum KeyOutcome {
 - 来源：[report-2026-10-18.md §首选 · 把键盘归属收到一处](../report-2026-10-18.md)。
 - 先例：[ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)。
 - HTML：[report-2026-10-18.html 第 1 张卡片](../report-2026-10-18.html)（before / after Mermaid）。
+- 骨架 commit：`8e6de67 refactor(render): 键盘归属 seam 的 trait 与三态 dispatch 表`。
+
+## 作答（2026-10-18，骨架已落）
+
+这是 § 1 半交付。下一会话接着做 § 2 半。
+
+**这一半（已 commit）**：
+
+- `src/render/keyboard.rs` 新增 `KeyboardLayer` trait + `KeyOutcome { Handled, NotMine, BubbleUp }` 三态 enum。
+- `key_dispatch` / `mouse_dispatch` / `wheel_dispatch` 三个 dispatch 入口；每条从 `layers.iter_mut().rev()` 开始、按 `owns_keyboard()` 跳过、`Handled` 与 `BubbleUp` 立即停、`NotMine` 落到下一层继续。
+- `render/mod.rs` 加 `pub mod keyboard;`。
+- 3 条新单测钉三态（`tests::handled_layer_stops_the_dispatch_chain` / `::not_mine_layer_falls_through` / `::bubble_up_layer_lets_the_dispatch_chain_stop`）。
+
+**下一半（下一会话）**：
+
+- `TuiState::key()` 16 个 early-return 点改成 `dispatch(7 layers)`。保留 CtrlZ 与 Esc+drag 两条 seam 外（map 冻结项 6/7）。
+- `click_at` / `wheel_at` 内部不再自取 `take_*`，改成读同一张 dispatch 表（按指针落点 → 选 layer）。
+- `keyboard_in_the_input` 改为从层集合派生：`!any_layer_owns()`。
+- `take_trace_keyboard` / `release_trace_keyboard` / `take_sidebar_keyboard` / `release_sidebar_keyboard` / `take_input_keyboard` 改为"改 seats → dispatch 自动重算"；既有 14 + 28 处 `page.trace_keyboard` / `sidebar_keyboard` 直读直写测试不破（`TuiState::trace_keyboard: bool` / `sidebar_keyboard: bool` 字段保留）。
+- 8 个具体 layer 接上：`DragSuspend`（CtrlZ + Esc+drag 共一档）/ `Replay` / `FileViewer` / `Picker` / `Detail` / `Sidebar` / `Trace` / `Input`。
+
+**约束**：本票面 § 验收 1（`key()` 不再 11 段早期 return）、§ 验收 2（`click_at` / `wheel_at` 走同一张 dispatch）**均未满足**——等下一半一起验。§ 验收 3（三态各一条单测）**已满足**（3 条 keyboard.rs 内的单测）。§ 验收 4（与 ADR 0010 形状对齐）已满足（trait + 三态 enum 同形）。
 
 ## 勘探备忘（2026-10-18，wayfinder 会话、claim 后）
 
@@ -80,3 +102,5 @@ enum KeyOutcome {
 ## 评论
 
 - 2026-10-18：从 [.scratch/architecture-deepening/seed.md](../seed.md) 「也升级了——成为四套机制」分支
+- 2026-10-18：claim by wayfinder（已 resolved 04）；未在本会话落地，规模比 04 大、`key()` 改写面是 1006 行业务，留给下个会话 / `/implement` 实做。本会话把勘探备忘留在 § 勘探备忘。
+- 2026-10-19：骨架 commit `8e6de67` 落下 `KeyboardLayer` trait + 三态 enum + 3 条单测（§ 验收 3、4 满足；§ 验收 1、2 留给下一会话）。
