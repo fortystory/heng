@@ -19,6 +19,7 @@ use crate::events::{
 };
 use crate::questions::UserAnswers;
 
+use super::width;
 use super::wording;
 use super::{DeltaKind, RenderEvent};
 
@@ -664,7 +665,7 @@ pub fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
     }
-    let mut out: String = text.chars().take(max).collect();
+    let mut out = width::truncate_chars(text, max);
     out.push_str(wording::ELLIPSIS);
     out
 }

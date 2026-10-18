@@ -66,7 +66,7 @@ use super::token;
 use super::transcript::{
     Block, BlockId, CallTiming, ToolBlock, ToolOutcome, Transcript, summarize_args,
 };
-use super::width::{char_columns, ellipsize_line, text_columns, truncate_columns};
+use super::width::{char_columns, ellipsize_line, text_columns, truncate_chars, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
 use crate::render::viewer::{self, Viewer};
@@ -15056,7 +15056,7 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
     if text.chars().count() <= DETAIL_MAX_CHARS {
         return (text, false);
     }
-    let cut: String = text.chars().take(DETAIL_MAX_CHARS).collect();
+    let cut = truncate_chars(&text, DETAIL_MAX_CHARS);
     (cut, true)
 }
 

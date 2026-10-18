@@ -14,6 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use super::width;
+
 /// 一个文件内容弹窗最多读多少字节。
 ///
 /// 这三个上限是渲染层自己写的：权限门约束的是**模型**的读写，而这是人在自己的终端里点开
@@ -115,7 +117,7 @@ pub fn read(root: &Path, path: &str) -> FileBody {
             .split('\n')
             .map(|line| {
                 if line.chars().count() > MAX_LINE_CHARS {
-                    line.chars().take(MAX_LINE_CHARS).collect()
+                    width::truncate_chars(line, MAX_LINE_CHARS)
                 } else {
                     line.to_owned()
                 }

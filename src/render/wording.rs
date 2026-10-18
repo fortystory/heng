@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::permissions::{Escalation, Mode};
 use crate::provider::FinishReason;
 use crate::questions::{UserAnswer, UserAnswers};
-use crate::render::width::{text_columns, truncate_columns};
+use crate::render::width::{text_columns, truncate_chars, truncate_columns};
 
 /// 一个轮次模式给人看的标签。
 ///
@@ -213,13 +213,14 @@ pub fn tool_call(tool: &str, args: &str) -> String {
     format!("调用 {tool}({args})")
 }
 
-/// 一条裁到 `max_chars` 的工具结果，切口用中文标出来，好让人分得清一条完整的短结果与
-/// 一条被省略的长结果。
+/// 一条裁到 `max_chars` 个字符的工具结果，切口用中文标出来，好让人分得清一条完整的短结果与
+/// 一条被省略的长结果。这是**按字符**而不是按显示列 —— 工具结果常常不是给人眼读的，它的
+/// 限制是日志/回放那一档，与终端列宽无关。
 pub fn tool_output_preview(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_owned();
     }
-    let mut out: String = text.chars().take(max_chars).collect();
+    let mut out: String = truncate_chars(text, max_chars);
     out.push_str("…（结果已省略）");
     out
 }
@@ -954,13 +955,14 @@ fn first_line(text: &str) -> String {
 
 /// `text` 裁到 `max` 个字符，用省略号标出。
 ///
-/// 刻意只留在这个层里：描述是措辞，而转录自己那个 `truncate` 是呈现助手，措辞层没有理由
-/// 跟它共用。
+/// **按字符而不是按显示列** —— 描述的存在是为了让一行一眼可读，长描述被窗格再折一次会丢
+/// 掉的可读性正是它要避免的；这一档跟终端列宽无关。刻意只留在这个层里：描述是措辞，而转
+/// 录自己那个 `truncate` 是呈现助手，措辞层没有理由跟它共用。
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
     }
-    let mut out: String = text.chars().take(max).collect();
+    let mut out: String = truncate_chars(text, max);
     out.push_str(ELLIPSIS);
     out
 }

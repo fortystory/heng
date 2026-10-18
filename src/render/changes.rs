@@ -20,6 +20,7 @@ use std::time::Duration;
 use super::files;
 use super::highlight::DiffTag;
 use super::hostproc::{self, Finished, Run};
+use super::width;
 use ratatui::style::{Color, Modifier, Style};
 
 /// 一次取数的墙钟上限。
@@ -586,7 +587,7 @@ fn range_start(range: &str) -> Option<usize> {
 pub fn clamp(text: &str) -> (Vec<String>, usize) {
     let mut lines: Vec<String> = text
         .split('\n')
-        .map(|line| line.chars().take(files::MAX_LINE_CHARS).collect())
+        .map(|line| width::truncate_chars(line, files::MAX_LINE_CHARS))
         .collect();
     if lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
