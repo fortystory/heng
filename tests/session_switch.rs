@@ -202,6 +202,14 @@ fn the_way_out_follows_the_session_that_is_in_front() {
         back.contains(wording::EXIT_HINT_IDLE) && !back.contains("ctrl-c"),
         "切回来又是空闲那一档：{back}"
     );
+
+    // 再切回正在跑的那个：三态跟着会话走，没在切换里丢（票 02 的同一张切片表）。
+    switch(&mut state, "s-b", vec![said(1, "乙")]);
+    let busy_again = screen(120, 24, &mut state);
+    assert!(
+        busy_again.contains(wording::EXIT_HINT_BUSY),
+        "三态切回去还在：{busy_again}"
+    );
 }
 
 #[test]

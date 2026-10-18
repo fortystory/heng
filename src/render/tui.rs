@@ -821,197 +821,373 @@ pub enum Gesture {
     DeclineQuestion,
 }
 
-/// 一个会话的**投影**：由这个会话的事件流累积出来的一切，加上构造时注入的两份事实
-/// （[`SessionFacts`] 与发言者配色）。
+/// 一个会话在渲染器里的全部状态：投影、轻状态、三态、名册与只读（票 02）。
 ///
-/// 判据是「重放这个会话的事件流能不能重建出它」：能重建的住这里，重建不出来的
-/// （键盘、鼠标、终端几何、进程意愿、进程级轻状态）留在 [`TuiState`] 本体。
-///
-/// 分块的用处是切换会话：**整块换**这个值，而不是靠一份容易漏字段的 reset 清单
-/// （`.scratch/session-tab/spec.md` §6）。
-pub struct View {
-    /// 左栏与状态行显示什么，组装时注入（spec §8）。
-    facts: SessionFacts,
-    /// 正在推进的目标名：从流上那条 `GoalSelected` 留下，`GoalStopped` / `GoalCompleted`
-    /// 到了就清掉（spec §6）。目标名本来就被推到前端，只是转录层把它丢了。
-    goal: Option<String>,
-    /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
-    /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
-    /// （`.scratch/todo-and-modes/spec.md` §1）。
-    mode: Mode,
-    /// plain 渲染器共用的那个「事件转块」的合并器。
-    transcript: Transcript,
-    /// 对话视图的窗格：主列那些行按画出来的宽度折行，带自己的视口（`.scratch/trace-tab/spec.md` §1）。
-    conversation: Pane,
-    /// 轨迹视图的窗格：主列 `轨迹` 页画它。与对话视图共用同一份共享源（`painted`），但各持
-    /// 折行缓存、宽度、视口与「新行」计数。
+/// 票 02 之前它们是五张平行的 `HashMap<SessionId, T>`，加一个会话属性要改 ≥2 处；
+/// 现在这里是那张唯一按会话切片的表，新增字段只动本模块。
+mod projection {
+    use super::*;
+
+    /// 一个会话的**投影**：由这个会话的事件流累积出来的一切，加上构造时注入的两份事实
+    /// （[`SessionFacts`] 与发言者配色）。
     ///
-    /// 它**常驻**：轨迹视图住在主列里，而主列永远在（`.scratch/trace-in-main/spec.md` §3）。
-    trace: Pane,
-    /// 当前消息正在流的尾巴。
-    live: String,
-    /// 已经画进窗格的那些绘制记录，按到达顺序。
+    /// 判据是「重放这个会话的事件流能不能重建出它」：能重建的住这里，重建不出来的
+    /// （键盘、鼠标、终端几何、进程意愿、进程级轻状态）留在 [`TuiState`] 本体。
     ///
-    /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）。
-    /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
-    /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
-    painted: Vec<Painted>,
-    /// 整趟会话的时间轴账（票 22 第 7 条）：两泳道的段在**事件到达时**累积，横带每帧只读它
-    /// —— 不重扫 [`Self::painted`]，那里的块数随会话线性长。
+    /// 分块的用处是切换会话：**整块换**这个值，而不是靠一份容易漏字段的 reset 清单
+    /// （`.scratch/session-tab/spec.md` §6）。
+    pub(super) struct View {
+        /// 左栏与状态行显示什么，组装时注入（spec §8）。
+        pub(super) facts: SessionFacts,
+        /// 正在推进的目标名：从流上那条 `GoalSelected` 留下，`GoalStopped` / `GoalCompleted`
+        /// 到了就清掉（spec §6）。目标名本来就被推到前端，只是转录层把它丢了。
+        pub(super) goal: Option<String>,
+        /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
+        /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
+        /// （`.scratch/todo-and-modes/spec.md` §1）。
+        pub(super) mode: Mode,
+        /// plain 渲染器共用的那个「事件转块」的合并器。
+        pub(super) transcript: Transcript,
+        /// 对话视图的窗格：主列那些行按画出来的宽度折行，带自己的视口（`.scratch/trace-tab/spec.md` §1）。
+        pub(super) conversation: Pane,
+        /// 轨迹视图的窗格：主列 `轨迹` 页画它。与对话视图共用同一份共享源（`painted`），但各持
+        /// 折行缓存、宽度、视口与「新行」计数。
+        ///
+        /// 它**常驻**：轨迹视图住在主列里，而主列永远在（`.scratch/trace-in-main/spec.md` §3）。
+        pub(super) trace: Pane,
+        /// 当前消息正在流的尾巴。
+        pub(super) live: String,
+        /// 已经画进窗格的那些绘制记录，按到达顺序。
+        ///
+        /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）。
+        /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
+        /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
+        pub(super) painted: Vec<Painted>,
+        /// 整趟会话的时间轴账（票 22 第 7 条）：两泳道的段在**事件到达时**累积，横带每帧只读它
+        /// —— 不重扫 [`Self::painted`]，那里的块数随会话线性长。
+        ///
+        /// 与 `painted` 同一条寿命：宽度重放**不重建**它（重放换的是窗格里的行，而这一趟的秒数
+        /// 一个都没变）。
+        pub(super) timeline: Timeline,
+        /// 块身份 → 它在轴上的落点（哪一刻、落哪条泳道）。
+        ///
+        /// 横带要问三件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
+        /// 底色要按视口里那几块算，泳道行的**命中底色**要问这一块落不落轴、落在哪一条（票 23）。
+        /// 三件都每帧问一次，所以它是一张表，不是对 `painted` 的一次线性查找（同一张纪律见
+        /// [`Self::timeline`]）。
+        pub(super) block_at: std::collections::HashMap<BlockId, BlockStamp>,
+        /// 现在在不在一次模型调用里（`TurnStarted` 之后、`TurnEnded` 之前）。合成器那次调用不属于
+        /// 任何回合，所以它的用量走独立行那条老路（§4）。
+        pub(super) in_call: bool,
+        /// 这条发言里模型被调用了几次，以及那几次的读数之和 —— 收尾那条合计的原料（§5）。
+        pub(super) turn_calls: usize,
+        pub(super) turn_usage: Usage,
+        /// 到现在为止开过几次发言（1 起数）—— 一条记录的用量面按它认领自己那次发言（票 15）。
+        ///
+        /// 判据与一级组头同一个（`TurnStarted { iteration: 1 }`）：一次发言里那几次迭代都算同一次。
+        pub(super) turn_ordinal: u32,
+        /// 已经收尾的那些发言，各自的合计用量（下标 = 发言序号 − 1）—— 「本次」那一节在**打开
+        /// 那一刻**按它查出与行尾那个 `合计` 同一个数（票 15 第 3 条）。只增、不随宽度重放清空：
+        /// 它认的是发言，不是屏幕上的行。
+        pub(super) turn_totals: Vec<Usage>,
+        /// 对话视图的源行是按多宽排的。
+        ///
+        /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
+        /// 它是重放判据的一半，另一半是 [`TuiState::trace_width`]。
+        pub(super) conversation_width: u16,
+        /// 轨迹视图的源行是按多宽排的 —— **右栏**内宽（票 13：轨迹的家是右栏）。
+        pub(super) trace_width: u16,
+        /// 这份投影按新宽度重放过几次（票 24 的判据：两态切换**不**该让它长一）。
+        pub(super) trace_replays: u64,
+        /// 对话视图的跨块排版状态（上一个发言者、上一条是不是消息）：换人空一行、同一人连发的
+        /// 多段正文只留一个名字，都靠它（`.scratch/tui-visual-language/spec.md` §23）。窗格清空
+        /// 重放时它跟着一起清。
+        pub(super) conversation_flow: Flow,
+        /// 轨迹视图那一份：它只按发言者空行，消息行每条都带名字。
+        pub(super) trace_flow: Flow,
+        /// 轨迹页**自己的**宽度档：前缀带不带方括号看它，不看正文列数。
+        ///
+        /// 判据量的是**主列页宽**，而主列最小 40 列（终端下界就是它），所以它恒为宽档 —— 那个去
+        /// 括号的分支还留在 [`prefix_style`] 里（它与共享渲染那条路径共用签名），只是到不了屏幕
+        /// （`.scratch/trace-in-main/spec.md` §3）。
+        pub(super) trace_tier_width: u16,
+        /// 左栏调用量页显示的那些数字，从流上数出来的。
+        pub(super) panel: Panel,
+        /// 待办页与它的闩：当时生效的列表（从渲染器已经见过的调用读出），以及这个页签到底
+        /// 给不给（`.scratch/todo-and-modes/spec.md` §4）。是渲染器状态，不是事件 —— 重新
+        /// 打开的会话靠重放同样的调用把它重建出来。
+        pub(super) todo: crate::render::TodoPanel,
+        /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
+        /// 次出现的名字得保住已经发给它的那个槽位。
+        pub(super) colors: SpeakerColors,
+        /// 状态行那一格显示的推理档位（spec §11）。它是**渲染器状态**，与 `mode` 同一格：
+        /// 循环推一条 `SessionUpdate` 过来，前端并进它自己的显示，不进事件流 ——
+        /// 换档是会话属性，不是这个会话发生过的一件事。
+        pub(super) effort: Option<crate::config::ReasoningEffort>,
+        /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
+        /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
+        /// 上才有（票 02 §1）。
+        pub(super) reasoning: String,
+        /// 敞开的那条思考行属于哪个发言者，好让写完的那行用同一个名字。
+        pub(super) thinking_speaker: crate::events::SpeakerId,
+        /// 此刻屏幕上有没有一条敞开的思考行 —— 窗格里唯一会变的那一行。
+        pub(super) thinking_open: bool,
+        /// 这一回合的消息是否已经有它的思考行了。正文的第一个增量在 `MessageCompleted` 到达
+        /// 之前很久就把这行定下来了，所以这条记录必须比 `thinking_open` 活得久，否则完成
+        /// 事件会为同一个想法再加一行（票 02 §1）。
+        pub(super) thinking_done: bool,
+        /// 回合条的单位与它们的分段头。
+        pub(super) turn_rail: TurnRail,
+        /// 轨迹页里键盘认的那**一个块**（`.scratch/trace-ledger/spec.md` §9）。
+        ///
+        /// 存的是**块身份**而不是位置下标：宽度变化重放会把整本账重推一遍、`CAP` 会把全体下标
+        /// 左移，而这两件事都推翻不了身份（ADR 0021）。画在哪一行、按 `↑` / `↓` 走到哪一块，
+        /// 都是查出来的。
+        ///
+        /// 它在两种情况下**留着但不画**：那一块被过滤掉了（过滤归票 20），或者它被 `CAP` 裁出了
+        /// 窗口 —— 两者都不清它，因为「清掉读者放下的一处位置」比「暂时看不见」更难解释。
+        pub(super) trace_selection: Option<BlockId>,
+        /// 轨迹页每条来源行背后的详情，与那个窗格平行、按它的上限一起裁剪，好让两者永不脱节。
+        /// 不是入口的那些行是 `None`。
+        ///
+        /// **只有轨迹页有一份**：那是它独有的入口 —— 对话页画的是全文，点它不打开任何东西
+        /// （`.scratch/tui-feedback/spec.md` §9）。
+        pub(super) trace_links: std::collections::VecDeque<Option<Detail>>,
+        /// 轨迹页每条来源行**属于哪个块** —— 与 [`Self::trace_links`] 平行、按同一个丢弃数裁，
+        /// 所以两者与那个窗格永远同长（ADR 0021）。
+        ///
+        /// 「源行 → 块」这一向是行选择、折叠、命中导航与详情跳转的共同落点，而**块 → 位置**是这张
+        /// 表上的一次线性查找（[`Self::first_source_of`]）。不另立一个以块为键的映射：那张表每次
+        /// 裁剪都要全体下标左移，以块为键的映射就得跟着重算。
+        ///
+        /// `None` = 那一行不属于任何块（单位之间的分隔线、折叠出来的折行将来各自另有身份）。
+        pub(super) trace_block_ids: std::collections::VecDeque<Option<BlockId>>,
+        /// 来源面那条祖先链的原料：账本上那几种**能当一环**的记录，按账本行号递增。
+        ///
+        /// 只记链要用的三类（用户消息、迭代的回复、单位组头），每条一个账本行号 —— 链深不封顶，
+        /// 所以不能只留「最近那一条」；位置用账本行号，于是 `CAP` 把那些行挪出窗口之后，链上
+        /// 那一环仍然报得出位置（票 14 第 1、6 条）。宽度重放与它一起清、按同样的顺序重建。
+        pub(super) anchors: Vec<Anchor>,
+        /// 轨迹页两级分组的当前进度：一个正在开着的一级组与一个正在开着的二级组。
+        ///
+        /// 它是**跨块排版状态**的一部分，与 [`Self::trace_flow`] 同进同出（宽度重放时一起清）——
+        /// 因为组的边界也是由块序列推出来的，重放要把整本账按同样的顺序再推一遍。
+        pub(super) trace_groups: TraceGroups,
+        /// 渲染层自己造的那条记录流（推理增量开出的思考行、诊断、通知、身份注入）已经发到第几件
+        /// —— 它们没有信封，于是 `index` 由它补。它**不随重放重置**：重放走的是这份清单而不重新
+        /// 发号（重推用的就是清单里那一份身份）。
+        pub(super) next_local_id: u32,
+        /// 上一帧轨迹页把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
+        /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
+        pub(super) trace_drawn: Drawn,
+        /// 正在读的那一份 diff：读什么，以及它属于哪一次打开
+        /// （`.scratch/diff-page/spec.md` §6）。
+        ///
+        /// 弹窗**先立起来**、正文后到：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许
+        /// 等它（与那三条「一帧里不 await」同一条纪律）。
+        pub(super) diff_reading: Option<DiffReading>,
+        /// 正在流的正文属于哪个发言者 —— 等待块与流式正文那一行名字用的就是它（正文一完成，
+        /// 名字改由那条源行自己带）。还没有增量时是 `None`，那时用名册的第一个。
+        pub(super) live_speaker: Option<crate::events::SpeakerId>,
+        /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
+        /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
+        /// 或一次收尾清掉。
+        pub(super) running_tool: Option<(String, serde_json::Value)>,
+        /// 轨迹页的搜索与过滤态（票 20）。`None` 是「这个会话里还从来没搜过」。
+        ///
+        /// 它按**块身份**记，不存窗格里 —— 于是宽度变化重放之后过滤集原样还在
+        /// （票 20 第 10 条）。也只活在进程内：切会话 / 恢复会话都不持久。
+        pub(super) trace_search: Option<TraceSearch>,
+        /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
+        pub(super) trace_index: TraceIndex,
+        /// 轨迹页的**折叠集合**：哪些块收成了一行（票 21 第 9 条）。
+        ///
+        /// 与过滤集同一条纪律：按**块身份**记、存在 `TuiState` 侧、不存窗格里 —— 于是宽度变化
+        /// 那次重放之后原样还在。三档折行共用这一个集合（单位 / 迭代 / 连续工具调用各是里面的
+        /// 一个身份），因为「谁收起来了」只回答一次。
+        pub(super) folded: std::collections::HashSet<BlockId>,
+        /// 进入全折之前那一份折叠态 —— `{` 存、`}` 还原（票 21 第 6 条）。
+        ///
+        /// 没有它，全展就只能是「清空折叠集合」，而那会把读者自己折的东西一起抹掉。连按两次
+        /// `{` 不覆盖它：否则 `}` 还原出来的就是全折态本身。
+        pub(super) fold_before_all: Option<std::collections::HashSet<BlockId>>,
+        /// 当前账本上那些**折叠把手**的身份：组头那几行，以及现在画着的几条折行。
+        ///
+        /// 指针要它：一次点击落在一条源行上时，只有这一行是个把手才翻得动折叠，而「这一行是
+        /// 组头 / 折行，还是一条普通块行」在身份表上读不出来（[`TuiState::trace_block_ids`] 只有
+        /// 身份，没有种类）。它与窗格同进同出 —— 重放开始那一刻清空，推一条行时补一格。
+        pub(super) fold_handles: std::collections::HashSet<BlockId>,
+    }
+
+    /// 一个会话在渲染器里的**轻状态**：与投影无关、却跟会话走的那几样
+    /// （`.scratch/session-tab/spec.md` §6）。
     ///
-    /// 与 `painted` 同一条寿命：宽度重放**不重建**它（重放换的是窗格里的行，而这一趟的秒数
-    /// 一个都没变）。
-    timeline: Timeline,
-    /// 块身份 → 它在轴上的落点（哪一刻、落哪条泳道）。
+    /// 切换 = 先收走当前那份、再装入目标那份。**页签选择、主列页、`Ctrl-O` 意愿与会话页的过滤态
+    /// 不在这里** —— 它们是进程级的（同一份左栏、同一块屏幕）。
+    #[derive(Default)]
+    pub(super) struct SessionLight {
+        /// 草稿与它的光标。
+        pub(super) editor: Input,
+        /// 这个会话的工作目录（票 25）：终端标题与 `@` 候选都跟着它。
+        pub(super) cwd: std::path::PathBuf,
+        /// 工作区的文件索引（根 = 这个会话的 `cwd`；票 25）。
+        pub(super) files: FileIndex,
+        /// 对话视图的视口意图。
+        pub(super) conversation: crate::render::pane::Viewport,
+        /// 轨迹视图的视口意图。
+        pub(super) trace: crate::render::pane::Viewport,
+        /// 等着人答的那一份（问卷 / 权限门 / 过大的粘贴）—— 每会话一份，全屏只画焦点那份
+        /// （票 20）。它自带 reply 通道，所以切走再切回、作答仍回到原来那个会话。
+        pub(super) pending: Option<Pending>,
+        /// 打开的详情覆盖层。
+        pub(super) detail: Option<DetailView>,
+        /// 打开详情的那一页、以及它打开前的滚动状态（票 22：跟着会话走，切回来关掉仍还原给它）。
+        pub(super) detail_opener: Option<DetailOpener>,
+        /// 这个会话打开过多少次详情覆盖层（票 22）。
+        pub(super) detail_serial: u64,
+        /// 打开的文件查看器。
+        pub(super) file_viewer: Option<FileViewerPane>,
+        /// 开着的选择器。
+        pub(super) picker: Option<Picker>,
+        /// `/` 菜单的高亮与它属于哪个 token。
+        pub(super) slash: MenuSelection,
+        /// 轨迹页的过滤。
+        pub(super) trace_search: Option<TraceSearch>,
+        /// 折起来的那些块，以及全折之前那一份存根。
+        pub(super) folded: std::collections::HashSet<BlockId>,
+        pub(super) fold_before_all: Option<std::collections::HashSet<BlockId>>,
+        /// 哪几行是折叠把手。
+        pub(super) fold_handles: std::collections::HashSet<BlockId>,
+        /// 轨迹页的索引。
+        pub(super) trace_index: TraceIndex,
+        /// 选中的那一块。
+        pub(super) trace_selection: Option<BlockId>,
+    }
+
+    /// 一个会话在渲染器里的**全部**切片状态（票 02）。
     ///
-    /// 横带要问三件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
-    /// 底色要按视口里那几块算，泳道行的**命中底色**要问这一块落不落轴、落在哪一条（票 23）。
-    /// 三件都每帧问一次，所以它是一张表，不是对 `painted` 的一次线性查找（同一张纪律见
-    /// [`Self::timeline`]）。
-    block_at: std::collections::HashMap<BlockId, BlockStamp>,
-    /// 现在在不在一次模型调用里（`TurnStarted` 之后、`TurnEnded` 之前）。合成器那次调用不属于
-    /// 任何回合，所以它的用量走独立行那条老路（§4）。
-    in_call: bool,
-    /// 这条发言里模型被调用了几次，以及那几次的读数之和 —— 收尾那条合计的原料（§5）。
-    turn_calls: usize,
-    turn_usage: Usage,
-    /// 到现在为止开过几次发言（1 起数）—— 一条记录的用量面按它认领自己那次发言（票 15）。
+    /// 这张表取代了原先按 `SessionId` 平行的五张表（`views` / `light` / `states` / `catalogs` /
+    /// `read_only_by`）：每个会话一条记录，装它的投影（切走时才有）、轻状态（切走时才有）、
+    /// 三态、名册与只读。`view` / `light` 是 `Option` —— 后台会话可能只报过三态 / 名册，
+    /// 还没被切过去，那时它只有后半几项。
     ///
-    /// 判据与一级组头同一个（`TurnStarted { iteration: 1 }`）：一次发言里那几次迭代都算同一次。
-    turn_ordinal: u32,
-    /// 已经收尾的那些发言，各自的合计用量（下标 = 发言序号 − 1）—— 「本次」那一节在**打开
-    /// 那一刻**按它查出与行尾那个 `合计` 同一个数（票 15 第 3 条）。只增、不随宽度重放清空：
-    /// 它认的是发言，不是屏幕上的行。
-    turn_totals: Vec<Usage>,
-    /// 对话视图的源行是按多宽排的。
+    /// **焦点会话**的 `view` 与轻状态不在这里，它们以散字段住在 [`TuiState`] 上（热路径）；
+    /// 这条不变量由 `TuiState::switch_session` 维持：切换时把焦点那份收进表、把目标那份取走。
+    #[derive(Default)]
+    pub(super) struct SessionProjection {
+        pub(super) view: Option<View>,
+        pub(super) light: Option<SessionLight>,
+        pub(super) state: Option<crate::session::host::SessionState>,
+        pub(super) catalog: Vec<CatalogEntry>,
+        pub(super) read_only: bool,
+    }
+}
+impl TuiState {
+    /// 把焦点从当前会话挪到目标会话，并换入换出那两份切片状态（票 02）。
     ///
-    /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
-    /// 它是重放判据的一半，另一半是 [`TuiState::trace_width`]。
-    conversation_width: u16,
-    /// 轨迹视图的源行是按多宽排的 —— **右栏**内宽（票 13：轨迹的家是右栏）。
-    trace_width: u16,
-    /// 这份投影按新宽度重放过几次（票 24 的判据：两态切换**不**该让它长一）。
-    trace_replays: u64,
-    /// 对话视图的跨块排版状态（上一个发言者、上一条是不是消息）：换人空一行、同一人连发的
-    /// 多段正文只留一个名字，都靠它（`.scratch/tui-visual-language/spec.md` §23）。窗格清空
-    /// 重放时它跟着一起清。
-    conversation_flow: Flow,
-    /// 轨迹视图那一份：它只按发言者空行，消息行每条都带名字。
-    trace_flow: Flow,
-    /// 轨迹页**自己的**宽度档：前缀带不带方括号看它，不看正文列数。
+    /// 这是原先 `stash_light` + `load_light` 两步搬运收成的**一处**：收走当前会话的投影与
+    /// 轻状态、写回 [`SessionProjection`] 那条记录；再把目标那份取出来装进焦点散字段。
+    /// 返回 `true` 表示目标会话**第一次装载**（调用方据此决定要不要铺历史）。
     ///
-    /// 判据量的是**主列页宽**，而主列最小 40 列（终端下界就是它），所以它恒为宽档 —— 那个去
-    /// 括号的分支还留在 [`prefix_style`] 里（它与共享渲染那条路径共用签名），只是到不了屏幕
-    /// （`.scratch/trace-in-main/spec.md` §3）。
-    trace_tier_width: u16,
-    /// 左栏调用量页显示的那些数字，从流上数出来的。
-    panel: Panel,
-    /// 待办页与它的闩：当时生效的列表（从渲染器已经见过的调用读出），以及这个页签到底
-    /// 给不给（`.scratch/todo-and-modes/spec.md` §4）。是渲染器状态，不是事件 —— 重新
-    /// 打开的会话靠重放同样的调用把它重建出来。
-    todo: crate::render::TodoPanel,
-    /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
-    /// 次出现的名字得保住已经发给它的那个槽位。
-    colors: SpeakerColors,
-    /// 状态行那一格显示的推理档位（spec §11）。它是**渲染器状态**，与 `mode` 同一格：
-    /// 循环推一条 `SessionUpdate` 过来，前端并进它自己的显示，不进事件流 ——
-    /// 换档是会话属性，不是这个会话发生过的一件事。
-    effort: Option<crate::config::ReasoningEffort>,
-    /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
-    /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
-    /// 上才有（票 02 §1）。
-    reasoning: String,
-    /// 敞开的那条思考行属于哪个发言者，好让写完的那行用同一个名字。
-    thinking_speaker: crate::events::SpeakerId,
-    /// 此刻屏幕上有没有一条敞开的思考行 —— 窗格里唯一会变的那一行。
-    thinking_open: bool,
-    /// 这一回合的消息是否已经有它的思考行了。正文的第一个增量在 `MessageCompleted` 到达
-    /// 之前很久就把这行定下来了，所以这条记录必须比 `thinking_open` 活得久，否则完成
-    /// 事件会为同一个想法再加一行（票 02 §1）。
-    thinking_done: bool,
-    /// 回合条的单位与它们的分段头。
-    turn_rail: TurnRail,
-    /// 轨迹页里键盘认的那**一个块**（`.scratch/trace-ledger/spec.md` §9）。
-    ///
-    /// 存的是**块身份**而不是位置下标：宽度变化重放会把整本账重推一遍、`CAP` 会把全体下标
-    /// 左移，而这两件事都推翻不了身份（ADR 0021）。画在哪一行、按 `↑` / `↓` 走到哪一块，
-    /// 都是查出来的。
-    ///
-    /// 它在两种情况下**留着但不画**：那一块被过滤掉了（过滤归票 20），或者它被 `CAP` 裁出了
-    /// 窗口 —— 两者都不清它，因为「清掉读者放下的一处位置」比「暂时看不见」更难解释。
-    trace_selection: Option<BlockId>,
-    /// 轨迹页每条来源行背后的详情，与那个窗格平行、按它的上限一起裁剪，好让两者永不脱节。
-    /// 不是入口的那些行是 `None`。
-    ///
-    /// **只有轨迹页有一份**：那是它独有的入口 —— 对话页画的是全文，点它不打开任何东西
-    /// （`.scratch/tui-feedback/spec.md` §9）。
-    trace_links: std::collections::VecDeque<Option<Detail>>,
-    /// 轨迹页每条来源行**属于哪个块** —— 与 [`Self::trace_links`] 平行、按同一个丢弃数裁，
-    /// 所以两者与那个窗格永远同长（ADR 0021）。
-    ///
-    /// 「源行 → 块」这一向是行选择、折叠、命中导航与详情跳转的共同落点，而**块 → 位置**是这张
-    /// 表上的一次线性查找（[`Self::first_source_of`]）。不另立一个以块为键的映射：那张表每次
-    /// 裁剪都要全体下标左移，以块为键的映射就得跟着重算。
-    ///
-    /// `None` = 那一行不属于任何块（单位之间的分隔线、折叠出来的折行将来各自另有身份）。
-    trace_block_ids: std::collections::VecDeque<Option<BlockId>>,
-    /// 来源面那条祖先链的原料：账本上那几种**能当一环**的记录，按账本行号递增。
-    ///
-    /// 只记链要用的三类（用户消息、迭代的回复、单位组头），每条一个账本行号 —— 链深不封顶，
-    /// 所以不能只留「最近那一条」；位置用账本行号，于是 `CAP` 把那些行挪出窗口之后，链上
-    /// 那一环仍然报得出位置（票 14 第 1、6 条）。宽度重放与它一起清、按同样的顺序重建。
-    anchors: Vec<Anchor>,
-    /// 轨迹页两级分组的当前进度：一个正在开着的一级组与一个正在开着的二级组。
-    ///
-    /// 它是**跨块排版状态**的一部分，与 [`Self::trace_flow`] 同进同出（宽度重放时一起清）——
-    /// 因为组的边界也是由块序列推出来的，重放要把整本账按同样的顺序再推一遍。
-    trace_groups: TraceGroups,
-    /// 渲染层自己造的那条记录流（推理增量开出的思考行、诊断、通知、身份注入）已经发到第几件
-    /// —— 它们没有信封，于是 `index` 由它补。它**不随重放重置**：重放走的是这份清单而不重新
-    /// 发号（重推用的就是清单里那一份身份）。
-    next_local_id: u32,
-    /// 上一帧轨迹页把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
-    /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
-    trace_drawn: Drawn,
-    /// 正在读的那一份 diff：读什么，以及它属于哪一次打开
-    /// （`.scratch/diff-page/spec.md` §6）。
-    ///
-    /// 弹窗**先立起来**、正文后到：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许
-    /// 等它（与那三条「一帧里不 await」同一条纪律）。
-    diff_reading: Option<DiffReading>,
-    /// 正在流的正文属于哪个发言者 —— 等待块与流式正文那一行名字用的就是它（正文一完成，
-    /// 名字改由那条源行自己带）。还没有增量时是 `None`，那时用名册的第一个。
-    live_speaker: Option<crate::events::SpeakerId>,
-    /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
-    /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
-    /// 或一次收尾清掉。
-    running_tool: Option<(String, serde_json::Value)>,
-    /// 轨迹页的搜索与过滤态（票 20）。`None` 是「这个会话里还从来没搜过」。
-    ///
-    /// 它按**块身份**记，不存窗格里 —— 于是宽度变化重放之后过滤集原样还在
-    /// （票 20 第 10 条）。也只活在进程内：切会话 / 恢复会话都不持久。
-    trace_search: Option<TraceSearch>,
-    /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
-    trace_index: TraceIndex,
-    /// 轨迹页的**折叠集合**：哪些块收成了一行（票 21 第 9 条）。
-    ///
-    /// 与过滤集同一条纪律：按**块身份**记、存在 `TuiState` 侧、不存窗格里 —— 于是宽度变化
-    /// 那次重放之后原样还在。三档折行共用这一个集合（单位 / 迭代 / 连续工具调用各是里面的
-    /// 一个身份），因为「谁收起来了」只回答一次。
-    folded: std::collections::HashSet<BlockId>,
-    /// 进入全折之前那一份折叠态 —— `{` 存、`}` 还原（票 21 第 6 条）。
-    ///
-    /// 没有它，全展就只能是「清空折叠集合」，而那会把读者自己折的东西一起抹掉。连按两次
-    /// `{` 不覆盖它：否则 `}` 还原出来的就是全折态本身。
-    fold_before_all: Option<std::collections::HashSet<BlockId>>,
-    /// 当前账本上那些**折叠把手**的身份：组头那几行，以及现在画着的几条折行。
-    ///
-    /// 指针要它：一次点击落在一条源行上时，只有这一行是个把手才翻得动折叠，而「这一行是
-    /// 组头 / 折行，还是一条普通块行」在身份表上读不出来（[`TuiState::trace_block_ids`] 只有
-    /// 身份，没有种类）。它与窗格同进同出 —— 重放开始那一刻清空，推一条行时补一格。
-    fold_handles: std::collections::HashSet<BlockId>,
+    /// 轻状态收的是**整份**：草稿、两个窗格的视口意图、浮层（详情 / 文件查看器 / 选择器 /
+    /// `/` 菜单 / 轨迹搜索与折叠）。用 `mem::take` 而不是 clone：这些东西马上就要被换掉。
+    pub(super) fn switch_session(&mut self, facts: SessionFacts, cwd: std::path::PathBuf) -> bool {
+        let new_front = crate::events::SessionId::new(facts.session_id.clone());
+        // 目标会话那条记录先取出（切走的会话在；只报过状态的后台会话也可能在）。
+        let mut incoming = self.projections.remove(&new_front).unwrap_or_default();
+        let first_load = incoming.view.is_none();
+        let incoming_view = match incoming.view.take() {
+            Some(view) => view,
+            None => {
+                self.view_replays += 1;
+                View::new(facts)
+            }
+        };
+        // 先收起**旧**投影的视口意图，再换投影本身（换过之后就取不到旧的了）。
+        let outgoing_light = SessionLight {
+            editor: std::mem::take(&mut self.editor),
+            cwd: std::mem::take(&mut self.cwd),
+            files: std::mem::take(&mut self.files),
+            conversation: self.view.conversation.viewport(),
+            trace: self.view.trace.viewport(),
+            pending: self.pending.take(),
+            detail: self.detail.take(),
+            detail_opener: self.detail_opener.take(),
+            detail_serial: self.detail_serial,
+            file_viewer: self.file_viewer.take(),
+            picker: self.picker.take(),
+            slash: std::mem::take(&mut self.slash),
+            trace_search: self.view.trace_search.take(),
+            folded: std::mem::take(&mut self.view.folded),
+            fold_before_all: self.view.fold_before_all.take(),
+            fold_handles: std::mem::take(&mut self.view.fold_handles),
+            trace_index: std::mem::take(&mut self.view.trace_index),
+            trace_selection: self.view.trace_selection.take(),
+        };
+        let old_front = std::mem::replace(&mut self.front, new_front);
+        let outgoing_view = std::mem::replace(&mut self.view, incoming_view);
+        // 旧会话那条记录：投影与轻状态收进去；三态 / 名册 / 只读原样留着。
+        let old_slot = self.projections.entry(old_front).or_default();
+        old_slot.view = Some(outgoing_view);
+        old_slot.light = Some(outgoing_light);
+        // 装目标会话的轻状态。第一次装载（没有收过）就用请求带来的 `cwd` 起一份干净的：
+        // 文件索引空着、请一次重扫（票 25：`cwd` / 文件索引是**每会话**的事实）。
+        if let Some(light) = incoming.light.take() {
+            self.cwd = light.cwd;
+            self.files = light.files;
+            if self.files.paths().is_none() {
+                // 上次切走时遍历还在飞、结果被丢弃：复位成「还没扫过」并请一次重扫（票 25）。
+                self.files.abandon();
+                self.file_scan_wanted = true;
+            }
+            self.editor = light.editor;
+            self.pending = light.pending;
+            self.detail_opener = light.detail_opener;
+            self.detail_serial = light.detail_serial;
+            // 那几个「上一帧画在哪」的矩形每帧重算：换会话时先清掉，免得旧坐标被当成这一帧的。
+            self.questionnaire_bottom = None;
+            self.detail_rect = None;
+            self.file_viewer_rect = None;
+            self.view.conversation.restore_viewport(light.conversation);
+            self.view.trace.restore_viewport(light.trace);
+            self.detail = light.detail;
+            self.file_viewer = light.file_viewer;
+            self.picker = light.picker;
+            self.slash = light.slash;
+            self.view.trace_search = light.trace_search;
+            self.view.folded = light.folded;
+            self.view.fold_before_all = light.fold_before_all;
+            self.view.fold_handles = light.fold_handles;
+            self.view.trace_index = light.trace_index;
+            self.view.trace_selection = light.trace_selection;
+        } else {
+            self.cwd = cwd;
+            self.files = FileIndex::new();
+            self.file_scan_wanted = true;
+            self.editor = Input::new();
+            self.pending = None;
+            self.detail = None;
+            self.detail_opener = None;
+            self.detail_serial = 0;
+            self.questionnaire_bottom = None;
+            self.detail_rect = None;
+            self.file_viewer = None;
+            self.file_viewer_rect = None;
+            self.picker = None;
+            self.slash = MenuSelection::default();
+        }
+        // 目标记录里剩下的读数（三态 / 名册 / 只读）写回表里，焦点这几样从同一处读。
+        let slot = self.projections.entry(self.front.clone()).or_default();
+        slot.state = incoming.state;
+        slot.catalog = incoming.catalog;
+        slot.read_only = incoming.read_only;
+        self.catalog = slot.catalog.clone();
+        self.read_only = slot.read_only;
+        first_load
+    }
 }
 
+use projection::{SessionLight, SessionProjection, View};
 impl View {
     /// 一个新会话的空投影。`facts` 是这个会话的会话事实，配色由它的发言者名册算出来。
     pub fn new(facts: SessionFacts) -> Self {
@@ -2928,12 +3104,12 @@ pub struct TuiState {
     /// **焦点会话**的投影。切换会话是把这一个换成目标会话那一份 —— 而其余会话的投影
     /// 常驻在 [`TuiState::views`] 里，切回来时原样取回（票 23：不再 `View::new` + 整条重放）。
     view: View,
-    /// 每会话一份**常驻**投影（键 = 会话 id）。焦点那一份在 [`TuiState::view`] 里，
-    /// 这里放的是切走时收进来的那些。
+    /// 每会话一份**切片状态**（票 02）。焦点那一份的投影与轻状态以散字段住在这里，别的
+    /// 会话（切走的、或只报过三态 / 名册的后台会话）都在这**一张**表里。
     ///
-    /// 判据是「重放这个会话的事件流能不能重建出它」：能重建的都住 [`View`]，于是切走再切回
-    /// 只换读哪一份，屏幕上的行、选中的块、过滤与折叠一个字都不动（票 23）。
-    views: std::collections::HashMap<crate::events::SessionId, View>,
+    /// 判据是「重放这个会话的事件流能不能重建出投影」：能重建的都住 [`View`]，其余几样
+    /// （三态 / 名册 / 只读 / 轻状态）按会话切片；新增一个会话属性只动 [`SessionProjection`]。
+    projections: std::collections::HashMap<crate::events::SessionId, SessionProjection>,
     /// 新建过多少份投影 —— 票 23 的验收判据：切回一个会话**不**该让它长一。
     view_replays: u64,
     /// 当前**前台**是哪一个会话。进程级的一个值：渲染器只有一份，而它面前可以同时活着
@@ -2998,11 +3174,6 @@ pub struct TuiState {
     background_waiting: usize,
     /// **后台**有几个刚跑完、还没被读（票 25）。
     background_finished: usize,
-    /// 每个会话现在忙不忙（票 22）。它按**会话 id** 存，切走切回都还在。
-    states: std::collections::HashMap<crate::events::SessionId, crate::session::host::SessionState>,
-    /// 每个会话那一份**轻状态**（键 = 会话 id）。切走时收进来、切回来时装回去
-    /// （`.scratch/session-tab/spec.md` §6）。
-    light: std::collections::HashMap<crate::events::SessionId, SessionLight>,
     /// 会话页那一页自己的状态：它是**第一签**，也是唯一一页由外部推数据进来的
     /// （`.scratch/session-tab/spec.md` §3）。
     sessions: SessionsPage,
@@ -3040,13 +3211,6 @@ pub struct TuiState {
     tiles: Vec<crate::events::SessionId>,
     /// 这一帧是**平铺态**吗（票 17）。默认标签态；`Ctrl-R` 或顶部条的平铺按钮切。
     tiled: bool,
-    /// 每会话的命令 / 技能名册（票 25）：`/` 菜单按焦点会话取。
-    catalogs: std::collections::HashMap<
-        crate::events::SessionId,
-        Vec<crate::render::input::CatalogEntry>,
-    >,
-    /// 每会话的只读预览标志（票 25）：渲染器自己发起的那几处写动作按焦点会话判。
-    read_only_by: std::collections::HashMap<crate::events::SessionId, bool>,
     /// 平铺集合的上限（`[ui] tile_limit`，票 19、26 读它；缺省 4）。
     tile_limit: usize,
     /// 用户想不想看见**右栏**（票 13 起默认开，票 14 的 `Ctrl-V` 切换）。
@@ -4406,7 +4570,7 @@ impl TuiState {
         let front = crate::events::SessionId::new(facts.session_id.clone());
         Self {
             view: View::new(facts),
-            views: std::collections::HashMap::new(),
+            projections: std::collections::HashMap::new(),
             view_replays: 1,
             front,
             cwd,
@@ -4431,8 +4595,6 @@ impl TuiState {
             read_only: false,
             background_waiting: 0,
             background_finished: 0,
-            states: std::collections::HashMap::new(),
-            light: std::collections::HashMap::new(),
             sessions: SessionsPage::default(),
             files_page: FilesPage::default(),
             // 进 TUI 就取一次数：打开就有东西看（§4）。
@@ -4447,8 +4609,6 @@ impl TuiState {
             tiles: Vec::new(),
             tiled: false,
             tile_limit: crate::config::DEFAULT_TILE_LIMIT,
-            catalogs: std::collections::HashMap::new(),
-            read_only_by: std::collections::HashMap::new(),
             picker: None,
             notice: None,
             last_session_click: None,
@@ -4565,10 +4725,13 @@ impl TuiState {
     fn background_readout(&self) -> Option<String> {
         let mut running = 0usize;
         let mut waiting = 0usize;
-        for (id, state) in &self.states {
+        for (id, projection) in &self.projections {
             if id == &self.front {
                 continue;
             }
+            let Some(state) = &projection.state else {
+                continue;
+            };
             match state {
                 crate::session::host::SessionState::RunningTurn => running += 1,
                 crate::session::host::SessionState::AwaitingHuman => waiting += 1,
@@ -4821,85 +4984,6 @@ impl TuiState {
             self.sync_tokens();
             self.sync_menu();
         }
-    }
-
-    /// 把当前这个会话的轻状态收进表里（切换的第一步）。
-    ///
-    /// 收的是**整份**：草稿、两个窗格的视口意图、浮层（详情 / 文件查看器 / 选择器 / `/` 菜单 /
-    /// 轨迹搜索与折叠）。用 `mem::take` 而不是 clone：这些东西马上就要被换掉。
-    fn stash_light(&mut self) {
-        let light = SessionLight {
-            editor: std::mem::take(&mut self.editor),
-            cwd: self.cwd.clone(),
-            files: std::mem::take(&mut self.files),
-            conversation: self.view.conversation.viewport(),
-            trace: self.view.trace.viewport(),
-            pending: self.pending.take(),
-            detail: self.detail.take(),
-            detail_opener: self.detail_opener.take(),
-            detail_serial: self.detail_serial,
-            file_viewer: self.file_viewer.take(),
-            picker: self.picker.take(),
-            slash: std::mem::take(&mut self.slash),
-            trace_search: self.view.trace_search.take(),
-            folded: std::mem::take(&mut self.view.folded),
-            fold_before_all: self.view.fold_before_all.take(),
-            fold_handles: std::mem::take(&mut self.view.fold_handles),
-            trace_index: std::mem::take(&mut self.view.trace_index),
-            trace_selection: self.view.trace_selection.take(),
-        };
-        self.light.insert(self.front.clone(), light);
-    }
-
-    /// 把目标那个会话的轻状态装进来。
-    ///
-    /// 没装过（第一次切到它）就用请求带来的 `cwd` 起一份干净的：文件索引空着、请一次重扫
-    /// （票 25：`cwd` / 文件索引是**每会话**的事实）。
-    fn load_light(&mut self, cwd: std::path::PathBuf) {
-        let Some(light) = self.light.remove(&self.front) else {
-            self.cwd = cwd;
-            self.files = FileIndex::new();
-            self.file_scan_wanted = true;
-            self.editor = Input::new();
-            self.pending = None;
-            self.detail = None;
-            self.detail_opener = None;
-            self.detail_serial = 0;
-            self.questionnaire_bottom = None;
-            self.detail_rect = None;
-            self.file_viewer = None;
-            self.file_viewer_rect = None;
-            self.picker = None;
-            self.slash = MenuSelection::default();
-            return;
-        };
-        self.cwd = light.cwd;
-        self.files = light.files;
-        if self.files.paths().is_none() {
-            // 上次切走时遍历还在飞、结果被丢弃：复位成「还没扫过」并请一次重扫（票 25）。
-            self.files.abandon();
-            self.file_scan_wanted = true;
-        }
-        self.editor = light.editor;
-        self.pending = light.pending;
-        self.detail_opener = light.detail_opener;
-        self.detail_serial = light.detail_serial;
-        // 那几个「上一帧画在哪」的矩形每帧重算：换会话时先清掉，免得旧坐标被当成这一帧的。
-        self.questionnaire_bottom = None;
-        self.detail_rect = None;
-        self.file_viewer_rect = None;
-        self.view.conversation.restore_viewport(light.conversation);
-        self.view.trace.restore_viewport(light.trace);
-        self.detail = light.detail;
-        self.file_viewer = light.file_viewer;
-        self.picker = light.picker;
-        self.slash = light.slash;
-        self.view.trace_search = light.trace_search;
-        self.view.folded = light.folded;
-        self.view.fold_before_all = light.fold_before_all;
-        self.view.fold_handles = light.fold_handles;
-        self.view.trace_index = light.trace_index;
-        self.view.trace_selection = light.trace_selection;
     }
 
     /// 喂进一个渲染事件，并回答它画了多少条转录来源行。
@@ -7619,11 +7703,8 @@ impl TuiState {
                 if let Some(old) = self.replay.take() {
                     self.finish_replay(old);
                 }
-                self.stash_light();
-                let old_front = std::mem::replace(
-                    &mut self.front,
-                    crate::events::SessionId::new(facts.session_id.clone()),
-                );
+                // 收走旧会话的切片、装进目标那份；第一次装载才要铺历史（票 23）。
+                let first_load = self.switch_session(facts, cwd);
                 // 切过去之后那条「先切走」的提示没有意义了（票 32）。
                 self.close_blocked = None;
                 // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
@@ -7633,27 +7714,12 @@ impl TuiState {
                 for row in &mut self.sessions.shown {
                     row.foreground = row.id == self.front;
                 }
-                // 目标会话的投影如果已经常驻，直接取回来 —— **不重放**它那条流（票 23）。
-                // 只有第一次装载才建一份新的、才铺一遍历史。
-                let resident = self.views.remove(&self.front);
-                let first_load = resident.is_none();
-                let incoming = resident.unwrap_or_else(|| {
-                    self.view_replays += 1;
-                    View::new(facts)
-                });
-                // 切走的那一份收进表里常驻，下次切回来不再重放。
-                let outgoing = std::mem::replace(&mut self.view, incoming);
-                self.views.insert(old_front, outgoing);
                 // 平铺槽位跟宿主表走（2026-10-17 修订）：切到一个不在槽位、槽位还没满的
                 // 会话时把它补进末尾 —— 真实流程里 `Hosted` 会重排，这里兜住没推那一份的路径。
                 let new_front = self.front.clone();
                 if !self.tiles.contains(&new_front) && self.tiles.len() < self.tile_limit {
                     self.tiles.push(new_front);
                 }
-                self.load_light(cwd);
-                // 名册与只读是**每会话**的（票 25）：按 id 从表里取。
-                self.catalog = self.catalogs.get(&self.front).cloned().unwrap_or_default();
-                self.read_only = self.read_only_by.get(&self.front).copied().unwrap_or(false);
                 self.sync_tokens();
                 // 上一个会话攒下的实时事件不带过去。
                 self.live_buffer.clear();
@@ -7717,16 +7783,13 @@ impl TuiState {
             }
             // 一个会话的忙闲（票 22）。
             ConsoleRequest::SessionState { id, state } => {
-                if state == crate::session::host::SessionState::Idle {
-                    self.states.remove(&id);
-                } else {
-                    self.states.insert(id, state);
-                }
+                let slot = self.projections.entry(id).or_default();
+                slot.state = (state != crate::session::host::SessionState::Idle).then_some(state);
                 self.dirty = true;
             }
             // 这个会话是不是只读预览（票 18）。
             ConsoleRequest::ReadOnly { id, read_only } => {
-                self.read_only_by.insert(id.clone(), read_only);
+                self.projections.entry(id.clone()).or_default().read_only = read_only;
                 if id == self.front {
                     self.read_only = read_only;
                 }
@@ -7741,10 +7804,7 @@ impl TuiState {
                 {
                     self.close_blocked = None;
                 }
-                self.light.remove(&id);
-                self.views.remove(&id);
-                self.catalogs.remove(&id);
-                self.read_only_by.remove(&id);
+                self.projections.remove(&id);
                 self.sessions.hosted.retain(|held| held != &id);
                 // 关掉的会话不在宿主表了：平铺槽位跟着重排，只剩一个就回标签态（票 19）。
                 self.rebuild_tiles();
@@ -7785,7 +7845,7 @@ impl TuiState {
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
             ConsoleRequest::Catalog { id, entries } => {
-                self.catalogs.insert(id.clone(), entries.clone());
+                self.projections.entry(id.clone()).or_default().catalog = entries.clone();
                 if id == self.front {
                     self.catalog = entries;
                     // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
@@ -7980,7 +8040,11 @@ impl TuiState {
     /// `AwaitingHuman` 也算忙：那个会话有动作挂在等人答，`Ctrl-C` 取消的正是它 —— 与退出闸门的
     /// 口径一致（`session::exit_gate` 把「不在空闲」当成没收尾）。
     fn busy(&self) -> bool {
-        self.running || self.states.contains_key(&self.front)
+        self.running
+            || self
+                .projections
+                .get(&self.front)
+                .is_some_and(|projection| projection.state.is_some())
     }
 
     /// 把打好的草稿交给循环并记住它。
@@ -9502,7 +9566,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 title_w,
                 time_w,
                 now,
-                state.states.get(&row.id).copied(),
+                state.projections.get(&row.id).and_then(|p| p.state),
                 state.sessions.hosted.contains(&row.id),
             ));
             drawn_rows += 1;
@@ -10266,55 +10330,6 @@ impl Picker {
     }
 }
 
-/// 文件页那一页自己的状态。
-///
-/// 与 [`Panel`]、[`TodoPanel`] 同一族，也与 [`DetailView`] 共用同一条纪律：状态由画它的那一处
-/// 顺手记下（「记住读的人真看到了什么」），只有真画出来的行才回应指针与键盘。
-/// 一个会话在渲染器里的**轻状态**：与投影无关、却跟会话走的那几样
-/// （`.scratch/session-tab/spec.md` §6）。
-///
-/// 切换 = 先收走当前那份、再装入目标那份。**页签选择、主列页、`Ctrl-O` 意愿与会话页的过滤态
-/// 不在这里** —— 它们是进程级的（同一份左栏、同一块屏幕）。
-#[derive(Default)]
-struct SessionLight {
-    /// 草稿与它的光标。
-    editor: Input,
-    /// 这个会话的工作目录（票 25）：终端标题与 `@` 候选都跟着它。
-    cwd: std::path::PathBuf,
-    /// 工作区的文件索引（根 = 这个会话的 `cwd`；票 25）。
-    files: FileIndex,
-    /// 对话视图的视口意图。
-    conversation: crate::render::pane::Viewport,
-    /// 轨迹视图的视口意图。
-    trace: crate::render::pane::Viewport,
-    /// 等着人答的那一份（问卷 / 权限门 / 过大的粘贴）—— 每会话一份，全屏只画焦点那份
-    /// （票 20）。它自带 reply 通道，所以切走再切回、作答仍回到原来那个会话。
-    pending: Option<Pending>,
-    /// 打开的详情覆盖层。
-    detail: Option<DetailView>,
-    /// 打开详情的那一页、以及它打开前的滚动状态（票 22：跟着会话走，切回来关掉仍还原给它）。
-    detail_opener: Option<DetailOpener>,
-    /// 这个会话打开过多少次详情覆盖层（票 22）。
-    detail_serial: u64,
-    /// 打开的文件查看器。
-    file_viewer: Option<FileViewerPane>,
-    /// 开着的选择器。
-    picker: Option<Picker>,
-    /// `/` 菜单的高亮与它属于哪个 token。
-    slash: MenuSelection,
-    /// 轨迹页的过滤。
-    trace_search: Option<TraceSearch>,
-    /// 折起来的那些块，以及全折之前那一份存根。
-    folded: std::collections::HashSet<BlockId>,
-    fold_before_all: Option<std::collections::HashSet<BlockId>>,
-    /// 哪几行是折叠把手。
-    fold_handles: std::collections::HashSet<BlockId>,
-    /// 轨迹页的索引。
-    trace_index: TraceIndex,
-    /// 选中的那一块。
-    trace_selection: Option<BlockId>,
-}
-
 /// 会话页自己的状态（`.scratch/session-tab/spec.md` §3）。
 ///
 /// 与 `files_page` / `changes` 同一族：一页的状态收在一个值里，只活在进程内。页面**常驻**，
@@ -11035,10 +11050,14 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         );
         if focused {
             draw_focused_tile_body(frame, body, state);
-        } else if let Some(mut view) = state.views.remove(&id) {
+        } else if let Some(mut view) = state
+            .projections
+            .get_mut(&id)
+            .and_then(|projection| projection.view.take())
+        {
             let rows = draw_tile_body(frame, body, &mut view);
             note_rows(state, body, &rows, &[], &[]);
-            state.views.insert(id, view);
+            state.projections.entry(id).or_default().view = Some(view);
         }
     }
 }
@@ -15634,6 +15653,46 @@ mod tests {
         page.trace_keyboard = true;
         page.key(Key::Char('x'));
         assert_eq!(page.editor.text(), "x", "轨迹页不认的字符落到输入区");
+    }
+
+    /// 同一会话切走再切回：投影、轻状态与三态 / 名册 / 只读一起原样回来（票 02 §验收 3）。
+    #[test]
+    fn a_session_projection_survives_a_round_trip() {
+        let mut page = state();
+        let first = page.front.clone();
+        // 焦点会话先有几样切片读数：三态、名册、草稿。
+        page.request(ConsoleRequest::SessionState {
+            id: first.clone(),
+            state: crate::session::host::SessionState::RunningTurn,
+        });
+        page.request(ConsoleRequest::Catalog {
+            id: first.clone(),
+            entries: Vec::new(),
+        });
+        page.editor.insert_str("甲会话的草稿");
+        assert!(page.busy(), "三态进了切片表");
+
+        // 切到另一个会话：它第一次装载，切片读数是空的。
+        let mut other = page.view.facts.clone();
+        other.session_id = "s-2".to_owned();
+        let first_load = page.switch_session(other.clone(), std::path::PathBuf::from("/x/other"));
+        assert!(first_load, "第一次切过去要建一份投影");
+        assert!(!page.busy(), "新会话不忙");
+        assert_eq!(page.editor.text(), "", "新会话的草稿是空的");
+
+        // 切回来：三态、草稿与常驻投影原样都在。
+        let replays = page.view_replays;
+        let mut back = other.clone();
+        back.session_id = first.as_str().to_owned();
+        let first_load = page.switch_session(back, std::path::PathBuf::from("/x/heng"));
+        assert!(!first_load, "常驻投影不该重建");
+        assert_eq!(page.view_replays, replays, "投影只建过一次");
+        assert!(page.busy(), "三态跟着会话回来");
+        assert_eq!(page.editor.text(), "甲会话的草稿", "草稿跟着会话回来");
+        assert!(
+            page.projections.contains_key(&first),
+            "切片状态在同一张表里"
+        );
     }
 
     /// crossterm 解码：视图手势与标签手势都认得出来（Spec 轴审查：`map_key` 从没有单测）。
