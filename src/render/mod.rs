@@ -29,6 +29,7 @@ pub mod headless;
 pub mod highlight;
 pub mod hostproc;
 pub mod input;
+pub mod keyboard;
 pub mod layout;
 pub mod links;
 pub mod markdown;
