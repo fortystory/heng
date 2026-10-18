@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>衡（heng）架构深化候选 · 2026-10-18</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+</script>
+<style>
+  .seam { stroke-dasharray: 4 4; }
+  .leak { stroke: #dc2626; stroke-width: 1.5px; }
+  .strong { border-color: #10b981; }
+  .worth { border-color: #f59e0b; }
+  .spec { border-color: #94a3b8; }
+  .badge-strong { background: #ecfdf5; color: #047857; }
+  .badge-worth  { background: #fffbeb; color: #b45309; }
+  .badge-spec   { background: #f1f5f9; color: #475569; }
+  .adr-warn { background: #fef3c7; border-left: 4px solid #f59e0b; }
+  .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: #f1f5f9; }
+  .diagram-box { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.75rem; line-height: 1.2; }
+</style>
+</head>
+<body class="bg-stone-50 text-slate-900 font-sans">
+<main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+  <header class="space-y-4">
+    <div class="flex items-baseline gap-3">
+      <h1 class="text-3xl font-serif">衡（heng）架构深化候选</h1>
+      <span class="text-slate-500 text-sm">2026-10-18 · 第 2 轮扫描</span>
+    </div>
+    <div class="flex flex-wrap gap-3 text-xs">
+      <span class="inline-flex items-center gap-2 px-2 py-1 rounded border bg-white border-slate-300"><span class="inline-block w-3 h-3 border border-slate-900"></span>module</span>
+      <span class="inline-flex items-center gap-2 px-2 py-1 rounded border bg-white border-slate-300"><span class="inline-block w-6 border-t border-dashed border-slate-900"></span>seam</span>
+      <span class="inline-flex items-center gap-2 px-2 py-1 rounded border bg-white border-red-300 text-red-700"><span class="inline-block w-6 border-t border-red-600"></span>seam 旁泄漏</span>
+      <span class="inline-flex items-center gap-2 px-2 py-1 rounded border bg-slate-900 text-slate-50"><span class="inline-block w-3 h-3"></span>deep module</span>
+      <span class="inline-flex items-center gap-2 px-2 py-1 rounded border bg-white border-amber-300 text-amber-700"><span class="inline-block w-3 h-3"></span>命中测试两套机制</span>
+    </div>
+    <p class="text-sm text-slate-600 max-w-3xl">扫描范围按 YAGNI 划在 2026-10-12 之后的热点上（<code>src/render/tui.rs</code> 涨 6000 行、session-panes 落地 30+ 张票）。本轮对照 <a class="underline" href="seed.md">seed.md</a>（2026-10-12 第一轮的九条候选），标记哪些升级、哪些自愈，并新增一条 10-17 后才冒出的 friction。</p>
+  </header>
+
+  <section id="candidates" class="space-y-10">
+
+    <!-- C1: 键盘归属 -->
+    <article class="rounded-lg border-l-4 strong bg-white border bg-slate-100 p-6 space-y-4">
+      <header class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="text-xl font-serif">把键盘归属收到一处</h2>
+          <p class="text-sm text-slate-500">把 <code>key()</code> 的 11 段早期 return 收成一个 <code>sync_keyboard_owner()</code> + 一份按层声明「自己是否持有」的表。</p>
+        </div>
+        <span class="badge-strong text-xs px-2 py-1 rounded-full">Strong</span>
+      </header>
+      <div class="text-xs font-mono text-slate-500">
+        Files: <code>src/render/tui.rs:7593-8599</code>（<code>fn key</code>） · <code>:2625-2655</code>（<code>trace_keyboard</code> 注释自陈第四套） · <code>:4947</code> <code>click_at</code> · <code>:4815</code> <code>wheel_at</code> · <code>:15133</code> <code>keyboard_in_the_input</code>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded border border-slate-200 p-3">
+          <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</div>
+          <div class="mermaid">
+flowchart TD
+  K["key() L7593 1006 行"] --> A1["挂起 CtrlZ"]
+  A1 --> A2["拖选 drag.is_some"]
+  A2 --> A3["重放 replay.is_some"]
+  A3 --> A4["文件查看器"]
+  A4 --> A5["选择器"]
+  A5 --> A6["详情覆盖层 detail_open"]
+  A6 --> A7["左栏 sidebar_keyboard"]
+  A7 --> A8["trace_keyboard<br/>(注释：仓库第四套)"]
+  A8 --> A9["问卷"]
+  A9 --> A10["草稿 / 菜单"]
+  A10 --> A11["记号同步"]
+  classDef leak stroke:#dc2626, stroke-width:2px;
+  class A8 leak
+          </div>
+        </div>
+        <div class="rounded border border-emerald-300 p-3">
+          <div class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</div>
+          <div class="mermaid">
+flowchart TD
+  K["sync_keyboard_owner"]
+  K --> O
+  O{焦点层}
+  O --> H
+  H["CtrlZ 直行（挂起）"]
+  O --> L1
+  L1["详情 · 文件查看器 · 选择器 · 重放（浮层独占）"]
+  O --> L2
+  L2["左栏 · 轨迹页（页面持有）"]
+  O --> L3
+  L3["草稿 · 菜单 · 记号（主列输入）"]
+  L1 --> E
+  L2 --> E
+  L3 --> E
+  E["声明自己持有"]
+  E --> K
+
+          </div>
+        </div>
+      </div>
+      <div class="space-y-2 text-sm">
+        <p><strong>Problem.</strong> 渲染层把「键盘在谁那里」拆成 11 段早期 return，<code>trace_keyboard</code> 自己的注释 (<code>tui.rs:2639</code>) 已承认这是「<strong>第四套</strong>「键盘在谁那里」的机制」—— 之前的左栏布尔、两页焦点索引、问卷反显还没退场，又叠了一套。同时 <code>click_at</code> / <code>wheel_at</code> / <code>keyboard_in_the_input</code> 各持一份字段子集。同一个真相三处拼。</p>
+        <p><strong>Solution.</strong> seam 放在「层」：每层自己声明 <code>owns_keyboard()</code> 与 <code>handle_key()</code>，<code>sync_keyboard_owner()</code> 一处算。<code>click_at</code> / <code>wheel_at</code> 走同一张表。先例：<a class="underline" href="../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md">ADR 0010</a>（问卷的「按区分发」）。</p>
+        <p><strong>Wins.</strong></p>
+        <ul class="list-disc list-inside text-sm space-y-1">
+          <li>leverage：一个 dispatch 表被三个入口（键、鼠、滚轮）共用</li>
+          <li>locality：键盘归属 bug 集中在一处而不是 11 段</li>
+          <li>interface shrinks：<code>TuiState</code> 不再每加一层就多一个 <code>*_keyboard</code> 布尔</li>
+        </ul>
+      </div>
+    </article>
+
+    <!-- C2: 会话状态双轨 -->
+    <article class="rounded-lg border-l-4 strong bg-white border bg-slate-100 p-6 space-y-4">
+      <header class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="text-xl font-serif">同一会话状态，收到一处</h2>
+          <p class="text-sm text-slate-500"><code>View</code>（57 字段）和 <code>SessionLight</code>（18 字段）各持一份会话切片，<code>TuiState</code> 上还有 5 份按 <code>SessionId</code> 平行的 <code>HashMap</code>。</p>
+        </div>
+        <span class="badge-strong text-xs px-2 py-1 rounded-full">Strong</span>
+      </header>
+      <div class="text-xs font-mono text-slate-500">
+        Files: <code>src/render/tui.rs:832</code> 起 <code>struct View</code> · <code>:10172</code> <code>struct SessionLight</code> · <code>:4393</code> <code>stash_light</code> · <code>:4421</code> <code>load_light</code> · 5 份 <code>HashMap&lt;SessionId, _&gt;</code>（views / states / light / catalogs / read_only_by）
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded border border-slate-200 p-3">
+          <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</div>
+          <div class="mermaid">
+flowchart LR
+  subgraph 加一会话状态
+    V[struct View] -. 字段.-> L[struct SessionLight]
+    L -. 字段.-> S1[TuiState.states HashMap]
+    L -. 字段.-> S2[TuiState.read_only_by HashMap]
+    L -. 字段.-> S3[TuiState.catalogs HashMap]
+    V -. 字段.-> S4[TuiState.light HashMap]
+  end
+  V -.每加一字段.-> L
+  L -.stash_light 手抄.-> V
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class V,L,S1,S2,S3,S4 leak
+          </div>
+        </div>
+        <div class="rounded border border-emerald-300 p-3">
+          <div class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</div>
+          <div class="mermaid">
+flowchart LR
+  subgraph seam：「一个会话的投影」
+    P[SessionProjection] --> V[View 数据侧]
+    P --> L[SessionLight 视口侧]
+  end
+  P -->|sync_stash / sync_load| TS[TuiState 仅持 HashMap]
+          </div>
+        </div>
+      </div>
+      <div class="space-y-2 text-sm">
+        <p><strong>Problem.</strong> session-panes 票 23 / 25 落地后，<code>TuiState</code> 上冒出 5 份与 <code>SessionId</code> 平行的 <code>HashMap</code>。每加一会话属性要在 <code>View</code>、<code>SessionLight</code>、<code>stash_light</code>、<code>load_light</code>、还有一到两份 HashMap 上同步改。代码量随会话数线性涨，但语义是同一个：「按会话切片」。</p>
+        <p><strong>Solution.</strong> seam 放在「一个会话的投影」—— 一个 <code>SessionProjection</code> module 把 <code>View</code> 与 <code>SessionLight</code> 收在一起。<code>TuiState</code> 只持 <code>HashMap&lt;SessionId, SessionProjection&gt;</code>，不再逐字段开表。<code>stash</code> / <code>load</code> 收成一份迁移函数。</p>
+        <p><strong>Wins.</strong></p>
+        <ul class="list-disc list-inside text-sm space-y-1">
+          <li>locality：会话字段增减只动一个 module</li>
+          <li>leverage：5 张 HashMap 收成 1 张</li>
+          <li>tests：迁移函数单一接口可断言</li>
+        </ul>
+      </div>
+    </article>
+
+    <!-- C3: width 半截收 -->
+    <article class="rounded-lg border-l-4 worth bg-white border bg-slate-100 p-6 space-y-4">
+      <header class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="text-xl font-serif">width module 的 seam 收齐</h2>
+          <p class="text-sm text-slate-500">上层（panel、todo、trace）已走 <code>width::truncate_columns</code>，下层（changes、files、transcript、wording、tui）仍按 <code>chars().take</code> 拼。</p>
+        </div>
+        <span class="badge-worth text-xs px-2 py-1 rounded-full">Worth exploring</span>
+      </header>
+      <div class="text-xs font-mono text-slate-500">
+        Files: <code>src/render/width.rs</code>（97 行） · <code>src/render/transcript.rs:663</code> · <code>src/render/wording.rs:222, :963</code> · <code>src/render/changes.rs:589</code> · <code>src/render/files.rs:118</code> · <code>src/render/tui.rs:15059</code>（新发现）
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded border border-slate-200 p-3">
+          <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</div>
+          <div class="mermaid">
+flowchart LR
+  W[width::truncate_columns / ellipsize_line] -.上层用.-> P[panel.rs / todo.rs]
+  T[transcript.rs:667] -->|"text.chars().take(max).collect()"| X[半字符宽屏]
+  WO1[wording.rs:222] -->|"chars().take(max_chars)"| X
+  WO2[wording.rs:963] -->|"chars().take"| X
+  C[changes.rs:589] -->|"chars().take(MAX_LINE_CHARS)"| X
+  F[files.rs:118] -->|"chars().take(MAX_LINE_CHARS)"| X
+  TU[tui.rs:15059] -->|"chars().take(DETAIL_MAX_CHARS)"| X
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class T,WO1,WO2,C,F,TU leak
+          </div>
+        </div>
+        <div class="rounded border border-emerald-300 p-3">
+          <div class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</div>
+          <div class="mermaid">
+flowchart LR
+  W[width::truncate_columns / ellipsize_line / slice_columns] --> P
+  W --> T
+  W --> WO
+  W --> C
+  W --> F
+  W --> TU
+          </div>
+        </div>
+      </div>
+      <div class="space-y-2 text-sm">
+        <p><strong>Problem.</strong> <code>width.rs</code> 已经收住量宽、按列切、保住样式三件，但截断在 6 处仍按字符硬拼（transcript / wording 两处 / changes / files / tui）。<code>markdown::wrap_code</code> 按列自折一份。<a class="underline" href="../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md">ADR 0008</a> 说「换行归我们」，这一截没收完。</p>
+        <p><strong>Solution.</strong> 把 6 处 <code>chars().take</code> 一律改成 <code>width::truncate_columns</code>；带样式的改 <code>width::ellipsize_line</code>。<code>width</code> 加一个 <code>truncate_chars</code>（真的按字符截的少数几个出口）显式区分「按列」和「按字」两把尺子。</p>
+        <p><strong>Wins.</strong></p>
+        <ul class="list-disc list-inside text-sm space-y-1">
+          <li>leverage：量宽唯一去处，6 个 caller 共用</li>
+          <li>locality：宽度 bug 不再要逐行修</li>
+          <li>不与 ADR 冲突——只是把那条 ADR 走完</li>
+        </ul>
+      </div>
+    </article>
+
+    <!-- C4: 事实投影一处 -->
+    <article class="rounded-lg border-l-4 worth bg-white border bg-slate-100 p-6 space-y-4">
+      <header class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="text-xl font-serif">host → cli → tui 的事实投影只算一处</h2>
+          <p class="text-sm text-slate-500"><code>cli/interactive.rs</code> 80ms 轮询推快照，<code>ConsoleHandle</code> 12+ 推命令，<code>TuiState</code> 各会话一份快照——三处各自拼一份。</p>
+        </div>
+        <span class="badge-worth text-xs px-2 py-1 rounded-full">Worth exploring</span>
+      </header>
+      <div class="text-xs font-mono text-slate-500">
+        Files: <code>src/cli/interactive.rs:572</code>（<code>Duration::from_millis(80)</code>） · <code>src/render/input.rs:311</code> <code>ConsoleHandle</code> · <code>src/render/input.rs</code> <code>ConsoleRequest</code>（22 变体） · <code>src/render/tui.rs</code> 散在各会话 <code>HashMap</code>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded border border-slate-200 p-3">
+          <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</div>
+          <div class="mermaid">
+flowchart LR
+  H[SessionHost] -->|每 80ms| P[cli 侧三份上一帧快照]
+  P -->|12+ ConsoleRequest| C[ConsoleHandle]
+  C -->|每请求一个 push| T[TuiState 散落字段]
+  T -->|按需查| R[renderer]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class P,C leak
+          </div>
+        </div>
+        <div class="rounded border border-emerald-300 p-3">
+          <div class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</div>
+          <div class="mermaid">
+flowchart LR
+  H --> F[HostFacts 一个 module]
+  F -->|"diff(上一帧, 现在)"| T[TuiState 单订阅]
+          </div>
+        </div>
+      </div>
+      <div class="space-y-2 text-sm">
+        <p><strong>Problem.</strong> 渲染层要认的领域事实 10+ 种，每种各有一条 <code>ConsoleHandle::xxx</code> 推命令、对应一条 <code>ConsoleRequest</code> 变体、<code>TuiState</code> 上一个 <code>HashMap</code> 或字段。<code>cli/interactive.rs:572</code> 的 80ms 轮询把「宿主表现在长什么样」算成三份上一帧快照，并拿它做边沿判定。三条规则（未读的寿命、<code>N</code> 只算后台、单会话标题不变）因此只能靠真机走查（<a class="underline" href="../docs/tui-manual-checklist.md">tui-manual-checklist ㊶</a>）。</p>
+        <p><strong>Solution.</strong> seam 放在「host 视图」：一个 <code>HostFacts</code> module 算「宿主表现在长什么样」，<code>cli</code> 与 <code>tui</code> 都订阅它的 diff。12+ 个 <code>ConsoleRequest</code> 收成两条「现在」、「事件」。80ms 轮询降到一处。</p>
+        <p><strong>Wins.</strong></p>
+        <ul class="list-disc list-inside text-sm space-y-1">
+          <li>leverage：一次投影被两个 adapter（cli/tui）共用</li>
+          <li>locality：标题规则、未读寿命全在 HostFacts 里</li>
+          <li>tests：HostFacts 单一接口，三条规则可单元测试</li>
+        </ul>
+      </div>
+      <div class="adr-warn text-xs p-2">⚠ 与「单会话」默认行为耦合：把订阅改写前，先在 spec 钉死「宿主表空、单会话、多会话」三态的读数。</div>
+    </article>
+  </section>
+
+  <section id="top-recommendation" class="rounded-lg border border-slate-300 bg-white p-6 space-y-3">
+    <h2 class="text-xl font-serif">首选：把键盘归属收到一处</h2>
+    <p class="text-sm">理由：<code>trace_keyboard</code> 的注释已自陈「第四套」—— 这条 friction 在 10-17 那批 session-panes commit 后从「形态问题」升到「架构问题」，再不收，第五套（平铺态里「焦点格持键盘」）会再来。先例是 <a class="underline" href="../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md">ADR 0010</a>，复制它的形状代价低、收益跨三入口（键、鼠、滚轮）。第二选是「同一会话状态，收到一处」，因为它是「按会话切片」这种 10-17 后才冒出的新形态，趁还没长更大收掉；width 半截收与 host 事实投影排在更后。</p>
+    <p class="text-xs text-slate-500">本轮 <strong>未升级</strong>的三条（措辞、左栏四页、headless 第三个 adapter）从候选池挪走或转 ADR 引用：pane 平行表已被 <code>Pane::push -&gt; usize</code> 契约自愈；左栏四页与措辞只在「同形态重复」这一档，未到 seam 加宽；headless 第三个 adapter 不变。</p>
+  </section>
+</main>
+</body>
+</html>

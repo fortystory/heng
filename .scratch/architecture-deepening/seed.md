@@ -1,9 +1,9 @@
-# 架构深化：一轮回顾后的候选池
+# 架构深化：候选池（2026-10-12 起点 + 2026-10-18 第二轮）
 
-来源：2026-10-12 一轮 `/improve-codebase-architecture`（扫描范围按 YAGNI 划在近 120 次提交的热点上：
-`src/render` 197 次改动、`src/cli.rs` 36、`src/session` 47）。报告里的九条候选有两条已经落地 ——
-**装载**（[`session-tab` 票 33 / 34](../session-tab/issues/34-attach-one-action.md)）与 **cli 拆分**
-（[`cli-modules` spec](../cli-modules/spec.md)）。剩下的七条与两笔欠账记在这里。
+## 来源
+
+- **2026-10-12** 第一轮 `/improve-codebase-architecture`：九条候选，两条已落地（[`session-tab` 票 33 / 34](../session-tab/issues/34-attach-one-action.md) 与 [`cli-modules` spec](../cli-modules/spec.md)）。原文留作历史快照在 [`seed-2026-10-12.md`](seed-2026-10-12.md)。
+- **2026-10-18** 第二轮（见 [`report-2026-10-18.md`](report-2026-10-18.md) 与 HTML 版 [`report-2026-10-18.html`](report-2026-10-18.html)）：扫描 2026-10-12 之后的热点（`src/render/tui.rs` 涨 6000 行、session-panes 30+ 张票落地）。**新增三条**（键盘归属升级、会话状态双轨升级、事实投影一处新增），**标记一条自愈**（pane 平行表）。其余条目行号与现象同步到 10-18 现状。
 
 **这是意向池，还没有折成 spec**：想推进哪一条，就走一轮访谈把它折成 spec 再拆票。
 
@@ -12,42 +12,51 @@
 
 ## 渲染层
 
-- **把截断收回 `width` module**（Strong）：折行只有 `pane::wrap_line` 一处，截断却有五处，其中四处按
-  **字符**（`transcript.rs:664`、`wording.rs:934`、`changes.rs:589`、`files.rs:112`）—— 中文界面里字符
-  数不等于列数；`markdown::wrap_code:678` 还自己折一份。seam 收回 `width.rs`：量宽、按列切、按列折同
-  处，缩进续行成为折行的显式选项。与 [ADR 0008](../../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)
-  的「换行归我们」同向，只是没走完。
-- **左栏四页各自成 module**（Strong）：`SessionsPage` / `FilesPage` / `ChangesPage` 只有字段
-  （`tui.rs:9673`）—— 一页的绘制、键、指针、滚动、焦点散在 `impl TuiState`（4280 行）的 5 处，页与页
-  还互相清 `rect`（`:8773`、`:8789`），同形状重复四遍。seam 放在「一页」，`TuiState` 只留「当前哪页」。
-- **谁持键盘，一处判据**（Strong）：`key()`（`tui.rs:7269`）是 16 层阶梯，`click_at` / `wheel_at` /
-  `keyboard_in_the_input:14534` 各持一份字段子集；`tui.rs:2588` 的注释自称这是「第四套机制」。seam 放在
-  「层」—— 每层自己声明是否持有。先例是 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)。
-- **`headless` 做 `Block` 的第三个 adapter**（Strong）：`headless.rs:103` 自认养着自己一套叙述（28 个
-  匹配臂），而 `transcript.rs` 32 个、`tui.rs` 的画家 53 处；同一句话两处拼（`headless.rs:141` 与
-  `plain.rs:115`）。代价：`BlockId` 的身份记账
-  （[ADR 0021](../../docs/adr/0021-line-identity-comes-from-the-event-envelope.md)）会进机器模式。
-- **`View` 是投影的 seam**（Worth exploring）：44 字段的 `View` 被 `self.view.` 穿透 166 处；宽度重放
-  （`:4313`）住在 `TuiState` 里，却要同时懂 `View` 的六个字段。seam：「事件 + 当前宽度」进，「画出来的
-  行」出。
-- **措辞层回到「值 → 短语」**（Worth exploring）：`wording.rs` 的 362 个 `pub fn` 里有十来条是排版决策
-  （`status_row:2908`、`hint_row:1798`），另一半阶梯在 `layout.rs:604`。seam：「哪几段、按什么顺序放弃」
-  一处。删掉 `wording.rs` 复杂度是放大而不是消失 —— 这条说的是分家，不是「它 shallow」。
-- **`pane` 的平行表**：靠「丢了几条」这个整数与调用方手工对齐（`pane.rs:119`、`:503`、`:164`）——
-  2026-09-23 那次「历史从屏幕上消失」就出在这。
-- **命中测试两套机制**：`Regions`（`tui.rs:3186`，18 变体）只覆盖一部分动作，另一半各自重算几何
-  （`:5024`、`:7848`、`:4957`、`:6696`、`:6735`）。
+- **把截断收回 `width` module**（Strong → Worth exploring）：折行只有 `pane::wrap_line` 一处，
+  截断六处按 `chars().take` 拼 —— `transcript.rs:663`、`wording.rs:222` / `:963`、
+  `changes.rs:589`、`files.rs:118`、`tui.rs:15059`（10-18 新发现）—— 中文界面里字符数不等于
+  列数；`markdown::wrap_code` 仍自折一份。`panel.rs / todo.rs` 已走 `width::truncate_columns`，seam
+  是「半截收」。与 [ADR 0008](../../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md) 同向。
+- **左栏四页各自成 module**（Strong）：`SessionsPage` 已有 `impl` 一段（`tui.rs:10288-10360`），
+  `FilesPage` / `ChangesPage` 仍是裸字段 + 三个 draw fn；互清 `rect` 从 10-12 时的两处涨到 12+
+  处（`tui.rs:9219/9220/9319/9322/.../9726`）。seam 放在「一页」。
+- **谁持键盘，一处判据**（Strong → Strong，**已升级到架构级**）：`key()`（`tui.rs:7593-8599`，1006 行）
+  是 11 段早期 return；`trace_keyboard` 的注释（`tui.rs:2639`）自陈「仓库里**第四套**「键盘在谁那里」
+  的机制」 —— 之前的左栏布尔、两页焦点索引、问卷反显还没退，又叠一套。
+  `click_at` / `wheel_at` / `keyboard_in_the_input` 各持一份字段子集。seam：「层」——
+  每层自己声明是否持有。先例 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)。
+- **`headless` 做 `Block` 的第三个 adapter**（Strong）：`headless.rs:103` 自养叙述，`transcript.rs`
+  32 个、`tui.rs` 画家 53 处；同一句话两处拼（`headless.rs:141` 与 `plain.rs:115`）。
+  代价：`BlockId` 身份记账（[ADR 0021](../../docs/adr/0021-line-identity-comes-from-the-event-envelope.md)）
+  进机器模式。
+- **同一会话状态收到一处**（Worth exploring → Strong，**已升级**）：session-panes 票 23 / 25
+  落地后，`TuiState` 多了 5 份按 `SessionId` 平行的 `HashMap`（`views` / `states` / `light` /
+  `catalogs` / `read_only_by`）。`View`（57 字段）与 `SessionLight`（18 字段）各持一份会话
+  切片，`stash_light` / `load_light`（`tui.rs:4393/4421`）仍是手写搬运。seam：「一个会话的投影」——
+  `SessionProjection` module 把 `View` + `SessionLight` 收一起，`TuiState` 仅持
+  `HashMap<SessionId, SessionProjection>`。
+- **措辞层回到「值 → 短语」**（Worth exploring）：`wording.rs` 4032 行，200+ 条 `pub fn`；
+  一半纯短语、一半排版决策（`status_row:2983`、`hint_line:8497`、`bottom_rows:8583`）。
+  seam：「哪几段、按什么顺序放弃」一处。
+
+## 命中与平行表
+
+- **命中测试两套机制**：`Regions`（`layout.rs`）只覆盖一部分动作，另一半各自重算几何（`tui.rs:5024/7848/4957/6696/6735`）。2026-09-17 又因 `trace_rect` 与 `layout::Regions` 同时存在多碰一处（10-18 加深）。
+- ~~**`pane` 的平行表**~~（**已自愈**，10-18 转 ADR 引用）：`Pane::push() -> usize`（`pane.rs:124`）
+  把「丢了几条」收进 signature，`trace_links` / `trace_block_ids` / `TurnRail::prune(dropped)` 三处按
+  同一个返回值裁。2026-09-23 那次「历史从屏幕上消失」之后的修复已稳定，这条从候选池挪走。
 
 ## cli 与会话
 
-- **宿主表的投影只算一处**（Strong）：「宿主表现在长什么样」劈成两半 —— 三份上一帧快照与边沿判定住在
-  `cli/interactive.rs` 的 80ms 轮询里，渲染器为此长出 7 个专用推命令（`input.rs:316` 起）。三条规则
-  （未读的寿命、`N` 只算后台、单会话标题不变）因此只能靠真机走查
-  （[`tui-manual-checklist.md` ㊶](../../docs/tui-manual-checklist.md)）。
+- **host → cli → tui 的事实投影只算一处**（Strong，**10-18 新增**）：原 `seed-2026-10-12` 那条
+  「宿主表的投影只算一处」升级而成。「宿主表现在长什么样」算成三处 —— `cli/interactive.rs:572` 80ms
+  轮询算上一帧快照、`ConsoleHandle` 12+ 推命令、`TuiState` 各会话一份快照。`ConsoleRequest`
+  22 变体。渲染层要认的领域事实从 6 种涨到 10+ 种，每种一条 push 命令。
+  seam：`HostFacts` module 同时被 cli 与 tui 订阅，三条规则（未读的寿命、`N` 只算后台、
+  单会话标题不变）落到单元测试。
 - **命令名的知识两处**：对拍测试自己写着「两边各有一份真相」（拆分前在 `cli.rs:6681`）。
-- **渲染器要认识的领域事实有六种碎片**：`input.rs:133` 的 20 变体里十条是宿主表与会话清单的事实。
-- **会话级轻状态是一张手写搬运清单**：`SessionLight` 13 字段加 `stash_light` / `load_light`；要动它得先
-  重开 [`session-tab` spec](../session-tab/spec.md) §6。
+- **渲染器要认识的领域事实有六种碎片**（10-18 已涨到 10+ 种）。
+- **会话级轻状态是一张手写搬运清单**：被「同一会话状态收到一处」合并。
 
 ## 欠账
 
