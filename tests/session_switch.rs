@@ -71,11 +71,13 @@ fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
 
 /// 换到 `session_id` 那个会话，并把它的快照铺完。
 fn switch(state: &mut TuiState, session_id: &str, events: Vec<Event>) {
-    state.request(ConsoleRequest::SwitchSession {
-        facts: facts(session_id),
-        cwd: std::path::PathBuf::from("/x/heng"),
-        events,
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: facts(session_id),
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events,
+        },
+    ));
     while state.replay_pending() {
         state.replay_batch();
     }
@@ -131,11 +133,13 @@ fn the_draft_comes_back_with_its_session() {
 fn a_live_event_of_the_new_session_lands_after_the_snapshot() {
     // 切换期间到达的实时事件（属于**新**那个会话）在收尾时补上，而快照里已有的不画第二遍。
     let mut state = fresh();
-    state.request(ConsoleRequest::SwitchSession {
-        facts: facts("s-b"),
-        cwd: std::path::PathBuf::from("/x/heng"),
-        events: vec![said(1, "快照里的")],
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: facts("s-b"),
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events: vec![said(1, "快照里的")],
+        },
+    ));
     state.live_event(RenderEvent::Logged {
         session: SessionId::new("s-b"),
         event: said(1, "快照里的"),
@@ -172,10 +176,24 @@ fn the_way_out_follows_the_session_that_is_in_front() {
     );
 
     // 后台那个会话正在跑回合。
-    state.request(ConsoleRequest::SessionState {
-        id: SessionId::new("s-b"),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    let front = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: front.clone(),
+        sessions: vec![
+            heng::session::HostedSession {
+                id: front,
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+            heng::session::HostedSession {
+                id: SessionId::new("s-b"),
+                state: heng::session::host::SessionState::RunningTurn,
+                read_only: false,
+            },
+        ],
+        waiting: 0,
+        finished: 0,
+    }));
     let still_idle = screen(120, 24, &mut state);
     assert!(
         still_idle.contains(wording::EXIT_HINT_IDLE),
@@ -216,11 +234,13 @@ fn the_way_out_follows_the_session_that_is_in_front() {
 fn a_live_event_of_the_old_session_does_not_leak_into_the_new_one() {
     // 上一个会话攒下的实时事件不带过去（`live_buffer` 在切换时清掉）。
     let mut state = fresh();
-    state.request(ConsoleRequest::SwitchSession {
-        facts: facts("s-b"),
-        cwd: std::path::PathBuf::from("/x/heng"),
-        events: vec![said(1, "乙")],
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: facts("s-b"),
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events: vec![said(1, "乙")],
+        },
+    ));
     state.live_event(RenderEvent::Notice {
         session: SessionId::new("s-a"),
         at: chrono::Utc::now(),

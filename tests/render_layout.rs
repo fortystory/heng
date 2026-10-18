@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use heng::events::SessionId;
+
 use heng::config::{DiffViewerSettings, FileViewerSettings, ReasoningEffort};
 use heng::render::palette;
 use heng::render::width::text_columns;
@@ -492,10 +494,12 @@ fn ctrl_o_works_while_a_run_is_in_flight() {
     // 纯视图手势：跑着的时候恰恰最想多看几行转录（`.scratch/sidebar-toggle/spec.md` §3）。
     // 与 `Ctrl-D` 相反 —— 那一个是空闲键盘的手势。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let open = screen(120, 24, &mut state);
     assert!(open.join("\n").contains('┆'), "跑着的时候左栏还在");
 
@@ -743,10 +747,12 @@ fn hint_items_busy(width: u16) -> Vec<String> {
     let mut state = state();
     let (reply, _line) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply });
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     hint_items_of(width, &mut state)
 }
 
@@ -755,10 +761,12 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
     // 回合进行中，或者在一次性的 `discuss` 里：没人在读行，所以 `enter
     // 发送` 就是假话，模式手势也没有东西可切。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let rows = screen(120, 24, &mut state);
     let row = rows
         .iter()
@@ -1126,10 +1134,12 @@ fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
     }
 
     let mut running = state();
-    running.request(ConsoleRequest::SessionState {
-        id: running.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    running.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            running.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let mut seen = Vec::new();
     for frame in 0..heng::render::tui::SWEEP_PERIOD {
         running.tick();
@@ -1198,10 +1208,12 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
     // 文字身份与标记都不动：两者的下落短横在票 08 关停，
     // 代码随本 effort 的死代码收口删掉（`.scratch/tui-visual-language/spec.md` §34）。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     for frame in 0..5 {
         state.tick();
         let text = screen(100, 24, &mut state).join("\n");
@@ -1225,10 +1237,12 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
     use heng::render::wording;
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
-        state.request(ConsoleRequest::SessionState {
-            id: state.front().clone(),
-            state: heng::session::host::SessionState::RunningTurn,
-        });
+        state.request(ConsoleRequest::Facts(
+            heng::session::HostFacts::foreground_only(
+                state.front().clone(),
+                heng::session::host::SessionState::RunningTurn,
+            ),
+        ));
         // 让正文尾巴非空：否则对话视图末尾那条「正在思考…」也在走它的点号（2026-10-05 的
         // 另一条时钟动画），会把这条断言的靶子弄糊。
         state.apply(RenderEvent::Delta {
@@ -2114,10 +2128,12 @@ fn escape_hands_the_keyboard_back_without_cancelling_the_turn() {
     open_files_page(&mut state, 120, 24);
     let page = sidebar_page(&screen(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let _ = state.take_events();
 
     state.key(Key::Esc);
@@ -3774,7 +3790,7 @@ fn ask_permission() -> (
     use heng::render::{AskRequest, ConsoleRequest};
     let (tx, rx) = tokio::sync::oneshot::channel::<heng::permissions::Answer>();
     (
-        ConsoleRequest::Ask(AskRequest {
+        ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(AskRequest {
             request: PermissionRequest {
                 escalation: None,
                 speaker: None,
@@ -3785,7 +3801,7 @@ fn ask_permission() -> (
                 reason: "mode ask".to_owned(),
             },
             reply: tx,
-        }),
+        })),
         rx,
     )
 }
@@ -3955,10 +3971,12 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
     // 循环就不再等答案，所以屏幕上不能留东西去收答案 ——
     // 否则下一次按键会发给一个没人等的问句（spec §6、§9）。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let (ask, _answer) = ask_permission();
     state.request(ask);
     let rows = screen(120, 24, &mut state);
@@ -3968,7 +3986,9 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
         rows.join("\n")
     );
 
-    state.request(ConsoleRequest::RunState { running: false });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::RunState { running: false },
+    ));
     let rows = screen(120, 24, &mut state);
     assert!(
         !rows.iter().any(|row| row.contains("权限询问")),
@@ -3987,7 +4007,7 @@ fn a_long_command_still_says_what_it_would_do() {
     // 是转录里那条折起行的同一句话 —— 然后才是那墙东西。
     let mut state = state();
     let (tx, _rx) = tokio::sync::oneshot::channel::<heng::permissions::Answer>();
-    state.request(ConsoleRequest::Ask(AskRequest {
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(AskRequest {
         request: PermissionRequest {
             escalation: None,
             speaker: None,
@@ -4000,7 +4020,7 @@ fn a_long_command_still_says_what_it_would_do() {
             reason: "mode ask: a write asks the user".to_owned(),
         },
         reply: tx,
-    }));
+    })));
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
@@ -4868,10 +4888,12 @@ fn install_catalog(state: &mut TuiState) {
         // 第三类来源也摆上（票 09）：三色各有一条，才谈得上「看得出是三类」。
         CatalogEntry::template("db:user_report", "按 id 出一份报告"),
     ]);
-    state.request(ConsoleRequest::Catalog {
-        id: state.front().clone(),
-        entries,
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Catalog {
+            id: state.front().clone(),
+            entries,
+        },
+    ));
 }
 
 /// 给状态装一份文件索引：`@` 的候选来源（票 01 的那个会话级值）。
@@ -5083,10 +5105,12 @@ fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
     // 而它当年要比的那个「旧上限 74」已经不存在了：菜单宽是 159。
     let description = "说明".repeat(20);
     let mut state = state();
-    state.request(ConsoleRequest::Catalog {
-        id: state.front().clone(),
-        entries: vec![CatalogEntry::command("demo", description.clone())],
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Catalog {
+            id: state.front().clone(),
+            entries: vec![CatalogEntry::command("demo", description.clone())],
+        },
+    ));
     state.key(Key::Char('/'));
     let frame = buffer(200, 24, &mut state);
 
@@ -5148,10 +5172,12 @@ fn the_menu_spans_the_whole_conversation_column() {
 fn a_description_still_reads_as_one_line_in_the_full_width_menu() {
     let description = "说明".repeat(10);
     let mut state = state();
-    state.request(ConsoleRequest::Catalog {
-        id: state.front().clone(),
-        entries: vec![CatalogEntry::command("demo", description.clone())],
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Catalog {
+            id: state.front().clone(),
+            entries: vec![CatalogEntry::command("demo", description.clone())],
+        },
+    ));
     state.key(Key::Char('/'));
     let frame = buffer(120, 24, &mut state);
     let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 120)).collect();
@@ -6706,10 +6732,12 @@ fn questionnaire_state(
     use heng::render::QuestionnaireRequest;
     let mut state = state_with_roster(&["kimi"]);
     let (reply, answers) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-        questions: vec![question],
-        reply,
-    }));
+    state.request(ConsoleRequest::Ask(
+        heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+            questions: vec![question],
+            reply,
+        }),
+    ));
     (state, answers)
 }
 
@@ -6835,10 +6863,12 @@ fn the_questionnaire_footer_pages_with_a_click() {
                 description: None,
             }],
         };
-        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-            questions: vec![question("q1"), question("q2")],
-            reply,
-        }));
+        state.request(ConsoleRequest::Ask(
+            heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+                questions: vec![question("q1"), question("q2")],
+                reply,
+            }),
+        ));
         (state, answers)
     };
 
@@ -6877,10 +6907,12 @@ fn clicking_next_marks_the_question_skipped_like_the_arrow_key() {
             description: None,
         }],
     };
-    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-        questions: vec![question("q1"), question("q2")],
-        reply,
-    }));
+    state.request(ConsoleRequest::Ask(
+        heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+            questions: vec![question("q1"), question("q2")],
+            reply,
+        }),
+    ));
 
     click_in_row(&mut state, 120, 24, 23, "下一题 →");
     // 翻回来：页脚该说这一题交回去的是什么。
@@ -6909,10 +6941,12 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
                 description: None,
             }],
         };
-        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-            questions: vec![question("q1"), question("q2")],
-            reply,
-        }));
+        state.request(ConsoleRequest::Ask(
+            heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+                questions: vec![question("q1"), question("q2")],
+                reply,
+            }),
+        ));
         (state, answers)
     };
 
@@ -7021,10 +7055,12 @@ fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
 
     let mut state = state();
     let (reply, _answers) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-        questions: vec![question("q1"), question("q2")],
-        reply,
-    }));
+    state.request(ConsoleRequest::Ask(
+        heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+            questions: vec![question("q1"), question("q2")],
+            reply,
+        }),
+    ));
 
     let text = screen(130, 24, &mut state).join("\n");
     assert!(
@@ -7338,10 +7374,12 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
                 description: None,
             }],
         };
-        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-            questions: vec![question("q1"), question("q2")],
-            reply,
-        }));
+        state.request(ConsoleRequest::Ask(
+            heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+                questions: vec![question("q1"), question("q2")],
+                reply,
+            }),
+        ));
         (state, answers)
     };
 
@@ -8765,10 +8803,12 @@ fn the_name_sits_on_its_own_row_in_the_conversation() {
 fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
 
     let first = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(first.contains("正在思考."), "还没出字时有等待提示：{first}");
@@ -8793,10 +8833,12 @@ fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
 fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
 
     // 没有工具在跑：它在想。
     let thinking = conversation_rows(&mut state, 120, 24);
@@ -8855,10 +8897,12 @@ fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
 fn the_name_row_survives_the_streaming_body() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(user_message(1, "问题"));
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     state.apply(text_delta("答案的第一段。"));
 
     let rows = conversation_rows(&mut state, 120, 24);
@@ -8875,7 +8919,9 @@ fn the_name_row_survives_the_streaming_body() {
     // 完成之后名字仍在那儿 —— 这一回由**源行**带来。一轮收尾，末尾不再有等待块
     // （有的话它是新一组的名字，不是这条消息的）。
     state.apply(message(2, "答案的第一段。", None));
-    state.request(ConsoleRequest::RunState { running: false });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::RunState { running: false },
+    ));
     let rows = conversation_rows(&mut state, 120, 24);
     let name = rows
         .iter()
@@ -9090,12 +9136,12 @@ fn session_update(
     window: u64,
     speakers: &[&str],
 ) -> ConsoleRequest {
-    ConsoleRequest::SessionUpdate {
+    ConsoleRequest::Notify(heng::render::ConsoleNotify::SessionUpdate {
         model: model.to_owned(),
         effort,
         context_window: window,
         speakers: speakers.iter().map(|name| (*name).to_owned()).collect(),
-    }
+    })
 }
 
 /// 造一份清单：`label`、`detail` 与「当前」那一行。
@@ -9123,20 +9169,22 @@ fn picker_detailed(
 ) {
     let (reply, answer) = tokio::sync::oneshot::channel();
     (
-        ConsoleRequest::Picker(heng::render::PickerRequest {
-            title: title.to_owned(),
-            options: options
-                .iter()
-                .enumerate()
-                .map(|(index, (label, enabled))| heng::render::PickerOption {
-                    label: (*label).to_owned(),
-                    detail: detail(label),
-                    current: index == current,
-                    enabled: *enabled,
-                })
-                .collect(),
-            reply,
-        }),
+        ConsoleRequest::Ask(heng::render::ConsoleAsk::Picker(
+            heng::render::PickerRequest {
+                title: title.to_owned(),
+                options: options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (label, enabled))| heng::render::PickerOption {
+                        label: (*label).to_owned(),
+                        detail: detail(label),
+                        current: index == current,
+                        enabled: *enabled,
+                    })
+                    .collect(),
+                reply,
+            },
+        )),
         answer,
     )
 }
@@ -9650,19 +9698,21 @@ fn a_file_row_in_the_sidebar_opens_its_content_while_a_questionnaire_is_up() {
     let mut state = files_in(&dir, &["hello.rs"]);
     use heng::render::QuestionnaireRequest;
     let (reply, _answers) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-        questions: vec![heng::questions::UserQuestion {
-            id: "q1".to_owned(),
-            header: None,
-            question: "选一个".to_owned(),
-            multi_select: false,
-            options: vec![heng::questions::Choice {
-                label: "甲".to_owned(),
-                description: None,
+    state.request(ConsoleRequest::Ask(
+        heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest {
+            questions: vec![heng::questions::UserQuestion {
+                id: "q1".to_owned(),
+                header: None,
+                question: "选一个".to_owned(),
+                multi_select: false,
+                options: vec![heng::questions::Choice {
+                    label: "甲".to_owned(),
+                    description: None,
+                }],
             }],
-        }],
-        reply,
-    }));
+            reply,
+        }),
+    ));
     open_files_page(&mut state, 120, 24);
     click_row(&mut state, 120, 24, "hello.rs");
 
@@ -10524,7 +10574,6 @@ fn a_hidden_starting_sidebar_leaves_the_frame_without_it() {
 
 /// 把一份宿主表与它的标题推进状态里：顺序就是 `entries` 的顺序。
 fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
-    use heng::events::SessionId;
     use heng::render::ConsoleRequest;
     use heng::session::listing::{SessionListing, SessionMark, SessionRow};
     let rows: Vec<SessionRow> = entries
@@ -10542,15 +10591,30 @@ fn host_sessions(state: &mut TuiState, entries: &[(&str, &str)]) {
             mark: SessionMark::Idle,
         })
         .collect();
-    let ids: Vec<SessionId> = entries.iter().map(|(id, _)| SessionId::new(*id)).collect();
-    state.request(ConsoleRequest::Sessions {
-        listing: SessionListing {
-            rows,
-            total: entries.len(),
-            unreadable: false,
+    let sessions: Vec<heng::session::HostedSession> = entries
+        .iter()
+        .map(|(id, _)| heng::session::HostedSession {
+            id: SessionId::new(*id),
+            state: heng::session::host::SessionState::Idle,
+            read_only: false,
+        })
+        .collect();
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Sessions {
+            listing: SessionListing {
+                rows,
+                total: entries.len(),
+                unreadable: false,
+            },
         },
-    });
-    state.request(ConsoleRequest::Hosted { ids });
+    ));
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground,
+        sessions,
+        waiting: 0,
+        finished: 0,
+    }));
 }
 
 /// `needle` 在 `hay` 里出现了几次。
@@ -10566,11 +10630,13 @@ fn switch_session(state: &mut TuiState, id: &str) {
 fn switch_session_at(state: &mut TuiState, id: &str, cwd: &str) {
     let mut session_facts = facts();
     session_facts.session_id = id.to_owned();
-    state.request(ConsoleRequest::SwitchSession {
-        facts: session_facts,
-        cwd: std::path::PathBuf::from(cwd),
-        events: Vec::new(),
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: session_facts,
+            cwd: std::path::PathBuf::from(cwd),
+            events: Vec::new(),
+        },
+    ));
     while state.replay_pending() {
         state.replay_batch();
     }
@@ -10783,15 +10849,21 @@ fn the_tile_limit_caps_the_tiles() {
 /// 关掉一个会话：槽位重排；只剩一个时回标签态。
 #[test]
 fn a_closed_session_leaves_the_tiles() {
-    use heng::events::SessionId;
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
     let _ = screen(120, 40, &mut state);
     state.key(Key::CtrlR);
-    state.request(ConsoleRequest::SessionClosed {
-        id: SessionId::new("s-b"),
-        empty: false,
-    });
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: foreground.clone(),
+        sessions: vec![heng::session::HostedSession {
+            id: foreground,
+            state: heng::session::host::SessionState::Idle,
+            read_only: false,
+        }],
+        waiting: 0,
+        finished: 0,
+    }));
     let _ = screen(120, 40, &mut state);
     assert_eq!(state.tiles().len(), 1);
     assert!(!state.tiled(), "只剩一格就回标签态");
@@ -10944,10 +11016,25 @@ fn the_tab_strip_never_shows_a_sessions_state() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A"), ("s-b", "会话 B")]);
     let before = row_text(&buffer(120, 40, &mut state), 0, 120);
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    // 快照是全量的：装载列表仍是 A、B，只让 A 跑起来 —— 标签条不该因此多出状态。
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: foreground.clone(),
+        sessions: vec![
+            heng::session::HostedSession {
+                id: foreground,
+                state: heng::session::host::SessionState::RunningTurn,
+                read_only: false,
+            },
+            heng::session::HostedSession {
+                id: SessionId::new("s-b"),
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+        ],
+        waiting: 0,
+        finished: 0,
+    }));
     assert_eq!(before, row_text(&buffer(120, 40, &mut state), 0, 120));
 }
 

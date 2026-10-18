@@ -55,13 +55,15 @@ fn row(id: &str, title: &str, group: &str, mark: SessionMark, minutes: u64) -> S
 
 /// 把一份列表推进去，就像组装方做的那样。
 fn load(state: &mut TuiState, rows: Vec<SessionRow>, total: usize) {
-    state.request(ConsoleRequest::Sessions {
-        listing: SessionListing {
-            rows,
-            total,
-            unreadable: false,
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Sessions {
+            listing: SessionListing {
+                rows,
+                total,
+                unreadable: false,
+            },
         },
-    });
+    ));
 }
 
 fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
@@ -228,11 +230,13 @@ fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
     // 切到第二个会话：列表快照不动，换的是渲染侧那个前台（`SwitchSession`）。
     let mut switched = facts();
     switched.session_id = "s-other".to_owned();
-    state.request(ConsoleRequest::SwitchSession {
-        facts: switched,
-        cwd: std::path::PathBuf::from("/x/heng"),
-        events: Vec::new(),
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: switched,
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events: Vec::new(),
+        },
+    ));
 
     open_sessions(&mut state, 120, 24);
     let frame = buffer(120, 24, &mut state);
@@ -291,16 +295,18 @@ fn groups_are_whole_rows_and_the_ladder_drops_them() {
 
     // 页区 6–7 行：丢组头、保读数行。
     let mut short = fresh();
-    short.request(ConsoleRequest::Sessions {
-        listing: SessionListing {
-            rows: vec![
-                row("s-a", "第一组的一个会话", "alpha", SessionMark::Idle, 1),
-                row("s-b", "第二组的一个会话", "beta", SessionMark::Idle, 2),
-            ],
-            total: 2,
-            unreadable: false,
+    short.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Sessions {
+            listing: SessionListing {
+                rows: vec![
+                    row("s-a", "第一组的一个会话", "alpha", SessionMark::Idle, 1),
+                    row("s-b", "第二组的一个会话", "beta", SessionMark::Idle, 2),
+                ],
+                total: 2,
+                unreadable: false,
+            },
         },
-    });
+    ));
     open_sessions(&mut short, 120, 24);
     let low = screen(120, 14, &mut short);
     assert!(
@@ -321,13 +327,15 @@ fn the_page_says_which_empty_it_is() {
     );
 
     let mut state = fresh();
-    state.request(ConsoleRequest::Sessions {
-        listing: SessionListing {
-            rows: Vec::new(),
-            total: 0,
-            unreadable: true,
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Sessions {
+            listing: SessionListing {
+                rows: Vec::new(),
+                total: 0,
+                unreadable: true,
+            },
         },
-    });
+    ));
     open_sessions(&mut state, 120, 24);
     let text = screen(120, 24, &mut state);
     assert!(
@@ -616,9 +624,24 @@ fn the_title_colour_says_where_a_session_is() {
         ],
         3,
     );
-    state.request(ConsoleRequest::Hosted {
-        ids: vec![SessionId::new("s-front"), SessionId::new("s-hosted")],
-    });
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground,
+        sessions: vec![
+            heng::session::HostedSession {
+                id: SessionId::new("s-front"),
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+            heng::session::HostedSession {
+                id: SessionId::new("s-hosted"),
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+        ],
+        waiting: 0,
+        finished: 0,
+    }));
     open_sessions(&mut state, 120, 24);
 
     let live = title_colour(&mut state, "当前这个会话");
@@ -632,10 +655,17 @@ fn the_title_colour_says_where_a_session_is() {
     assert_eq!(cold, heng::render::palette::MUTED, "只在盘上那一行");
 
     // 关掉一个会话之后它退回「只在盘上」那一档 —— 盘上那份还在，只是这个进程不再装着它。
-    state.request(ConsoleRequest::SessionClosed {
-        id: SessionId::new("s-hosted"),
-        empty: false,
-    });
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: foreground.clone(),
+        sessions: vec![heng::session::HostedSession {
+            id: SessionId::new("s-front"),
+            state: heng::session::host::SessionState::Idle,
+            read_only: false,
+        }],
+        waiting: 0,
+        finished: 0,
+    }));
     open_sessions(&mut state, 120, 24);
     assert_eq!(
         title_colour(&mut state, "已装载空闲"),
@@ -794,9 +824,11 @@ fn a_refused_close_offers_a_clickable_switch() {
     );
     open_sessions(&mut state, 120, 24);
     // 循环判出「要关的这一个正在前台」，把目标告诉渲染器；相邻是谁由它自己算。
-    state.request(ConsoleRequest::CloseBlocked {
-        target: SessionId::new("01J8ZQ4K7M"),
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::CloseBlocked {
+            target: SessionId::new("01J8ZQ4K7M"),
+        },
+    ));
 
     let frame = buffer(120, 24, &mut state);
     let (column, line) = find_cell(&frame, 120, 24, "切到「另一个会话」");
@@ -818,10 +850,10 @@ fn a_refused_close_offers_a_clickable_switch() {
 #[test]
 fn a_read_only_session_blocks_the_rename() {
     let mut state = fresh();
-    state.request(ConsoleRequest::ReadOnly {
-        id: SessionId::new("01J8ZQ4K7M"),
-        read_only: true,
-    });
+    let foreground = state.front().clone();
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_read_only(foreground, true),
+    ));
     open_sessions(&mut state, 120, 24);
     state.key(Key::Char('r'));
     let rows = screen(120, 24, &mut state);

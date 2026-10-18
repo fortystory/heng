@@ -52,7 +52,9 @@ use super::editor::{self, Input};
 use super::file_index::{self, FileIndex};
 use super::files;
 use super::highlight;
-use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind};
+use super::input::{
+    CatalogEntry, ConsoleAsk, ConsoleNotify, ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind,
+};
 use super::layout;
 use super::links;
 use super::opener;
@@ -7580,223 +7582,251 @@ impl TuiState {
         self.dirty = true;
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
-            // 循环自己对「它是不是正在跑东西」的说法。这个状态里没有别的什么可以替它说话。
-            ConsoleRequest::Muted { muted } => {
-                self.muted = muted;
-                // 禁言开始的那一刻，草稿里还没有什么东西是「插话」；立着的问题也不受影响
-                // （它是循环在等答案，与打字不是一回事）。
-            }
-            ConsoleRequest::RunState { running } => {
-                self.running = running;
-                // 时钟现在**一直**在走（§32），所以相位要在这里对齐：一次运行总是从帧 0 开始
-                // 呼吸，空闲时提示符歇在帧 0 的颜色上 —— 输入区因此仍然完全静止，动的是状态行
-                // 那个字形循环（`.scratch/tui-visual-language/spec.md` §30–§33）。
-                self.pulse = 0;
-                if !running {
-                    // 一次运行结束：「正在做什么」没有主语了。
-                    self.view.running_tool = None;
-                }
-                // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
-                // 不再等答案，它那次询问也随运行一起死了。把覆盖层留在屏幕上，会把下一个
-                // 按键送进一个没人在等的问题 —— 一次静默的失败，读起来像死键（spec §6、§9）。
-                // 丢掉发送端是对「没人在等」最诚实的读法：留着一个问题会被拒绝。
-                //
-                // 只有循环的问题随运行一起走。渲染器自己的那些 —— 一次过大的粘贴、一份
-                // `Esc` 会清掉的草稿 —— 不是这次运行能撤回的，而且它们只能趁循环空闲时才
-                // 立着。问卷也是循环的：它是模型提的，而一次被取消的运行让它既没人在等、
-                // 也没答案可给。
-                if !running
-                    && matches!(
-                        self.pending,
-                        Some(Pending::Loop { .. } | Pending::Questionnaire(_))
-                    )
-                {
-                    self.pending = None;
-                }
-            }
-            ConsoleRequest::Ask(ask) => {
-                // 问题不可以画在详情覆盖层之上：覆盖层不是一个 `pending`，所以没有别的东西
-                // 会让它退下，而它底下那个模态会变得无法回答（票 02 §4）。
-                self.close_detail();
-                if self.pending.is_some() {
-                    // 循环一次只问一个问题、并等那个答案，所以这不可能发生。万一发生了，
-                    // 丢掉*新*的问题能让屏幕上那个仍然可答；丢掉它的发送端就是拒绝它，那是
-                    // 对一个孤儿询问安全的读法。
-                    return;
-                }
-                self.pending = Some(Pending::Loop {
-                    request: ask.request,
-                    reply: ask.reply,
-                });
-            }
-            ConsoleRequest::Questionnaire(request) => {
-                // 与 `Ask` 同一个理由：覆盖层为问题退下。
-                self.close_detail();
-                if self.pending.is_some() {
-                    // 一次只有一个问题占着键盘，正如循环的询问那样：丢掉新的那个让屏幕上那个
-                    // 仍然可答，而它被丢掉的发送端拒绝了那个孤儿询问。
-                    return;
-                }
-                // 工具在到达端口之前就拒掉空问卷，所以这不可能是模型发来的。一个没有问题的
-                // 问题会既没东西可画、也没东西可索引，所以它被拒掉，而不是放任它把渲染器
-                // panic 掉。
-                if request.questions.is_empty() {
-                    let _ = request.reply.send(Err("一份问卷至少要有一道题".to_owned()));
-                    return;
-                }
-                let drafts = request
-                    .questions
-                    .iter()
-                    .map(|_| QuestionDraft::default())
-                    .collect();
-                let mut questionnaire = Questionnaire {
-                    questions: request.questions,
-                    reply: request.reply,
-                    drafts,
-                    index: 0,
-                    zone: Zone::Options,
-                };
-                // 没有选项的题只有输入区一个落点，所以起始区域由第一题的样子定。
-                questionnaire.reset_zone();
-                self.pending = Some(Pending::Questionnaire(questionnaire));
-            }
-            // 换完模型/档位之后循环推回来的新事实（spec §3）。它是**通知**：没有答案要等，
-            // 前端把它并进自己那份注入事实，然后请一帧。
-            ConsoleRequest::SessionUpdate {
-                model,
-                effort,
-                context_window,
-                speakers,
-            } => {
-                self.view.facts.model = model;
-                self.view.facts.context_window = context_window;
-                self.view.facts.speaker_order = speakers;
-                // 档位是渲染器状态（与 `mode` 同一格）：它不进 `facts`，因为它是**会话中途**
-                // 才有的值，而注入的 facts 是组装时的快照。
-                self.view.effort = effort;
-                // 名册换了，于是每个新名字去拿一个没人认领的颜色槽位 ——
-                // `SpeakerColors` 已经为这件事备好了路（spec §4）。
-                self.view
-                    .colors
-                    .adopt_roster(&self.view.facts.speaker_order);
-            }
-            // 一份「从这份清单里挑一个」的问话（spec §9）。
-            ConsoleRequest::Picker(request) => {
-                // 覆盖层与问题为它退下：一个还没回答的问题不该被一块浮层压住，而一份清单
-                // 也只可能在这一刻没有别的东西占着键盘。
-                self.close_detail();
-                if matches!(
-                    self.pending,
-                    Some(Pending::Loop { .. } | Pending::Questionnaire(_))
-                ) {
-                    // 循环一次只问一个问题，所以这不可能发生。丢掉*新*的那份让屏幕上那个
-                    // 仍然可答 —— 与 `Ask` 同一个读法。
-                    let _ = request.reply.send(None);
-                    return;
-                }
-                self.picker = Some(Picker::new(request));
-            }
-            // 换到另一个会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**，而会话级的
-            // 轻状态先收走当前那份、再装入目标那份。
-            ConsoleRequest::SwitchSession { facts, cwd, events } => {
-                // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一个**，不能泄到这个会话来。
-                if let Some(old) = self.replay.take() {
-                    self.finish_replay(old);
-                }
-                // 收走旧会话的切片、装进目标那份；第一次装载才要铺历史（票 23）。
-                let first_load = self.switch_session(facts, cwd);
-                // 切过去之后那条「先切走」的提示没有意义了（票 32）。
-                self.close_blocked = None;
-                // 会话页那一行「谁是前台」**就地**改到新的前台：那份 listing 是启动时扫出来
-                // 的，而它只在启动推一次 —— 继续拿它画 `▍` 与 `LIVE` 色，标记会一直停在启动
-                // 那个会话（2026-10-12 维护者：「切了别的会话，当前会话没变」）。重扫一份
-                // listing 要碰 store（票 03 实测全量解析 155–172ms），不值得为一个标记付。
-                for row in &mut self.sessions.shown {
-                    row.foreground = row.id == self.front;
-                }
-                // 平铺槽位跟宿主表走（2026-10-17 修订）：切到一个不在槽位、槽位还没满的
-                // 会话时把它补进末尾 —— 真实流程里 `Hosted` 会重排，这里兜住没推那一份的路径。
-                let new_front = self.front.clone();
-                if !self.tiles.contains(&new_front) && self.tiles.len() < self.tile_limit {
-                    self.tiles.push(new_front);
-                }
-                self.sync_tokens();
-                // 上一个会话攒下的实时事件不带过去。
-                self.live_buffer.clear();
-                if first_load && !events.is_empty() {
-                    let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
-                    self.replay = Some(Replay {
-                        events,
-                        max_seq,
-                        next: 0,
-                        lines: 0,
-                        // 切过去看到的是一整个会话，不是「历史 + 本段」。
-                        divider: false,
+            ConsoleRequest::Ask(ask) => match ask {
+                ConsoleAsk::Permission(ask) => {
+                    // 问题不可以画在详情覆盖层之上：覆盖层不是一个 `pending`，所以没有别的东西
+                    // 会让它退下，而它底下那个模态会变得无法回答（票 02 §4）。
+                    self.close_detail();
+                    if self.pending.is_some() {
+                        // 循环一次只问一个问题、并等那个答案，所以这不可能发生。万一发生了，
+                        // 丢掉*新*的问题能让屏幕上那个仍然可答；丢掉它的发送端就是拒绝它。
+                        return;
+                    }
+                    self.pending = Some(Pending::Loop {
+                        request: ask.request,
+                        reply: ask.reply,
                     });
                 }
-                self.dirty = true;
-            }
-            // 后台通知那两个数（票 25）：标题状态段照它们取值。
-            ConsoleRequest::TitleAttention { waiting, finished } => {
-                if self.background_waiting != waiting || self.background_finished != finished {
-                    self.background_waiting = waiting;
-                    self.background_finished = finished;
-                    self.dirty = true;
+                ConsoleAsk::Questionnaire(request) => {
+                    // 与权限门同一个理由：覆盖层为问题退下。
+                    self.close_detail();
+                    if self.pending.is_some() {
+                        return;
+                    }
+                    // 工具在到达端口之前就拒掉空问卷，所以这不可能是模型发来的。一个没有问题的
+                    // 问题会既没东西可画、也没东西可索引，所以它被拒掉。
+                    if request.questions.is_empty() {
+                        let _ = request.reply.send(Err("一份问卷至少要有一道题".to_owned()));
+                        return;
+                    }
+                    let drafts = request
+                        .questions
+                        .iter()
+                        .map(|_| QuestionDraft::default())
+                        .collect();
+                    let mut questionnaire = Questionnaire {
+                        questions: request.questions,
+                        reply: request.reply,
+                        drafts,
+                        index: 0,
+                        zone: Zone::Options,
+                    };
+                    // 没有选项的题只有输入区一个落点，所以起始区域由第一题的样子定。
+                    questionnaire.reset_zone();
+                    self.pending = Some(Pending::Questionnaire(questionnaire));
                 }
-            }
-            // 提示行那句话的可点入口（票 23）：把会话页交到前台、焦点落在这一行上。
-            ConsoleRequest::Attention { id } => {
-                self.tab = Tab::Sessions;
-                self.sidebar_keyboard = true;
-                self.sessions.focus = Some(id);
-                self.dirty = true;
-            }
-            // 关闭被前台规则拒了（票 32）：提示行给一段可点的，而**切到哪一个**只有渲染侧算得
-            // 出（列表顺序在它手里）。
-            ConsoleRequest::CloseBlocked { target } => {
-                match self.alternative_for(&target) {
-                    Some(alternative) => {
-                        self.close_blocked = Some(RefusedClose {
-                            target,
-                            alternative,
+                ConsoleAsk::Picker(request) => {
+                    // 覆盖层与问题为它退下：一个还没回答的问题不该被一块浮层压住。
+                    self.close_detail();
+                    if matches!(
+                        self.pending,
+                        Some(Pending::Loop { .. } | Pending::Questionnaire(_))
+                    ) {
+                        // 循环一次只问一个问题，所以这不可能发生。丢掉*新*的那份让屏幕上那个
+                        // 仍然可答 —— 与权限门同一个读法。
+                        let _ = request.reply.send(None);
+                        return;
+                    }
+                    self.picker = Some(Picker::new(request));
+                }
+            },
+            // 「现在」：宿主表的一份快照（票 03）。三态 / 只读 / 装载列表 / 后台计数都从这里
+            // 一次更新，不再逐条接收。
+            ConsoleRequest::Facts(facts) => self.apply_host_facts(facts),
+            ConsoleRequest::Notify(notify) => match notify {
+                // 循环自己对「它是不是正在跑东西」的说法。
+                ConsoleNotify::Muted { muted } => {
+                    self.muted = muted;
+                }
+                ConsoleNotify::RunState { running } => {
+                    self.running = running;
+                    // 时钟现在**一直**在走（§32），所以相位要在这里对齐：一次运行总是从帧 0 开始
+                    // 呼吸（`.scratch/tui-visual-language/spec.md` §30–§33）。
+                    self.pulse = 0;
+                    if !running {
+                        // 一次运行结束：「正在做什么」没有主语了。
+                        self.view.running_tool = None;
+                    }
+                    // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
+                    // 不再等答案，它那次询问也随运行一起死了。丢掉发送端是对「没人在等」最诚实
+                    // 的读法。只有循环的问题随运行一起走；渲染器自己的那几个不是这次运行能撤回
+                    // 的（spec §6、§9）。
+                    if !running
+                        && matches!(
+                            self.pending,
+                            Some(Pending::Loop { .. } | Pending::Questionnaire(_))
+                        )
+                    {
+                        self.pending = None;
+                    }
+                }
+                // 换完模型/档位之后循环推回来的新事实（spec §3）。
+                ConsoleNotify::SessionUpdate {
+                    model,
+                    effort,
+                    context_window,
+                    speakers,
+                } => {
+                    self.view.facts.model = model;
+                    self.view.facts.context_window = context_window;
+                    self.view.facts.speaker_order = speakers;
+                    // 档位是渲染器状态（与 `mode` 同一格）：它不进 `facts`。
+                    self.view.effort = effort;
+                    // 名册换了，于是每个新名字去拿一个没人认领的颜色槽位（spec §4）。
+                    self.view
+                        .colors
+                        .adopt_roster(&self.view.facts.speaker_order);
+                }
+                // 换到另一个会话（`.scratch/session-tab/spec.md` §6）：投影**整块换**。
+                ConsoleNotify::SwitchSession { facts, cwd, events } => {
+                    // 在飞的旧重建先收尾：它缓冲的实时事件属于**上一个**。
+                    if let Some(old) = self.replay.take() {
+                        self.finish_replay(old);
+                    }
+                    // 收走旧会话的切片、装进目标那份；第一次装载才要铺历史（票 23）。
+                    let first_load = self.switch_session(facts, cwd);
+                    self.close_blocked = None;
+                    // 会话页那一行「谁是前台」**就地**改到新的前台（那份 listing 只在启动推一次）。
+                    for row in &mut self.sessions.shown {
+                        row.foreground = row.id == self.front;
+                    }
+                    // 平铺槽位跟宿主表走：切到一个不在槽位、槽位还没满的会话时把它补进末尾。
+                    let new_front = self.front.clone();
+                    if !self.tiles.contains(&new_front) && self.tiles.len() < self.tile_limit {
+                        self.tiles.push(new_front);
+                    }
+                    self.sync_tokens();
+                    // 上一个会话攒下的实时事件不带过去。
+                    self.live_buffer.clear();
+                    if first_load && !events.is_empty() {
+                        let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
+                        self.replay = Some(Replay {
+                            events,
+                            max_seq,
+                            next: 0,
+                            lines: 0,
+                            // 切过去看到的是一整个会话，不是「历史 + 本段」。
+                            divider: false,
                         });
                     }
-                    // 算不出相邻（列表还没推来、或者目标刚好被过滤掉）：至少说一句 —— 否则那一下
-                    // 点下去什么都不发生。
-                    None => {
-                        self.close_blocked = None;
-                        self.notice = Some((
-                            std::time::Instant::now(),
-                            wording::close_blocked_note().to_owned(),
-                        ));
+                }
+                // 提示行那句话的可点入口（票 23）：把会话页交到前台、焦点落在这一行上。
+                ConsoleNotify::Attention { id } => {
+                    self.tab = Tab::Sessions;
+                    self.sidebar_keyboard = true;
+                    self.sessions.focus = Some(id);
+                }
+                // 关闭被前台规则拒了（票 32）：提示行给一段可点的。
+                ConsoleNotify::CloseBlocked { target } => {
+                    match self.alternative_for(&target) {
+                        Some(alternative) => {
+                            self.close_blocked = Some(RefusedClose {
+                                target,
+                                alternative,
+                            });
+                        }
+                        // 算不出相邻（列表还没推来、或者目标刚好被过滤掉）：至少说一句。
+                        None => {
+                            self.close_blocked = None;
+                            self.notice = Some((
+                                std::time::Instant::now(),
+                                wording::close_blocked_note().to_owned(),
+                            ));
+                        }
                     }
                 }
-                self.dirty = true;
-            }
-            // 退出被闸门拒了（票 28）：那一把举手随之作废，于是下一次按下仍然只是第一下。
-            ConsoleRequest::ExitBlocked { first, .. } => {
-                self.expire_exit_gesture();
-                self.tab = Tab::Sessions;
-                self.sidebar_keyboard = true;
-                self.sessions.focus = Some(first);
-                self.dirty = true;
-            }
-            // 一个会话的忙闲（票 22）。
-            ConsoleRequest::SessionState { id, state } => {
-                let slot = self.projections.entry(id).or_default();
-                slot.state = (state != crate::session::host::SessionState::Idle).then_some(state);
-                self.dirty = true;
-            }
-            // 这个会话是不是只读预览（票 18）。
-            ConsoleRequest::ReadOnly { id, read_only } => {
-                self.projections.entry(id.clone()).or_default().read_only = read_only;
-                if id == self.front {
-                    self.read_only = read_only;
+                // 退出被闸门拒了（票 28）：那一把举手随之作废。
+                ConsoleNotify::ExitBlocked { first, .. } => {
+                    self.expire_exit_gesture();
+                    self.tab = Tab::Sessions;
+                    self.sidebar_keyboard = true;
+                    self.sessions.focus = Some(first);
                 }
+                // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
+                ConsoleNotify::Sessions { listing } => {
+                    let focus = self.sessions.focus.clone();
+                    self.sessions.rows = listing.rows;
+                    self.sessions.total = listing.total;
+                    self.sessions.unreadable = listing.unreadable;
+                    // 列表换了，过滤后的那一份要跟着重算。
+                    self.sessions.refilter();
+                    // 焦点按 **会话 id** 保位：重扫之后按 id 找回，不按下标（票 20）。
+                    self.sessions.focus =
+                        focus.filter(|id| self.sessions.shown.iter().any(|row| &row.id == id));
+                }
+                // 循环能作用上去的那些名字，组装之后到达一次。
+                ConsoleNotify::Catalog { id, entries } => {
+                    self.projections.entry(id.clone()).or_default().catalog = entries.clone();
+                    if id == self.front {
+                        self.catalog = entries;
+                        // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
+                        self.sync_tokens();
+                    }
+                }
+                // 重新打开的会话组装时用的那段历史。
+                ConsoleNotify::Replay { events } => {
+                    // 一次在飞的旧重建先收尾：直接覆盖会把旧批次攒下的实时事件泄进下一次。
+                    if let Some(old) = self.replay.take() {
+                        self.finish_replay(old);
+                    }
+                    if !events.is_empty() {
+                        // 重放占着指针，所以一次进行中的拖选到这里必须作废。
+                        self.drag = None;
+                        let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
+                        self.replay = Some(Replay {
+                            events,
+                            max_seq,
+                            next: 0,
+                            lines: 0,
+                            divider: true,
+                        });
+                    }
+                }
+            },
+        }
+    }
+
+    /// 应用一份宿主表事实快照（票 03 的「现在」）。
+    ///
+    /// 三态、只读、装载列表、后台计数与空宿主态从这一处更新；「谁不在宿主表里了」也由它推出
+    /// （原先那条 `SessionClosed` 的账），于是前端不再为每种事实各守一条命令。
+    fn apply_host_facts(&mut self, facts: crate::session::host_facts::HostFacts) {
+        // 读数。
+        self.sessions.host_sessions = Some(facts.sessions_count());
+        self.sessions.host_running = Some(facts.running_count());
+        self.background_waiting = facts.waiting;
+        self.background_finished = facts.finished;
+        // 每会话的三态与只读。
+        for session in &facts.sessions {
+            let slot = self.projections.entry(session.id.clone()).or_default();
+            slot.state = (session.state != crate::session::host::SessionState::Idle)
+                .then_some(session.state);
+            slot.read_only = session.read_only;
+            if session.id == self.front {
+                self.read_only = session.read_only;
             }
-            // 一个会话被卸下来了（票 21）：删掉轻状态表里那一行，并把宿主读数与空宿主态更新。
-            ConsoleRequest::SessionClosed { id, empty } => {
-                // 关掉的正是被拒那一段里的哪一个：提示跟着作废（票 32）。
+        }
+        // 装载列表：顺序 = 宿主表的装载顺序（票 15 的页签条、票 29 的三档标题色）。
+        let hosted = facts.hosted();
+        if self.sessions.hosted != hosted {
+            // 不在表里了的会话：切片状态与悬着的入口一起收掉。
+            let gone: Vec<_> = self
+                .projections
+                .keys()
+                .filter(|id| !hosted.contains(id))
+                .cloned()
+                .collect();
+            for id in gone {
                 if self
                     .close_blocked
                     .as_ref()
@@ -7804,77 +7834,23 @@ impl TuiState {
                 {
                     self.close_blocked = None;
                 }
-                self.projections.remove(&id);
-                self.sessions.hosted.retain(|held| held != &id);
-                // 关掉的会话不在宿主表了：平铺槽位跟着重排，只剩一个就回标签态（票 19）。
-                self.rebuild_tiles();
-                self.sessions.host_empty = empty;
-                // 空宿主：输入区禁用（提交时循环回一句）。
-                self.muted = empty;
                 if self.sessions.focus.as_ref() == Some(&id) {
                     self.sessions.focus = None;
                 }
-                self.dirty = true;
+                self.projections.remove(&id);
             }
-            // 宿主表里有几个、其中几个在跑（票 21 的 `已装载 N 个`、票 22 的 `M 个在跑`）。
-            ConsoleRequest::HostCount { sessions, running } => {
-                self.sessions.host_sessions = Some(sessions);
-                self.sessions.host_running = Some(running);
-            }
-            // 宿主表里装着哪几个（票 29）：会话页那三档标题色。
-            ConsoleRequest::Hosted { ids } => {
-                // 顺序 = 宿主表的装载顺序（票 15：顶部页签条按它排，稳定）。
-                self.sessions.hosted = ids;
-                // 平铺槽位 = 宿主表的前 `tile_limit` 个（2026-10-17 维护者修订：打开几个就
-                // 平铺几个，没有 `[+ 加入]` 那一格）。
-                self.rebuild_tiles();
-                self.dirty = true;
-            }
-            // 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。数据由组装方推过来。
-            ConsoleRequest::Sessions { listing } => {
-                let focus = self.sessions.focus.clone();
-                self.sessions.rows = listing.rows;
-                self.sessions.total = listing.total;
-                self.sessions.unreadable = listing.unreadable;
-                // 列表换了，过滤后的那一份要跟着重算。
-                self.sessions.refilter();
-                // 焦点按 **会话 id** 保位：重扫之后按 id 找回，不按下标（票 20）。
-                self.sessions.focus =
-                    focus.filter(|id| self.sessions.shown.iter().any(|row| &row.id == id));
-            }
-            // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
-            // 没有别的东西携带它们。
-            ConsoleRequest::Catalog { id, entries } => {
-                self.projections.entry(id.clone()).or_default().catalog = entries.clone();
-                if id == self.front {
-                    self.catalog = entries;
-                    // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
-                    self.sync_tokens();
-                }
-            }
-            // 重新打开的会话组装时用的那段历史。空流不是一次重放：进入那个状态会为一次什么
-            // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
-            ConsoleRequest::Replay { events } => {
-                // 一次在飞的旧重建先收尾：分隔行、排空它的缓冲、视口回末尾。直接覆盖它
-                // 会把旧批次攒下的实时事件泄进下一次重建（票 14）。
-                if let Some(old) = self.replay.take() {
-                    self.finish_replay(old);
-                }
-                if !events.is_empty() {
-                    // 重放占着指针（`mouse()` 在重放期间整个早退），所以一次进行中的拖选到
-                    // 这里必须作废：它的区域编号指的还是重放前那一帧的屏幕文本
-                    // （`.scratch/tui-feedback/spec.md` §5）。
-                    self.drag = None;
-                    let max_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
-                    self.replay = Some(Replay {
-                        events,
-                        max_seq,
-                        next: 0,
-                        lines: 0,
-                        divider: true,
-                    });
-                }
-            }
+            self.sessions.hosted = hosted;
+            // 平铺槽位 = 宿主表的前 `tile_limit` 个；只剩一个就回标签态（票 19）。
+            self.rebuild_tiles();
+        }
+        // 空宿主：输入区禁用（提交时循环回一句）。只在**转场**上动手 —— 非空的每一帧都拿
+        // 快照里的空宿主读数去写 `muted` 会把循环自己推来的禁言（目标循环那条）盖掉。
+        let was_empty = self.sessions.host_empty;
+        self.sessions.host_empty = facts.host_empty();
+        if facts.host_empty() {
+            self.muted = true;
+        } else if was_empty {
+            self.muted = false;
         }
     }
 
@@ -15661,14 +15637,17 @@ mod tests {
         let mut page = state();
         let first = page.front.clone();
         // 焦点会话先有几样切片读数：三态、名册、草稿。
-        page.request(ConsoleRequest::SessionState {
-            id: first.clone(),
-            state: crate::session::host::SessionState::RunningTurn,
-        });
-        page.request(ConsoleRequest::Catalog {
+        page.request(ConsoleRequest::Facts(host_facts(
+            first.as_str(),
+            &[(
+                first.as_str(),
+                crate::session::host::SessionState::RunningTurn,
+            )],
+        )));
+        page.request(ConsoleRequest::Notify(ConsoleNotify::Catalog {
             id: first.clone(),
             entries: Vec::new(),
-        });
+        }));
         page.editor.insert_str("甲会话的草稿");
         assert!(page.busy(), "三态进了切片表");
 
@@ -16176,6 +16155,26 @@ mod tests {
         )
     }
 
+    /// 一份宿主快照（测试用）：焦点 + 每会话三态，只读数由调用方另说。
+    fn host_facts(
+        foreground: &str,
+        sessions: &[(&str, crate::session::host::SessionState)],
+    ) -> crate::session::HostFacts {
+        crate::session::HostFacts {
+            foreground: crate::events::SessionId::new(foreground),
+            sessions: sessions
+                .iter()
+                .map(|(id, state)| crate::session::HostedSession {
+                    id: crate::events::SessionId::new(*id),
+                    state: *state,
+                    read_only: false,
+                })
+                .collect(),
+            waiting: 0,
+            finished: 0,
+        }
+    }
+
     #[test]
     fn a_muted_input_area_responds_to_keys_but_does_not_take_typing() {
         let mut state = state();
@@ -16201,10 +16200,10 @@ mod tests {
     /// （票 22），而 `busy()` 读的就是那张表。
     fn front_is_running(state: &mut TuiState) {
         let id = state.front.clone();
-        state.request(ConsoleRequest::SessionState {
-            id,
-            state: crate::session::host::SessionState::RunningTurn,
-        });
+        state.request(ConsoleRequest::Facts(host_facts(
+            id.as_str(),
+            &[(id.as_str(), crate::session::host::SessionState::RunningTurn)],
+        )));
         assert!(state.busy(), "这个会话确实在跑");
     }
 

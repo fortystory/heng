@@ -128,7 +128,16 @@ impl CatalogEntry {
     }
 }
 
-/// 循环从前端要的东西。
+/// 循环从前端要的东西（票 03 收口：4 个变体）。
+///
+/// 原先有 20 个变体，宿主表的每一种事实各守一条 push 命令。现在只剩两条交互与两条事实：
+///
+/// - [`Ask`](Self::Ask)：要人答的一件东西（权限门 / 问卷 / 一份清单）；
+/// - [`Facts`](Self::Facts)：「现在」—— 宿主表的一份快照，80ms 一次；
+/// - [`Notify`](Self::Notify)：「事件」—— 一次性的载荷，发完就完。
+///
+/// 三条宿主规则（未读的寿命、`N` 只算后台、单会话标题不变）住在
+/// [`crate::session::host_facts`]，前端不再自己拼。
 #[derive(Debug)]
 pub enum ConsoleRequest {
     /// 下一行用户输入。
@@ -139,18 +148,35 @@ pub enum ConsoleRequest {
     Prompt {
         reply: oneshot::Sender<Option<String>>,
     },
-    /// 把一个问题摆到用户面前。
-    Ask(AskRequest),
-    /// 把模型的问卷摆到用户面前（spec §7）。它的答案类型与 [`Ask`](Self::Ask) 的不同，
-    /// 所以走自己的通道。
+    /// 要人答的一件东西。
+    Ask(ConsoleAsk),
+    /// 「现在」：宿主表此刻长什么样。
+    ///
+    /// 一个会话的三态 / 只读、装载了哪几个、后台两个计数、空宿主态全在这里；前端按快照
+    /// 自己更新，不再为每一种事实各收一条命令。
+    Facts(crate::session::host_facts::HostFacts),
+    /// 「事件」：一次性的载荷，发完就完，没有答案要等。
+    Notify(ConsoleNotify),
+}
+
+/// 要人答的那三件东西：它们的答案类型各不相同，所以各自一条通道。
+#[derive(Debug)]
+pub enum ConsoleAsk {
+    /// 权限门的问题（spec §12）。
+    Permission(AskRequest),
+    /// 模型给的问卷（spec §7）。
     Questionnaire(QuestionnaireRequest),
-    /// 把一份清单摆到用户面前，让他挑一个（spec §9）。答 `None` 就是取消。
+    /// 一份清单，让他挑一个；答 `None` 就是取消（spec §9）。
     Picker(PickerRequest),
+}
+
+/// 一次性的前端载荷 —— 与「现在」的 [`ConsoleRequest::Facts`] 分开。
+#[derive(Debug)]
+pub enum ConsoleNotify {
     /// 换完模型/档位之后循环推回来的新事实（spec §3）。
     ///
-    /// 这是**发完就完**的通知，与 [`Muted`](Self::Muted) / [`RunState`](Self::RunState) 同一格：
-    /// 循环推、前端收，没有答案要等。之所以要推，是因为这三样是注入的只读值 —— 换了模型之后
-    /// 上下文窗口可能变（1M ↔ 256K），而它是状态行那个 `n%` 的分母，前端自己算不出来。
+    /// 这是**发完就完**的通知：这三样是注入的只读值 —— 换了模型之后上下文窗口可能变
+    /// （1M ↔ 256K），而它是状态行那个 `n%` 的分母，前端自己算不出来。
     SessionUpdate {
         model: String,
         effort: Option<crate::config::ReasoningEffort>,
@@ -160,98 +186,41 @@ pub enum ConsoleRequest {
     },
     /// 换到另一个会话（`.scratch/session-tab/spec.md` §6）。
     ///
-    /// 带的是那个会话的**会话事实**与它的事件流**快照**：渲染器的投影整块换，然后按这份快照
-    /// 重建。切换与启动那次重放共用同一套机制 —— 差别只在收尾不插「以下是历史」那条分隔行。
+    /// 带的是那个会话的**会话事实**与它的事件流**快照**：渲染器的投影整块换，然后按这份
+    /// 快照重建。切换与启动那次重放共用同一套机制 —— 差别只在收尾不插「以下是历史」那条
+    /// 分隔行。
     SwitchSession {
         facts: super::tui::SessionFacts,
-        /// 这个会话的工作目录（票 25）：`cwd` 是**每会话**的事实，切过去之后终端标题与
-        /// `@` 候选都跟着它。
+        /// 这个会话的工作目录（票 25）：`cwd` 是**每会话**的事实。
         cwd: std::path::PathBuf,
         events: Vec<Event>,
     },
-    /// 一个会话被从宿主表里卸下来了，以及卸完之后表空不空（票 21）。
-    ///
-    /// 渲染器要它做三件事：删掉轻状态表里那一行、把页顶读数改成宿主表的会话数、空宿主时禁用
-    /// 输入区。
-    SessionClosed {
-        id: crate::events::SessionId,
-        empty: bool,
-    },
-    /// 宿主表现在有几个、其中几个在跑（票 21 的 `已装载 N 个`、票 22 的 `M 个在跑`）。
-    HostCount { sessions: usize, running: usize },
-    /// 宿主表里此刻装着**哪几个**（票 29）。
-    ///
-    /// 会话页上那三档标题色靠它：当前前台、已在表里（切过去零延迟、`关闭`对它可用）、只在盘上
-    /// （切过去要先装载）。`HostCount` 只给两个数，说不出「是哪几个」。
-    Hosted { ids: Vec<crate::events::SessionId> },
-    /// **关闭被前台规则拒了**（票 32）：`target` 是那个要关、但正在前台的会话。渲染器据此在
-    /// 提示行上给一段可点的「切到「<相邻会话>」」—— 相邻是谁只有它有那份列表。
-    CloseBlocked { target: crate::events::SessionId },
-    /// **退出被闸门拒了**（票 23 的闸门、票 28 的双击）：还有 `count` 个会话没收尾，而 `first` 是
-    /// 第一个会话 —— 提示行那句话的可点入口就指它。
-    ///
-    /// 它顺带作废那把退出的举手：被拒之后下一次按下仍然只是第一下，于是人看见的是「第一下
-    /// 举手 → 第二下被拒 → 再按还是第一下」，而不是「第二下之后直接退」。
-    ExitBlocked {
-        count: usize,
-        first: crate::events::SessionId,
-    },
-    /// 后台通知那两个数（票 25）：**后台**待答几个、**后台**刚跑完几个。
-    TitleAttention { waiting: usize, finished: usize },
-    /// 提示行那句话有**可点入口**（票 23 的退出闸门）：把会话页交到前台、焦点落在这一行上 ——
-    /// 点它（或按 Enter）就切过去。
-    Attention { id: crate::events::SessionId },
-    /// 一个会话的忙闲（票 22）。
-    SessionState {
-        id: crate::events::SessionId,
-        state: crate::session::host::SessionState,
-    },
-    /// 这个会话是不是**只读预览**（`.scratch/session-tab/spec.md` §2、票 18）。
-    ///
-    /// 渲染器要它，是因为有几处写动作是**它自己发起**的（页内改名）：那些不经过循环的提交
-    /// 路径，得由它自己挡住。
-    ReadOnly {
-        id: crate::events::SessionId,
-        read_only: bool,
-    },
     /// 会话页要的那份列表（`.scratch/session-tab/spec.md` §3）。
     ///
-    /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事（它会阻塞 TUI），
-    /// 而且渲染层不读环境。
+    /// 数据由组装方推过来：扫 store、读前缀、探 `git` 家族都不是渲染层的事。
     Sessions {
         listing: crate::session::listing::SessionListing,
     },
-    /// 开头的 `/` 能变成哪些名字。
-    ///
-    /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
-    /// 前端 —— plain 那条控制台 —— 与它无关。
-    ///
-    /// **带会话 id**（票 25）：宿主表里可以同时活着几个会话，而名册是**每个会话自己的**技能
-    /// 目录 —— 渲染器按 id 存表，切焦点时取对应那一份。
+    /// 开头的 `/` 能变成哪些名字。带会话 id（票 25）：名册是每个会话自己的。
     Catalog {
         id: crate::events::SessionId,
         entries: Vec<CatalogEntry>,
     },
-    /// 输入区是不是禁言了（`.scratch/goal-loop/spec.md` §5）。
-    ///
-    /// 无人值守的目标循环跑着的时候，打字插话不是这个功能的一部分（那是
-    /// `.scratch/interjection-flow` 那条种子）：键位照旧响应，只是不落字。知道这件事的只有
-    /// 循环，所以它自己说。
-    Muted { muted: bool },
-    /// 循环是不是**在一次运行里面** —— 一个回合，或它正在驱动的一次讨论。
-    ///
-    /// 知道这件事的只有循环，所以它自己说，而不是让前端去推断（spec §6）。从渲染流上推
-    /// 断，对不是回合的任何东西都失效 —— 合成器那次单一调用会吐增量，却不结束任何
-    /// `TurnEnded`；从「没有未决的提示」推断，在启动时失效，那时循环还没要过它的第一行。
-    /// 两个错都会把 `Ctrl-C` 变成空闲循环直接丢掉的手势，读起来就是一个死掉的键盘。
-    RunState { running: bool },
-    /// 重新打开的会话开局带着的事件流，供前端铺成历史
-    /// （`.scratch/tui-history-replay/spec.md` §1）。
-    ///
-    /// 组装之后、启动横幅之前推一次，因为载荷是**组装后**的快照 —— 它包含 `--continue`
-    /// 的恢复为悬空工具调用写下的合成结果，所以不能在组装前取。一个不养转录的前端 ——
-    /// plain 那条控制台 —— 与它无关。
+    /// 重新打开的会话开局带着的事件流，供前端铺成历史。
     Replay { events: Vec<Event> },
+    /// 提示行那句话有**可点入口**（票 23）：把会话页交到前台、焦点落在这一行上。
+    Attention { id: crate::events::SessionId },
+    /// **关闭被前台规则拒了**（票 32）：提示行给一段可点的「切到相邻会话」。
+    CloseBlocked { target: crate::events::SessionId },
+    /// **退出被闸门拒了**（票 28）：提示行那句话的可点入口指向第一个会话。
+    ExitBlocked {
+        count: usize,
+        first: crate::events::SessionId,
+    },
+    /// 循环是不是**在一次运行里面**（spec §6）。
+    RunState { running: bool },
+    /// 输入区是不是禁言了（`.scratch/goal-loop/spec.md` §5）。
+    Muted { muted: bool },
 }
 
 /// 一个手势，由前端按自己的节奏推上来。
@@ -320,6 +289,18 @@ impl ConsoleHandle {
         answer.await.ok().flatten()
     }
 
+    /// 推一份「宿主表现在长什么样」（票 03 的「现在」）。
+    ///
+    /// 80ms 一次的采样只走这一条；前端按快照自己更新，不再为每种事实各守一条命令。
+    pub fn facts(&self, facts: crate::session::host_facts::HostFacts) {
+        let _ = self.requests.send(ConsoleRequest::Facts(facts));
+    }
+
+    /// 推一条一次性载荷（票 03 的「事件」）。
+    pub fn notify(&self, notify: ConsoleNotify) {
+        let _ = self.requests.send(ConsoleRequest::Notify(notify));
+    }
+
     /// 告诉前端存在哪些 `/<name>`。
     ///
     /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
@@ -333,77 +314,53 @@ impl ConsoleHandle {
     ) {
         let _ = self
             .requests
-            .send(ConsoleRequest::SwitchSession { facts, cwd, events });
-    }
-
-    /// 说一个会话被卸下来了，以及表空不空。
-    pub fn session_closed(&self, id: crate::events::SessionId, empty: bool) {
-        let _ = self
-            .requests
-            .send(ConsoleRequest::SessionClosed { id, empty });
-    }
-
-    /// 说宿主表现在有几个、其中几个在跑。
-    pub fn host_count(&self, sessions: usize, running: usize) {
-        let _ = self
-            .requests
-            .send(ConsoleRequest::HostCount { sessions, running });
-    }
-
-    /// 说宿主表里此刻装着**哪几个**（票 29）：会话页那三档标题色靠它。
-    pub fn hosted(&self, ids: Vec<crate::events::SessionId>) {
-        let _ = self.requests.send(ConsoleRequest::Hosted { ids });
+            .send(ConsoleRequest::Notify(ConsoleNotify::SwitchSession {
+                facts,
+                cwd,
+                events,
+            }));
     }
 
     /// 说关闭被前台规则拒了（票 32）。
     pub fn close_blocked(&self, target: crate::events::SessionId) {
-        let _ = self.requests.send(ConsoleRequest::CloseBlocked { target });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::CloseBlocked {
+                target,
+            }));
     }
 
     /// 说退出被闸门拒了，以及第一个会话没收尾的是谁（票 28）。
     pub fn exit_blocked(&self, count: usize, first: crate::events::SessionId) {
         let _ = self
             .requests
-            .send(ConsoleRequest::ExitBlocked { count, first });
-    }
-
-    /// 说后台通知那两个数。
-    pub fn title_attention(&self, waiting: usize, finished: usize) {
-        let _ = self
-            .requests
-            .send(ConsoleRequest::TitleAttention { waiting, finished });
+            .send(ConsoleRequest::Notify(ConsoleNotify::ExitBlocked {
+                count,
+                first,
+            }));
     }
 
     /// 说「去会话页看这个会话」。
     pub fn attention(&self, id: crate::events::SessionId) {
-        let _ = self.requests.send(ConsoleRequest::Attention { id });
-    }
-
-    /// 说一个会话现在忙不忙。
-    pub fn session_state(
-        &self,
-        id: crate::events::SessionId,
-        state: crate::session::host::SessionState,
-    ) {
         let _ = self
             .requests
-            .send(ConsoleRequest::SessionState { id, state });
-    }
-
-    /// 说这个会话是不是只读预览。与 [`catalog`](Self::catalog) 一样发完就完。
-    pub fn read_only(&self, id: crate::events::SessionId, read_only: bool) {
-        let _ = self
-            .requests
-            .send(ConsoleRequest::ReadOnly { id, read_only });
+            .send(ConsoleRequest::Notify(ConsoleNotify::Attention { id }));
     }
 
     /// 推一份会话页要的列表。与 [`catalog`](Self::catalog) 一样发完就完。
     pub fn sessions(&self, listing: crate::session::listing::SessionListing) {
-        let _ = self.requests.send(ConsoleRequest::Sessions { listing });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::Sessions { listing }));
     }
 
     pub fn catalog(&self, id: crate::events::SessionId, entries: Vec<CatalogEntry>) {
-        let _ = self.requests.send(ConsoleRequest::Catalog { id, entries });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::Catalog {
+                id,
+                entries,
+            }));
     }
 
     /// 说循环是不是在一次运行里面。
@@ -412,7 +369,9 @@ impl ConsoleHandle {
     /// 一个已经走了的前端不是错误。它必须被*推*过去 —— 知道一次运行何时开始何时结束的只有
     /// 循环，也没有哪条侧通道（渲染流、一个未决的提示）对每一种运行都说得出来。
     pub fn set_running(&self, running: bool) {
-        let _ = self.requests.send(ConsoleRequest::RunState { running });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::RunState { running }));
     }
 
     /// 说输入区是不是禁言了。
@@ -420,7 +379,9 @@ impl ConsoleHandle {
     /// 与 [`set_running`](Self::set_running) 同一个形状、同一个理由：知道目标循环何时开始与
     /// 结束的只有循环。不想落字的那个前端忽略它。
     pub fn set_muted(&self, muted: bool) {
-        let _ = self.requests.send(ConsoleRequest::Muted { muted });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::Muted { muted }));
     }
 
     /// 把重新打开的会话组装出来的历史交给前端。
@@ -429,7 +390,9 @@ impl ConsoleHandle {
     /// 答案要等。载荷是按 `seq` 序的**整条**组装好的流；空的一条意味着没东西可重放，前端
     /// 照它一如既往的样子行事。
     pub fn replay(&self, events: Vec<Event>) {
-        let _ = self.requests.send(ConsoleRequest::Replay { events });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::Replay { events }));
     }
 
     /// 把一份清单摆到用户面前并等一个下标（`None` = 取消）。
@@ -447,11 +410,11 @@ impl ConsoleHandle {
         let (reply, answer) = oneshot::channel();
         if self
             .requests
-            .send(ConsoleRequest::Picker(PickerRequest {
+            .send(ConsoleRequest::Ask(ConsoleAsk::Picker(PickerRequest {
                 title: title.into(),
                 options,
                 reply,
-            }))
+            })))
             .is_err()
         {
             return None;
@@ -467,12 +430,14 @@ impl ConsoleHandle {
         context_window: u64,
         speakers: Vec<String>,
     ) {
-        let _ = self.requests.send(ConsoleRequest::SessionUpdate {
-            model,
-            effort,
-            context_window,
-            speakers,
-        });
+        let _ = self
+            .requests
+            .send(ConsoleRequest::Notify(ConsoleNotify::SessionUpdate {
+                model,
+                effort,
+                context_window,
+                speakers,
+            }));
     }
 }
 
@@ -543,7 +508,10 @@ impl ConsoleAsker {
         let (reply, answer) = oneshot::channel();
         if self
             .requests
-            .send(ConsoleRequest::Ask(AskRequest { request, reply }))
+            .send(ConsoleRequest::Ask(ConsoleAsk::Permission(AskRequest {
+                request,
+                reply,
+            })))
             .is_err()
         {
             return Answer::Deny;
@@ -585,10 +553,12 @@ impl UserQuestions for ConsoleQuestions {
         let (reply, answer) = oneshot::channel();
         if self
             .requests
-            .send(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-                questions: questions.to_vec(),
-                reply,
-            }))
+            .send(ConsoleRequest::Ask(ConsoleAsk::Questionnaire(
+                QuestionnaireRequest {
+                    questions: questions.to_vec(),
+                    reply,
+                },
+            )))
             .is_err()
         {
             return Err("没有接上任何问卷作答者".to_owned());
@@ -635,50 +605,38 @@ pub fn spawn_plain_console_with(
                 ConsoleRequest::Prompt { reply } => {
                     let _ = reply.send(next_line(&mut reader, "> ").await);
                 }
-                // 会话页只在 TUI 左栏；plain 前端连那一页都没有。
-                ConsoleRequest::Sessions { .. } => {}
-                // 换会话也是 TUI 左栏的事：plain 前端一个进程只跑一个会话。
-                ConsoleRequest::SwitchSession { .. } => {}
-                // 只读预览与 plain 无关：它没有能自己发起写动作的地方。
-                ConsoleRequest::ReadOnly { .. } => {}
-                // 多会话那几件同理：plain 一个进程只跑一个会话。
-                ConsoleRequest::SessionClosed { .. }
-                | ConsoleRequest::CloseBlocked { .. }
-                | ConsoleRequest::HostCount { .. }
-                | ConsoleRequest::Hosted { .. }
-                | ConsoleRequest::ExitBlocked { .. }
-                | ConsoleRequest::SessionState { .. }
-                | ConsoleRequest::Attention { .. }
-                | ConsoleRequest::TitleAttention { .. } => {}
-                ConsoleRequest::Ask(ask) => {
-                    let answer = answer_question(&mut reader, &ask.request).await;
-                    let _ = ask.reply.send(answer);
-                }
-                // 模型的问卷，一问一行地答。输入结束时它返回一个错误，而不是永远转下去
-                // （spec §19）。
-                ConsoleRequest::Questionnaire(request) => {
-                    let answers = answer_questionnaire(&mut reader, &request.questions).await;
-                    let _ = request.reply.send(answers);
-                }
-                // 选择器是 TUI 独占的交互：这条路径上没有键盘，于是答案是取消而不是一个
-                // 下标（spec「明确不做」）。想在这条路径上换模型就用 `/model <id>`。
-                ConsoleRequest::Picker(request) => {
-                    let _ = request.reply.send(None);
-                }
-                // 没有状态行，所以换完模型的新事实无处可去（plain 前端不显示它们）。
-                ConsoleRequest::SessionUpdate { .. } => {}
-                // 面向行的前端没有菜单：名字靠那句未知命令的文案去发现。
-                ConsoleRequest::Catalog { .. } => {}
-                // 禁言对这条前端是**构造性**的：它只在循环要一行的时候读，而无人值守的循环
-                // 在它跑着的那段时间里从不索要一行（`.scratch/goal-loop/spec.md` §5）。所以
-                // 这里不需要做任何事 —— 它本来就不读。
-                ConsoleRequest::Muted { .. } => {}
-                // 这条前端上没有任何东西读按键事件，所以也没有手势会被读成错误的分支
-                // （spec §6）。
-                ConsoleRequest::RunState { .. } => {}
-                // 没有转录可以铺历史：面向行的前端来一个事件印一个，什么都不留
-                // （`.scratch/tui-history-replay/spec.md` §1）。
-                ConsoleRequest::Replay { .. } => {}
+                ConsoleRequest::Ask(ask) => match ask {
+                    ConsoleAsk::Permission(ask) => {
+                        let answer = answer_question(&mut reader, &ask.request).await;
+                        let _ = ask.reply.send(answer);
+                    }
+                    // 模型的问卷，一问一行地答。输入结束时它返回一个错误，而不是永远转下去
+                    // （spec §19）。
+                    ConsoleAsk::Questionnaire(request) => {
+                        let answers = answer_questionnaire(&mut reader, &request.questions).await;
+                        let _ = request.reply.send(answers);
+                    }
+                    // 选择器是 TUI 独占的交互：这条路径上没有键盘，于是答案是取消而不是一个
+                    // 下标（spec「明确不做」）。想在这条路径上换模型就用 `/model <id>`。
+                    ConsoleAsk::Picker(request) => {
+                        let _ = request.reply.send(None);
+                    }
+                },
+                // 宿主表快照与多会话的载荷都只对 TUI 有意义：plain 一个进程只跑一个会话，
+                // 没有状态行、左栏、转录或菜单 —— 它们全部静默丢掉（与原先逐条忽略同义）。
+                ConsoleRequest::Facts(_) => {}
+                ConsoleRequest::Notify(notify) => match notify {
+                    ConsoleNotify::SessionUpdate { .. }
+                    | ConsoleNotify::SwitchSession { .. }
+                    | ConsoleNotify::Sessions { .. }
+                    | ConsoleNotify::Catalog { .. }
+                    | ConsoleNotify::Replay { .. }
+                    | ConsoleNotify::Attention { .. }
+                    | ConsoleNotify::CloseBlocked { .. }
+                    | ConsoleNotify::ExitBlocked { .. }
+                    | ConsoleNotify::RunState { .. }
+                    | ConsoleNotify::Muted { .. } => {}
+                },
             }
         }
     })

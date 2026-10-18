@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 pub mod attach;
 pub mod facts;
 pub mod host;
+pub mod host_facts;
 pub mod ledger;
 pub mod listing;
 pub mod observe;
@@ -26,6 +27,7 @@ pub mod titles;
 
 pub use attach::{AttachCheck, StreamHealth};
 pub use facts::SessionFacts;
+pub use host_facts::{HostFacts, HostSample, HostTracker, HostedSession};
 pub mod asker;
 pub use asker::SessionAsker;
 pub use host::{

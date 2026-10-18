@@ -232,7 +232,9 @@ fn mode_change(seq: u64) -> Event {
 
 /// 把一份历史交给状态，就像 CLI 在组装之后做的那样。
 fn replay(state: &mut TuiState, events: Vec<Event>) {
-    state.request(ConsoleRequest::Replay { events });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Replay { events },
+    ));
 }
 
 /// 一次一批地把重放跑完，就像循环做的那样。
@@ -1385,11 +1387,13 @@ fn a_new_replay_closes_the_one_in_flight_first() {
 fn switch_to(state: &mut TuiState, id: &str) {
     let mut session_facts = facts();
     session_facts.session_id = id.to_owned();
-    state.request(ConsoleRequest::SwitchSession {
-        facts: session_facts,
-        cwd: std::path::PathBuf::from("/x/heng"),
-        events: Vec::new(),
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: session_facts,
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events: Vec::new(),
+        },
+    ));
     while state.replay_pending() {
         state.replay_batch();
     }

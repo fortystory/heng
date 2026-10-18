@@ -47,7 +47,7 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
     let asker = ConsoleAsker::from_handle(&handle);
     let front_end = tokio::spawn(async move {
         match port.recv().await {
-            Some(ConsoleRequest::Ask(ask)) => {
+            Some(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(ask))) => {
                 assert_eq!(ask.request.tool_name, "write_file");
                 let _ = ask.reply.send(Answer::AlwaysAllow);
             }
@@ -106,7 +106,9 @@ async fn a_generic_asker_handle_can_be_shared() {
     let (handle, mut port, _events) = console();
     let asker: Arc<dyn Asker> = Arc::new(ConsoleAsker::from_handle(&handle));
     let front_end = tokio::spawn(async move {
-        if let Some(ConsoleRequest::Ask(ask)) = port.recv().await {
+        if let Some(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(ask))) =
+            port.recv().await
+        {
             let _ = ask.reply.send(Answer::Allow);
         }
     });

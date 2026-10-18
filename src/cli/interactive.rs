@@ -440,11 +440,8 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let render_channel = harness.render_channel();
     let session_id = harness.session_id().clone();
     let settings = config.goals;
-    // 只读预览也告诉渲染器：页内改名那种「渲染器自己发起」的写动作要挡住（票 18）。
-    // 要在 `console` 被移进 actor 之前说。
-    if read_only {
-        console.read_only(session_id.clone(), true);
-    }
+    // 只读预览由 80ms 的宿主事实快照带给渲染器（`HostedSession::read_only`）：
+    // 页内改名那种「渲染器自己发起」的写动作要挡住（票 18）。
     // 前台会话的只读快照（票 15 的 `FrontFacts`）：主循环解析每一次提交要的那几样。会话的
     // `Harness` 一交给 task 就问不到它了，所以在这里取一份。
     let front = harness.front_facts();
@@ -491,15 +488,9 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 单一消费者，只有这一处读得动它。主循环读一次提交、解析成 `Submission`，再交给宿主表里
     // **前台**那个会话执行 —— 切换前台于是只是「换一个命令的收件人」。
     let mut quit = ExitRequest::default();
-    // 忙闲（票 22）：宿主表里每一个会话读一遍，变了就往渲染通道发一条。**轮询**而不是在变更点
-    // 推送 —— 变更点散在宿主表 task、应答者与循环三处，而这里能看到全部。
-    let mut states: std::collections::HashMap<SessionId, crate::session::host::SessionState> =
-        std::collections::HashMap::new();
-    // 「刚跑完、还没被读」那本账（票 25）。它的**边沿从电平快照推** —— 每帧拿全部会话的状态
-    // 与上一帧比对，不新增通道。
-    let mut unread: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
-    // 宿主表里**装着哪几个**的上一帧（票 29）：与上面那份一样从电平快照推，变了才往渲染端说。
-    let mut before_hosted: Option<Vec<SessionId>> = None;
+    // 宿主表的事实投影（票 03）：80ms 采一次样，`HostTracker` 一处推三态边沿、未读与两个
+    // 后台计数，再作为一份 `HostFacts` 快照推给前端 —— 不再为每种事实各发一条命令。
+    let mut host_tracker = crate::session::HostTracker::new();
     // herdr 的自接入上报（`src/herdr.rs`）：只在 `HERDR_ENV=1` 时存在。外面是 `None`，
     // 一次调用都不发。
     let herdr = crate::herdr::Reporter::from_env(env);
@@ -568,62 +559,26 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     }
                 }
             }
-            // 忙闲那份读数（票 22）。间隔取 80ms：它是**给人看**的，不是同步手段。
+            // 宿主表的事实投影（票 03）：80ms 采一次样。它是**给人看**的读数，不是同步手段。
+            // 三态边沿、未读寿命、后台两个计数与装载了哪几个都由 `HostTracker` 一处推。
             _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
-                for entry in host.entries() {
-                    let state = *entry.state.borrow();
-                    let before = states.insert(entry.id.clone(), state);
-                    match (before, state) {
-                        // 刚跑完：记一条未读。
-                        (
-                            Some(crate::session::host::SessionState::RunningTurn),
-                            crate::session::host::SessionState::Idle,
-                        ) => {
-                            unread.insert(entry.id.clone());
-                        }
-                        // 又开跑了：这一条未读作废。
-                        (_, crate::session::host::SessionState::RunningTurn) => {
-                            unread.remove(&entry.id);
-                        }
-                        _ => {}
-                    }
-                    if before != Some(state) {
-                        console.session_state(entry.id.clone(), state);
-                    }
-                }
-                let foreground = host.foreground();
-                // **N 只算后台**（票 25）：单会话时标题与今天一字不差。
-                let waiting = host
-                    .entries()
-                    .iter()
-                    .filter(|entry| {
-                        entry.id != foreground
-                            && *entry.state.borrow()
-                                == crate::session::host::SessionState::AwaitingHuman
-                    })
-                    .count();
-                let finished = unread.iter().filter(|id| **id != foreground).count();
-                console.title_attention(waiting, finished);
-                console.host_count(host.len(), host.running());
-                // **表里装着哪几个**（票 29）：会话页那三档标题色靠它。变化了才推 —— 那是
-                // 装载与关闭的边沿，不是每 80ms 一次的事实。
-                let hosted: Vec<SessionId> = host.entries().iter().map(|e| e.id.clone()).collect();
-                if before_hosted.as_ref() != Some(&hosted) {
-                    before_hosted = Some(hosted.clone());
-                    console.hosted(hosted);
-                }
+                let sample = crate::session::HostSample::from_host(&host);
+                let facts = host_tracker.update(&sample);
+                console.facts(facts);
                 // herdr 的自接入：**只报前台会话**的状态，变了才发（一个 pane 只有一个 agent）。
                 if let Some(reporter) = &herdr {
-                    let state = host
-                        .get(&foreground)
-                        .map(|entry| *entry.state.borrow())
+                    let state = sample
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == sample.foreground)
+                        .map(|session| session.state)
                         .unwrap_or_default();
-                    if herdr_last.as_ref() != Some(&(foreground.clone(), state)) {
+                    if herdr_last.as_ref() != Some(&(sample.foreground.clone(), state)) {
                         reporter.report(
                             crate::herdr::AgentState::from_session(state),
-                            foreground.as_str(),
+                            sample.foreground.as_str(),
                         );
-                        herdr_last = Some((foreground.clone(), state));
+                        herdr_last = Some((sample.foreground.clone(), state));
                     }
                 }
             }
@@ -686,7 +641,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                 }
                 Some(FrontEndEvent::AttentionSeen) => {
                     // 用户有过一次输入：未读的「跑完」到此为止（票 25）。
-                    unread.clear();
+                    host_tracker.attention_seen();
                 }
                 Some(FrontEndEvent::Cancel) => {
                     // `Ctrl-C` **只取消前台当前的动作，永不退出**（票 23）。它不再记进退出账本。
@@ -1122,11 +1077,9 @@ pub(crate) async fn close_session(
         return;
     }
     let empty = host.is_empty();
-    // 先让渲染器把这个会话忘掉、并把读数与空宿主态更新。
-    console.session_closed(id.clone(), empty);
-    console.host_count(host.len(), host.running());
-    // 关到最后一个会话**不打 notice**（票 32）：页顶 `已装载 0 个`、页区 `没有会话`、输入区禁用
-    // 已经在说同一件事。
+    // 渲染器从下一次宿主事实快照里看到「它不在装载列表里」：切片状态、读数与空宿主态都由
+    // 那一份 `HostFacts` 推导（票 03）。关到最后一个会话**不打 notice**（票 32）：页顶
+    // `已装载 0 个`、页区 `没有会话`、输入区禁用已经在说同一件事。
     let _ = empty;
 }
 

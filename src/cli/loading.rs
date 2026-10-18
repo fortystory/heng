@@ -300,7 +300,6 @@ pub(super) async fn attach(
                     &[],
                 ),
             );
-            console.read_only(id.clone(), loaded.read_only);
             let session_cwd = cwd.clone();
             if let Err(error) =
                 host.adopt_with(loaded.harness, cwd, loaded.read_only, Box::new(actor))
@@ -321,7 +320,6 @@ pub(super) async fn attach(
             if receipt {
                 say_notice(kit, &id, &Notice::NewOpened);
             }
-            console.host_count(host.len(), host.running());
             Ok(id)
         }
     }

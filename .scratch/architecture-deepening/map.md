@@ -71,7 +71,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 
 - [x] [键盘归属收到一处](issues/01-keyboard-owner.md)
 - [x] [同一会话状态，收到一处](issues/02-session-projection.md)
-- [ ] [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)
+- [x] [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)
 - [x] [width module 的 seam 收齐](issues/04-width-seam.md)
 
 **优先级与依赖**：
@@ -81,7 +81,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - 02（`SessionProjection`）无前置、第三位；10-17 才冒出来的形态问题，趁没长更大。
 - 03（`HostFacts`）有**前置 spec**（在 ticket 内 `## 注意` 段自陈）；开工前要先在它的 §前置 spec 里钉死「宿主表空 / 单会话 / 多会话」三态的读数；之后才动 `ConsoleRequest` 与订阅流。
 
-**frontier（2026-10-19，01 / 02 / 04 已 resolved）= 03**：01 把键盘归属收到一处、02 把同一会话状态收到一处（见两票作答）；最后一张 03（host → cli → tui 的事实投影）带一段 spec 前置，开工前先钉「宿主表空 / 单会话 / 多会话」三态读数。
+**frontier（2026-10-19，四张全部 resolved）= 空 —— 本图走完。** 03 在动手前先钉了「宿主表空 / 单会话 / 多会话」三态读数（票内 §前置 spec），随后把宿主事实收成 `HostFacts` 一份快照、`ConsoleRequest` 20 → 4 变体、80ms 轮询收成一处。
 
 ## 已定的决定
 
@@ -90,7 +90,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 - [任务清单](issues/) 这一节本身 = **destination 是 change 不是 spec**：四张 ticket 已经把验收写到代码级，每张可直接丢给 `/implement`；chart 这一层只判 destination 的形状、依赖、优先级与 03 的 spec 前置，不写新的 spec。
 - [键盘归属收到一处](issues/01-keyboard-owner.md) — **resolved 2026-10-19**（上半 10-18 骨架、下半本轮接完）。seam 同 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 形状（`KeyboardLayer` trait + 三态 `KeyOutcome`），7 个 layer 收在 `tui.rs` 的 `keyboard_layers` 模块，`key()` / `click_at` / `wheel_at` 走同一张 dispatch 表；`TuiState::key()` 从 267 行降到约 30 行，只剩 `Ctrl-Z` 与 `Esc` 撤选两条 seam 外早返回；保留 `trace_keyboard` / `sidebar_keyboard` 字段名与既有断言线，`keyboard_in_the_input` 改为从层表派生；前置两条早返回保留在 seam 外，不进 `KeyOutcome`。
 - [同一会话状态，收到一处](issues/02-session-projection.md) — **resolved 2026-10-19**。`View` + `SessionLight` 并入 `SessionProjection` module，`TuiState` 只持 `HashMap<SessionId, SessionProjection>`；`stash` / `load` 收成一份迁移函数；不碰 `session-panes` 票 23 / 25 给出的对外契约；测试断言的 5 张 `HashMap` 读法逐条改写。
-- [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md) — `HostFacts` 同时被 cli 与 tui 订阅；`ConsoleRequest` 22 变体收到 ≤ 5 个；**前置 spec** 钉「宿主表空 / 单会话 / 多会话」三态读数，后做订阅改造；三条规则（未读寿命、`N` 只算后台、单会话标题不变）落到单元测试，[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㊶ 同步改写。
+- [host → cli → tui 的事实投影只算一处](issues/03-host-facts.md) — **resolved 2026-10-19**。`HostFacts` 同时被 cli 与 tui 订阅；`ConsoleRequest` 22 变体收到 ≤ 5 个；**前置 spec** 钉「宿主表空 / 单会话 / 多会话」三态读数，后做订阅改造；三条规则（未读寿命、`N` 只算后台、单会话标题不变）落到单元测试，[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㊶ 同步改写。
 - [width module 的 seam 收齐](issues/04-width-seam.md) — **resolved 2026-10-18（tracer bullet）**。`src/render/width.rs` 新增 `pub fn truncate_chars` 作为按字符出口（与 `truncate_columns` 并列），module 顶 doc 写清「按显示列 / 按字符」两把尺子的判据；6 处 `chars().take`（`files.rs:118` / `changes.rs:589` / `transcript.rs:667` / `wording.rs:222` / `wording.rs:963` / `tui.rs:15059`）一律换 `truncate_chars`；`markdown::wrap_code` 已在 `width::char_columns` 上、不动。**修原票验收 2**：原写「`truncate_columns` ≥ 9」，实际 6 处全是按字符口径——以「`truncate_chars` 在 `src/render/` 命中 ≥ 6」等价收尾。**新增单测 3 条**钉这两把尺子不能互换（同串 `"衡a衡b"` 上 `truncate_columns(_, 4) == "衡a"` / `truncate_chars(_, 4) == "衡a衡b"`）。`render/` 外的 8 处 `chars().take` 不在本票范围。
 
 ## 尚未明确
@@ -118,6 +118,7 @@ Charting: **已完成**（2026-10-18，二轮 `/improve-codebase-architecture` �
 
 ## 进度
 
-**3/4（2026-10-19，01 / 02 / 04 已 resolved）。** [02 — 同一会话状态，收到一处](issues/02-session-projection.md) 把 `TuiState` 上 5 张按会话平行的 `HashMap`（`views` / `states` / `light` / `catalogs` / `read_only_by`）收成 1 张 `projections: HashMap<SessionId, SessionProjection>`；`View` / `SessionLight` 的定义与 `stash`+`load` 合并成的 `switch_session` 都住进 `tui.rs` 新增的私有 `mod projection`。焦点会话的投影与轻状态仍以散字段住在 `TuiState`（热路径），表里装切走 / 后台会话的切片与焦点那份的三态 / 名册 / 只读。全量测试 0 failed、clippy 0 warning、fmt 干净。
+**4/4（2026-10-19，四张全部 resolved）—— 本图走完。** 最后一张 [03 — host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)：新增 `src/session/host_facts.rs`（`HostSample` / `HostFacts` / `HostTracker`），三条规则（未读寿命、`N` 只算后台、单会话标题不变）由四条单测钉死；`ConsoleRequest` 从 20 个变体收成 4 个（`Prompt` / `Ask` / `Facts` / `Notify`）；`cli/interactive.rs` 的 80ms 轮询只调 `HostTracker::update` 一处，`loading.rs` / `close_session` 的直接推送删掉。`docs/tui-manual-checklist.md` ㊶ 第 4 条补注「规则已由单测钉住」。全量测试 1805 passed / 0 failed、clippy 0 warning、fmt 干净。
 
-frontier 进到 [03 — host → cli → tui 的事实投影只算一处](issues/03-host-facts.md)（带前置 spec）。
+四张 seam 全部落地（01 键盘归属、02 会话状态、03 宿主事实、04 width）。frontier 为空；
+「做」到此收束，本图留作决策与验收记录。

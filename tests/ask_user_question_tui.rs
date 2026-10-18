@@ -66,10 +66,9 @@ fn ask(
     questions: Vec<UserQuestion>,
 ) -> oneshot::Receiver<Result<UserAnswers, String>> {
     let (reply, answers) = oneshot::channel();
-    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
-        questions,
-        reply,
-    }));
+    state.request(ConsoleRequest::Ask(
+        heng::render::ConsoleAsk::Questionnaire(QuestionnaireRequest { questions, reply }),
+    ));
     answers
 }
 
@@ -666,10 +665,12 @@ fn escape_asks_twice_before_it_drops_the_questionnaire() {
     // 问卷里 `Esc` 只管「退出这次询问」（spec §5）：第一下举手，第二下 drop 掉 sender。
     // 它**不**取消这次运行 —— 模型拿到「没作答」，继续跑。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
 
     state.key(Key::Esc);
@@ -725,10 +726,12 @@ fn the_two_gestures_are_exclusive() {
     // 举着「退出询问」时按 `Ctrl-C` 不作数：它走 `Ctrl-C` 自己的第一下 —— 取消这次运行、
     // 并举起退出手（spec §5）。
     let mut state = state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
 
     state.key(Key::Esc); // 举「退出询问」

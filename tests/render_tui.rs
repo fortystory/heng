@@ -74,10 +74,12 @@ fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<Strin
 /// 必须像循环那样说出来。
 fn state_running() -> TuiState {
     let mut state = new_state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     state
 }
 
@@ -92,15 +94,19 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
     state.tick();
     assert!(state.is_dirty(), "空闲的一次 tick 也要下一帧：光标还在闪");
 
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     state.mark_clean();
     state.tick();
     assert!(state.is_dirty(), "运行时的一次 tick 会要下一帧");
 
-    state.request(ConsoleRequest::RunState { running: false });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::RunState { running: false },
+    ));
     state.mark_clean();
     state.tick();
     assert!(state.is_dirty(), "这台时钟不再随运行一起停");
@@ -169,18 +175,20 @@ fn an_empty_submission_is_an_empty_line_not_the_end_of_input() {
 fn a_permission_question_is_answered_by_key() {
     let mut state = new_state();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: PermissionRequest {
-            escalation: None,
-            speaker: None,
-            request_id: "r-1".to_owned(),
-            tool_call_id: "c-1".to_owned(),
-            tool_name: "write_file".to_owned(),
-            args: serde_json::json!({}),
-            reason: "mode ask".to_owned(),
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: PermissionRequest {
+                escalation: None,
+                speaker: None,
+                request_id: "r-1".to_owned(),
+                tool_call_id: "c-1".to_owned(),
+                tool_name: "write_file".to_owned(),
+                args: serde_json::json!({}),
+                reason: "mode ask".to_owned(),
+            },
+            reply: tx,
         },
-        reply: tx,
-    }));
+    )));
     state.key(Key::Char('a'));
     assert_eq!(rx.try_recv().unwrap(), Answer::AlwaysAllow);
 }
@@ -191,18 +199,20 @@ fn escape_answers_a_question_with_the_non_acting_choice() {
     // 问题上）：那里的 `Esc` 是「不做」那个答案，绝不是批准。
     let (mut state, _line) = state_with_prompt();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: PermissionRequest {
-            escalation: None,
-            speaker: None,
-            request_id: "r-1".to_owned(),
-            tool_call_id: "c-1".to_owned(),
-            tool_name: "bash".to_owned(),
-            args: serde_json::json!({}),
-            reason: "mode ask".to_owned(),
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: PermissionRequest {
+                escalation: None,
+                speaker: None,
+                request_id: "r-1".to_owned(),
+                tool_call_id: "c-1".to_owned(),
+                tool_name: "bash".to_owned(),
+                args: serde_json::json!({}),
+                reason: "mode ask".to_owned(),
+            },
+            reply: tx,
         },
-        reply: tx,
-    }));
+    )));
     state.key(Key::Esc);
     assert_eq!(rx.try_recv().unwrap(), Answer::Deny);
 }
@@ -959,18 +969,20 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     // 读起来像个死键（spec §6、§9）。
     let mut state = state_running();
     let (tx, mut asked) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: PermissionRequest {
-            escalation: None,
-            speaker: None,
-            request_id: "r-1".to_owned(),
-            tool_call_id: "c-1".to_owned(),
-            tool_name: "write_file".to_owned(),
-            args: serde_json::json!({}),
-            reason: "mode ask".to_owned(),
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: PermissionRequest {
+                escalation: None,
+                speaker: None,
+                request_id: "r-1".to_owned(),
+                tool_call_id: "c-1".to_owned(),
+                tool_name: "write_file".to_owned(),
+                args: serde_json::json!({}),
+                reason: "mode ask".to_owned(),
+            },
+            reply: tx,
         },
-        reply: tx,
-    }));
+    )));
 
     // 手势取消运行；它不回答那个问题。
     state.key(Key::Esc);
@@ -978,7 +990,9 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     assert!(asked.try_recv().is_err(), "那个问题没被回答");
 
     // 运行结束，循环会说出来 —— 这正是让那个问题变陈旧的东西。
-    state.request(ConsoleRequest::RunState { running: false });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::RunState { running: false },
+    ));
 
     // 于是下一个键又是普通键：它编辑草稿，而不是去回答一个
     // 来自已经结束的运行的问句。
@@ -996,15 +1010,19 @@ fn a_second_question_does_not_displace_the_one_on_screen() {
     // 出了错；让用户看得见的那个问题保持可作答，是安全的读法。
     let mut state = new_state();
     let (first_tx, mut first) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: permission_request("write_file"),
-        reply: first_tx,
-    }));
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: permission_request("write_file"),
+            reply: first_tx,
+        },
+    )));
     let (second_tx, mut second) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: permission_request("edit_file"),
-        reply: second_tx,
-    }));
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: permission_request("edit_file"),
+            reply: second_tx,
+        },
+    )));
     assert!(second.try_recv().is_err(), "迟到的那个问题被丢掉了");
 
     state.key(Key::Char('n'));
@@ -1032,10 +1050,12 @@ fn the_title_reads_the_working_directory_and_a_state_word() {
     let mut state = new_state();
     assert_eq!(state.title(), "~/code/heng", "空闲没有状态词");
 
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     assert_eq!(state.title(), "~/code/heng · 运行中");
 }
 
@@ -1043,54 +1063,64 @@ fn the_title_reads_the_working_directory_and_a_state_word() {
 fn a_question_makes_the_title_say_it_is_waiting() {
     let mut state = new_state();
     let (tx, _rx) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: permission_request("write_file"),
-        reply: tx,
-    }));
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: permission_request("write_file"),
+            reply: tx,
+        },
+    )));
     assert_eq!(state.title(), "~/code/heng · 等你");
 }
 
 #[test]
 fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
     let mut state = new_state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     let (tx, _rx) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(AskRequest {
-        request: permission_request("bash"),
-        reply: tx,
-    }));
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        AskRequest {
+            request: permission_request("bash"),
+            reply: tx,
+        },
+    )));
     assert_eq!(state.title(), "~/code/heng · 等你", "等你压过运行中");
 
     // 重放要有东西可放才立得起来（空的 `events` 什么也不做）。
-    state.request(ConsoleRequest::Replay {
-        events: vec![Event::new(
-            1,
-            SpeakerId::System,
-            EventPayload::SessionStarted {
-                session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
-                cwd: "/workspace".to_owned(),
-                schema_version: 1,
-                model: None,
-                provider: None,
-                effort: None,
-                permission_mode: None,
-                sandbox_mode: None,
-            },
-        )],
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::Replay {
+            events: vec![Event::new(
+                1,
+                SpeakerId::System,
+                EventPayload::SessionStarted {
+                    session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
+                    cwd: "/workspace".to_owned(),
+                    schema_version: 1,
+                    model: None,
+                    provider: None,
+                    effort: None,
+                    permission_mode: None,
+                    sandbox_mode: None,
+                },
+            )],
+        },
+    ));
     assert_eq!(state.title(), "~/code/heng · 重放中", "重放压过等你");
 }
 
 #[test]
 fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
     let mut state = new_state();
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     state.apply(RenderEvent::Logged {
         session: heng::events::SessionId::new("01J8ZQ4K7M"),
         event: Event::new(
@@ -1124,10 +1154,12 @@ fn a_title_is_only_written_when_it_changes() {
     assert!(state.sync_title().is_some(), "第一版总是给出去");
     assert!(state.sync_title().is_none(), "没变就不再写");
 
-    state.request(ConsoleRequest::SessionState {
-        id: state.front().clone(),
-        state: heng::session::host::SessionState::RunningTurn,
-    });
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
     assert_eq!(
         state.sync_title().expect("状态变了就该给新标题"),
         "~/code/heng · 运行中"
@@ -1250,18 +1282,20 @@ fn ctrl_d_closes_a_pending_box_instead_of_being_swallowed() {
     // 那把手的语义归问卷，它自己的页脚正说着（`.scratch/questionnaire-keys/spec.md` §5）。
     let mut state = new_state();
     let (reply, _answer) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(heng::render::AskRequest {
-        request: heng::permissions::PermissionRequest {
-            escalation: None,
-            speaker: None,
-            request_id: "r-9".to_owned(),
-            tool_call_id: "c-9".to_owned(),
-            tool_name: "bash".to_owned(),
-            args: serde_json::json!({"command": "ls"}),
-            reason: "mode ask".to_owned(),
+    state.request(ConsoleRequest::Ask(heng::render::ConsoleAsk::Permission(
+        heng::render::AskRequest {
+            request: heng::permissions::PermissionRequest {
+                escalation: None,
+                speaker: None,
+                request_id: "r-9".to_owned(),
+                tool_call_id: "c-9".to_owned(),
+                tool_name: "bash".to_owned(),
+                args: serde_json::json!({"command": "ls"}),
+                reason: "mode ask".to_owned(),
+            },
+            reply,
         },
-        reply,
-    }));
+    )));
     let rows = exit_hint_on_screen(&mut state);
     assert!(rows.contains("ctrl-"), "问句立着时也在提示行上：{rows}");
 
@@ -1284,10 +1318,12 @@ fn a_refused_exit_drops_the_raised_hand_so_the_next_press_starts_over() {
         "举着了"
     );
 
-    state.request(ConsoleRequest::ExitBlocked {
-        count: 1,
-        first: heng::events::SessionId::new("s-b".to_owned()),
-    });
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::ExitBlocked {
+            count: 1,
+            first: heng::events::SessionId::new("s-b".to_owned()),
+        },
+    ));
     let after = exit_hint_on_screen(&mut state);
     assert!(!after.contains("再按一次"), "被拒之后那一下作废：{after}");
 }

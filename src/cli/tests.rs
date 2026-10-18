@@ -6,7 +6,7 @@ use super::{ConsoleHandle, Mode, finish_session};
 use crate::agent::{CancelSignal, UndoOutcome};
 use crate::config::{Config, ReasoningEffort};
 use crate::events::{SessionId, SpeakerId, ToolCallId};
-use crate::render::{ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind, console};
+use crate::render::{ConsoleAsk, ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind, console};
 use crate::{Harness, Policy};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -319,7 +319,7 @@ async fn an_idle_switch_asks_the_front_end_and_a_cancellation_changes_nothing() 
 
     let front_end = tokio::spawn(async move {
         match port.recv().await {
-            Some(ConsoleRequest::Picker(request)) => {
+            Some(ConsoleRequest::Ask(ConsoleAsk::Picker(request))) => {
                 let title = request.title.clone();
                 let count = request.options.len();
                 let _ = request.reply.send(None);
