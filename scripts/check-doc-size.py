@@ -404,13 +404,16 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-20 新增 `run-state-edge` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
 #   14,800 / 77 → **15,100 / 78**（feature 索引天然随 feature 增长；这一行是一次缺陷修复的
 #   spec —— 问卷建立后 ≤80ms 就被撤下，见 `.scratch/run-state-edge/spec.md`，一张实现票同日落地）。
+# **同日新增 `tool-declaration-visibility` 种子行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   15,100 / 78 → **15,250 / 79**（种子索引行也随 feature 增长；这一条记的是「工具声明在界面上
+#   看不见」这个缺口，见 `.scratch/tool-declaration-visibility/seed.md`）。
 ENTRY_BUDGET = {
     # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
     # 19,950 → 20,100（终点 18,500 不变）。
     "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 15100,
-        "lines": 78,
+        "chars": 15250,
+        "lines": 79,
         "target_chars": 13500,
         "target_lines": 100,
     },
