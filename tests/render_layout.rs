@@ -11243,3 +11243,334 @@ fn the_detail_overlay_is_sized_to_the_screen() {
     assert_eq!(left, 2);
     assert!((115..=116).contains(&width), "宽度按整屏量：{width}");
 }
+
+// --- 右栏页签条（`.scratch/flow-page/spec.md` §1） -------------------------
+
+/// 右栏顶上常驻一条页签条：`轨迹┆流程`，两条 `┄` 夹着标签行；轨迹内容整体下移 3 行。
+#[test]
+fn the_right_rail_has_a_two_page_tab_bar() {
+    use heng::render::layout;
+
+    let mut state = state();
+    state.set_right_rail(true);
+    let frame = buffer(120, 24, &mut state);
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let rail = panes.right_rail.expect("右栏在");
+    let tabs = panes.right_tabs.expect("页签行在");
+    let page = panes.right_page.expect("内容区在");
+
+    assert_eq!(rail.y, 0, "右栏从屏幕顶上起");
+    assert_eq!(tabs.y, rail.y + 1, "标签行夹在两条 ┄ 之间");
+    assert_eq!(tabs.height, 1);
+    assert_eq!(page.y, tabs.y + 2, "内容区在页签条之下");
+    assert_eq!(page.height, rail.height - 3);
+
+    let label = cells(&frame, tabs.y, rail.x, rail.right());
+    assert!(
+        label.contains(wording::TAB_TRACE) && label.contains(wording::TAB_FLOW),
+        "页签条上是两签：{label:?}"
+    );
+    for y in [rail.y, rail.y + 2] {
+        assert_eq!(
+            cells(&frame, y, rail.x, rail.right()),
+            "┄".repeat(rail.width as usize),
+            "第 {y} 行是页签条的花边"
+        );
+    }
+    // 轨迹的时间轴横带从内容区起算，不再贴着屏幕顶。
+    assert_eq!(panes.right_band.expect("横带在").y, page.y);
+}
+
+/// 点「流程」切到流程页、点「轨迹」切回来；选中的那一签亮品红加粗。
+#[test]
+fn clicking_the_flow_tab_switches_the_right_rail_page() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+    let trace = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(trace.contains("调用 bash"), "布置：轨迹在右栏里：{trace}");
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains(wording::FLOW_NODE_WAITING),
+        "点流程签就切到流程页：{text}"
+    );
+    assert!(!text.contains("调用 bash"), "轨迹让位：{text}");
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    assert_eq!(frame[(column, row)].fg, palette::ACCENT, "选中的签是亮的");
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::BOLD),
+        "而且它是粗的"
+    );
+
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_TRACE).expect("轨迹签在屏幕上");
+    click(&mut state, column, row);
+    let trace = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(trace.contains("调用 bash"), "点轨迹签切回来：{trace}");
+    assert!(!trace.contains(wording::FLOW_NODE_WAITING));
+}
+
+/// 右栏关着（或宽度不够）时页签条整条不存在：布局里没有矩形，屏幕上也没有标签。
+#[test]
+fn the_rail_tab_bar_disappears_with_the_rail() {
+    use heng::render::layout;
+
+    let mut state = state_with_roster(&["kimi"]);
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
+    assert!(panes.right_rail.is_none());
+    assert!(panes.right_tabs.is_none() && panes.right_page.is_none());
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::TAB_FLOW),
+        "右栏关着就没有页签条：{text}"
+    );
+}
+
+// --- 流程页的相位（`.scratch/flow-page/spec.md` §2） -----------------------
+
+/// 点开流程页：`TurnStarted` 之后「等模型响应」是当前节点，工具调用开始时它挪到工具。
+#[test]
+fn the_flow_page_follows_the_turn_phase() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains("◆ 等模型响应"),
+        "等模型响应是当前节点：{text}"
+    );
+    assert!(text.contains("✓ 收到你的话"), "前一站已过：{text}");
+    assert_eq!(text.matches('◆').count(), 1, "当前节点只有一个：{text}");
+
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains("◆ 工具调用"), "工具调用成了当前节点：{text}");
+    assert_eq!(text.matches('◆').count(), 1, "当前节点只有一个：{text}");
+}
+
+/// 收尾节点只在 `TurnEnded` 后那一帧亮着，下一帧收成空闲。
+#[test]
+fn the_flow_page_settles_to_idle_after_the_turn_ends() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+    state.apply(turn_started(1));
+    state.apply(message(2, "回答", None));
+    state.apply(turn_ended(3));
+
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains("◆ 回合收尾"), "收尾节点亮在那一帧：{text}");
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains(wording::FLOW_IDLE), "下一帧收成空闲：{text}");
+    assert!(!text.contains('◆'), "空闲没有当前节点：{text}");
+    assert_eq!(text.matches('✓').count(), 5, "上一回合的五站全已过：{text}");
+    assert!(
+        text.contains(&wording::flow_note_idle()),
+        "说明区说上一回合收起了：{text}"
+    );
+}
+
+/// 信息层：等模型的子块、回边、贴底的说明与统计；宽档把「上下文」那个标签带上
+/// （`.scratch/flow-page/spec.md` §3）。
+#[test]
+fn the_flow_page_carries_the_information_layer() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    let rows = rail_rows(&mut state, 120, 24);
+    let text = rows.join("\n");
+    assert!(
+        text.contains(wording::FLOW_REQUEST_SHAPE),
+        "等模型的子块：{text}"
+    );
+    assert!(
+        text.contains(wording::FLOW_BUDGET_CHECK),
+        "等模型的子块：{text}"
+    );
+    assert!(text.contains(wording::FLOW_BACK_EDGE), "回边：{text}");
+    assert!(text.contains("1 次迭代"), "统计：{text}");
+    let last = rows.last().expect("右栏最后一行").trim().to_owned();
+    assert!(
+        last.contains("次迭代") && last.contains("次工具"),
+        "统计贴底：{last:?}"
+    );
+
+    // 宽档 60 列：统计里带上「上下文」那个标签。
+    let mut wide = state_with_roster(&["kimi"]);
+    wide.set_right_rail(true);
+    wide.apply(turn_started(1));
+    let frame = buffer(174, 24, &mut wide);
+    let (column, row) = cell_of(&frame, 174, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut wide, column, row);
+    let text = rail_rows(&mut wide, 174, 24).join("\n");
+    assert!(text.contains("上下文"), "宽档统计：{text}");
+}
+
+/// 权限门拒绝写进工具子块；多调用的计数进统计（`.scratch/flow-page/spec.md` §3）。
+#[test]
+fn a_denied_permission_and_repeated_tools_show_up() {
+    use heng::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
+
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    state.apply(permission_asked(2, "c1"));
+    state.apply(tool_started(
+        3,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(heng::render::RenderEvent::Logged {
+        session: SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            4,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::PermissionDecided {
+                request_id: "r-1".to_owned(),
+                decision: Decision::Deny,
+                source: DecisionSource::User,
+                reason: None,
+            },
+        ),
+    });
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains(wording::FLOW_PERMISSION_DENIED),
+        "拒绝写进子块：{text}"
+    );
+
+    // 第二次工具调用：计数变成 2。
+    state.apply(tool_completed(5, "c1", true, Some("out"), None));
+    state.apply(tool_started(
+        6,
+        "c2",
+        "grep",
+        serde_json::json!({"pattern": "x"}),
+    ));
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains("2 次工具"), "工具计数：{text}");
+    assert!(text.contains("grep"), "侧注跟着最近一次调用：{text}");
+}
+
+/// 取消的收尾在空闲定格里是叉，说明区仍是「上一回合已收起」
+/// （`.scratch/flow-page/spec.md` §3）。
+#[test]
+fn an_aborted_turn_leaves_a_cross_on_the_closing_node() {
+    use heng::events::{Event, EventPayload, SpeakerId, StopReason};
+
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+    state.apply(heng::render::RenderEvent::Logged {
+        session: SessionId::new("01J8ZQ4K7M"),
+        event: Event::new(
+            2,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::TurnEnded {
+                reason: StopReason::Aborted,
+            },
+        ),
+    });
+    // 第一帧是收尾那一格，第二帧起是空闲定格。
+    let _ = rail_rows(&mut state, 120, 24);
+    let text = rail_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains('✗'), "取消的收尾画成叉：{text}");
+}
+
+/// 矮终端（右栏 42×10，内容区 7 行）：只留当前节点与一行说明，不画小节线、不画统计
+/// （`.scratch/flow-page/spec.md` §3 的高度阶梯）。
+#[test]
+fn the_flow_page_degrades_on_a_short_terminal() {
+    // 右栏 42 档要主列 ≥ 40 列，所以这张屏的最小宽度是 112 —— 80×10 下右栏本来就不存在。
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(112, 10, &mut state);
+    let (column, row) = cell_of(&frame, 112, 10, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    let rows = screen(112, 10, &mut state);
+    let text = rows.join("\n");
+    assert!(
+        text.contains(wording::FLOW_NODE_WAITING),
+        "当前节点在：{text}"
+    );
+    assert!(
+        text.contains(&wording::flow_note_waiting()),
+        "说明压到一行：{text}"
+    );
+    assert!(
+        !text.contains(wording::FLOW_NODE_RECEIVED),
+        "轨道只留当前节点：{text}"
+    );
+    assert!(
+        !text.contains(wording::FLOW_NODE_CLOSING),
+        "轨道只留当前节点：{text}"
+    );
+    assert!(
+        !text.contains('─') || !text.contains("1 次迭代"),
+        "无小节线与统计"
+    );
+}
+
+/// 中等高度（右栏内容区 10..14 行）：窗口只留当前节点与前后各一站，被裁那一端画 `⋮`。
+#[test]
+fn a_medium_terminal_windows_the_track_around_the_current_node() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.set_right_rail(true);
+    state.apply(turn_started(1));
+    let frame = buffer(120, 16, &mut state);
+    let (column, row) = cell_of(&frame, 120, 16, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+
+    let text = screen(120, 16, &mut state).join("\n");
+    assert!(
+        text.contains(wording::FLOW_NODE_RECEIVED),
+        "窗口上一站：{text}"
+    );
+    assert!(text.contains(wording::FLOW_NODE_WAITING), "当前站：{text}");
+    assert!(
+        text.contains(wording::FLOW_NODE_STREAMING),
+        "窗口下一站：{text}"
+    );
+    assert!(
+        !text.contains(wording::FLOW_NODE_CLOSING),
+        "窗口外的裁掉：{text}"
+    );
+    assert!(text.contains('⋮'), "被裁那一端有 ⋮：{text}");
+}

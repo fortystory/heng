@@ -25,6 +25,7 @@ pub mod changes;
 pub mod editor;
 pub mod file_index;
 pub mod files;
+pub mod flow;
 pub mod headless;
 pub mod highlight;
 pub mod hostproc;

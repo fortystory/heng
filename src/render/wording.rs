@@ -2511,6 +2511,179 @@ pub fn session_age_at(
 pub const TAB_CONVERSATION: &str = "对话";
 pub const TAB_TRACE: &str = "轨迹";
 
+/// 右栏页签条上的第二个标签（`.scratch/flow-page/spec.md` §1）。
+///
+/// `轨迹` 复用 [`TAB_TRACE`]：同一个词从主列页签条搬到右栏页签条，措辞层仍然只有一个家。
+pub const TAB_FLOW: &str = "流程";
+
+/// 流程页轨道的五个节点名（`.scratch/flow-page/spec.md` §3）。
+///
+/// 每个都 ≤ 5 个中文字：42 列档的轨道一行放得下，节点名不必折行。
+pub const FLOW_NODE_RECEIVED: &str = "收到你的话";
+pub const FLOW_NODE_WAITING: &str = "等模型响应";
+pub const FLOW_NODE_STREAMING: &str = "流式输出";
+pub const FLOW_NODE_TOOL: &str = "工具调用";
+pub const FLOW_NODE_CLOSING: &str = "回合收尾";
+
+/// 流程页头部的三个词：`回合 N · 迭代 M`，空闲时只有 [`FLOW_IDLE`]。
+pub const FLOW_TURN: &str = "回合";
+pub const FLOW_ITERATION: &str = "迭代";
+pub const FLOW_IDLE: &str = "空闲";
+
+/// 流程页当前节点的两张静态子块（等模型那一步会做的事，`.scratch/flow-page/spec.md` §3）。
+pub const FLOW_REQUEST_SHAPE: &str = "拼请求 · 投影 → 身份 → 裁剪";
+pub const FLOW_BUDGET_CHECK: &str = "预算预检 · 请求已发出";
+
+/// 流程页工具子块的权限门四态（`PermissionDecided` 的裁决，`AwaitingHuman` 是等在问）。
+pub const FLOW_PERMISSION_ALLOWED: &str = "权限门 · 已允许";
+pub const FLOW_PERMISSION_DENIED: &str = "权限门 · 已拒绝";
+/// 门直接放行、没问过人那一档（`Allow` 的路径）。
+pub const FLOW_PERMISSION_PASSED: &str = "权限门 · 已通过";
+pub const FLOW_PERMISSION_WAITING: &str = "权限门 · 等你批准";
+
+/// 流程页回边那一行：agent 是一个循环，不是流水线。
+pub const FLOW_BACK_EDGE: &str = "还有工具调用 → 回到「等模型响应」";
+
+/// 流程页工具子块的第二行：`bash · 执行中 0.8 s` / `bash · 跑了 0.8 s`。
+pub fn flow_tool_line(tool: &str, running_ms: Option<u64>) -> String {
+    match running_ms {
+        Some(ms) => format!("{tool} · 跑了 {}", duration_text(ms)),
+        None => format!("{tool} · 执行中"),
+    }
+}
+
+/// 流程页说明区的那句话，按相位来。每一条都是一句人话，不重复轨道上已有的数字。
+pub fn flow_note_received() -> String {
+    "它收到这句话了。接下来检查预算、取消与迭代上限。".to_owned()
+}
+
+pub fn flow_note_waiting() -> String {
+    "请求已发出，等第一段文本。".to_owned()
+}
+
+pub fn flow_note_streaming(chars: usize) -> String {
+    format!("模型正在输出，增量直接画进转录。已收 {chars} 字。")
+}
+
+pub fn flow_note_tool(tool: Option<&str>) -> String {
+    match tool {
+        Some(tool) => format!("先过权限门，再跑 {tool}；结果回来会打码、截断、追加进流。"),
+        None => "先过权限门，再跑工具；结果回来会打码、截断、追加进流。".to_owned(),
+    }
+}
+
+pub fn flow_note_awaiting() -> String {
+    "权限门在等人：允许 / 总是允许 / 拒绝。".to_owned()
+}
+
+/// 收尾那一帧的说明：按停止原因分。
+pub fn flow_note_closing(reason: Option<StopReason>) -> String {
+    match reason {
+        Some(StopReason::Completed) => "写 TurnEnded，这一回合收起来。".to_owned(),
+        Some(StopReason::Aborted) => "这个回合被取消了。".to_owned(),
+        Some(StopReason::MaxIterations) => "到了迭代上限，这一回合收起来。".to_owned(),
+        Some(StopReason::BudgetExhausted) => "预算用完了，这一回合收起来。".to_owned(),
+        Some(StopReason::MistakeLimit) => "错误次数到了上限，这一回合收起来。".to_owned(),
+        Some(StopReason::Error) => "出错了，这一回合收起来。".to_owned(),
+        // 讨论那一档的收尾不属于主会话的回合，落到这一句兜底。
+        Some(_) => "这一回合收起来。".to_owned(),
+        None => "这一回合收起来。".to_owned(),
+    }
+}
+
+pub fn flow_note_idle() -> String {
+    "上一回合已收起。等你发一句话。".to_owned()
+}
+
+/// 流程页的统计行：`2 次迭代 · 1 次工具 · 36%`。
+///
+/// 宽档把本回合的输入/输出 token 也带上（没量到就让位给上下文占比）。
+pub fn flow_stats(
+    iteration: u32,
+    tools: u32,
+    share: &str,
+    wide: bool,
+    usage: Option<(u64, u64)>,
+    style: NumberStyle,
+) -> String {
+    let base = format!("{iteration} 次迭代 · {tools} 次工具");
+    if wide {
+        if let Some((input, output)) = usage {
+            return format!(
+                "{base} · 输入 {} · 输出 {}",
+                compact(input, style),
+                compact(output, style)
+            );
+        }
+        return format!("{base} · 上下文 {share}");
+    }
+    format!("{base} · {share}")
+}
+
+/// 流程页 60 档工具子块的第三行：结果还没回来。
+pub const FLOW_TOOL_RESULT: &str = "结果待追加";
+
+/// 流程页轨道的字形表（`.scratch/flow-page/spec.md` §4）。
+///
+/// 与 `CONTEXT.md` 的**字形语法**同一个纪律：绘制代码只引用常量，不写字面量。`↺` 与 `→`
+/// 是这一轮新进符号表的两个。
+pub const FLOW_MARK_DONE: &str = "✓";
+pub const FLOW_MARK_CURRENT: &str = "◆";
+pub const FLOW_MARK_TODO: &str = "○";
+pub const FLOW_MARK_FAILED: &str = "✗";
+/// 节点之间那条竖线（内容档实线）。
+pub const FLOW_CONNECTOR: &str = "│";
+/// 子块的两级缩进字形（内容档实线）。
+pub const FLOW_SUB_FIRST: &str = "├";
+pub const FLOW_SUB_LAST: &str = "└";
+/// 回边的字形（新进符号表）。
+pub const FLOW_BACK_EDGE_MARK: &str = "↺";
+/// 被高度窗口裁掉的那一端。
+pub const FLOW_TRUNCATED: &str = "⋮";
+/// 说明区小节线用的那条线（内容档实线，颜色是 `CHROME`）。
+pub const FLOW_RULE: &str = "─";
+/// 头部右端「当前节点已跑」的引导符。
+pub const FLOW_ELAPSED: &str = "⟳";
+/// 侧注里字数的量词。
+pub const FLOW_CHARS: &str = "字";
+
+/// 流程页头部右段：`⟳ 1.2 s `（尾随空格属于排版，留给调用方）。
+pub fn flow_elapsed(duration: &str) -> String {
+    format!("{} {duration} ", FLOW_ELAPSED)
+}
+
+/// 流式那一站的侧注：`6.1 s · 214 字`。
+pub fn flow_streaming_note(duration: &str, chars: usize) -> String {
+    format!("{duration} · {chars} {}", FLOW_CHARS)
+}
+
+/// 节点之间那条竖线画出来的一行。
+pub fn flow_connector_line() -> String {
+    format!(" {FLOW_CONNECTOR}")
+}
+
+/// 回边那一行：` ├─↺ 还有工具调用 → 回到「等模型响应」`。
+pub fn flow_back_edge_line() -> String {
+    format!(
+        " {}{}{} {}",
+        FLOW_SUB_FIRST, FLOW_RULE, FLOW_BACK_EDGE_MARK, FLOW_BACK_EDGE
+    )
+}
+
+/// 当前节点子块的一行：` │   ├ 权限门 · 已允许`。
+pub fn flow_sub_line(first: bool, text: &str) -> String {
+    format!(
+        " {}   {} {text}",
+        FLOW_CONNECTOR,
+        if first { FLOW_SUB_FIRST } else { FLOW_SUB_LAST }
+    )
+}
+
+/// 被裁掉那一端的记号行。
+pub fn flow_truncated_line() -> String {
+    format!(" {FLOW_TRUNCATED}")
+}
+
 /// 轨迹页里一条块行开头的那个时刻：**本地时区**、秒级，连它后面那个分隔的空格一起
 /// —— 八个字符加一列空白就是 [`crate::render::layout::STAMP_COLUMNS`] 那九列
 /// （`.scratch/trace-in-main/spec.md` §5）。

@@ -871,6 +871,11 @@ mod projection {
         /// 与 `painted` 同一条寿命：宽度重放**不重建**它（重放换的是窗格里的行，而这一趟的秒数
         /// 一个都没变）。
         pub(super) timeline: Timeline,
+        /// 流程页的相位机与轨道（`.scratch/flow-page/spec.md` §2）。
+        ///
+        /// 与 [`Self::timeline`] 同一族：只吃渲染通道上已经到手的事件，每帧只读它一遍；
+        /// 不进事件流、不落盘，切会话与重播都靠事件自然重建。
+        pub(super) flow: crate::render::flow::FlowPanel,
         /// 块身份 → 它在轴上的落点（哪一刻、落哪条泳道）。
         ///
         /// 横带要问三件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
@@ -1206,6 +1211,7 @@ impl View {
             live: String::new(),
             painted: Vec::new(),
             timeline: Timeline::default(),
+            flow: crate::render::flow::FlowPanel::default(),
             block_at: std::collections::HashMap::new(),
             in_call: false,
             turn_calls: 0,
@@ -2547,6 +2553,8 @@ impl View {
         self.observe_goal(&event);
         self.observe_running_tool(&event);
         self.observe_timeline(&event);
+        // 流程页只认渲染通道：进流事件定相位，增量事件把「等模型」推进「流式输出」。
+        self.flow.observe(&event, at);
         // 这一整趟的收件人（两个视图都常驻，所以通常两个都在）。
         let targets = self.targets();
         let mut produced = 0usize;
@@ -3221,6 +3229,9 @@ pub struct TuiState {
     /// 不跨会话；它与宽度档相乘才是屏幕上真的有的那一栏。轨迹住在右栏里 —— 关掉右栏不是
     /// 「不画轨迹」，是把那一条收起来（票 16 之后主列不再有轨迹页）。
     right_wanted: bool,
+    /// 右栏显示哪一页（`.scratch/flow-page/spec.md` §1）。与 [`TuiState::tab`] 同一档的
+    /// 纯视图偏好：点出来的、只活在这一次进程里。
+    right_tab: RailTab,
     /// 会话中途换模型/档位的选择器浮层（spec §10）。
     ///
     /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
@@ -3830,6 +3841,8 @@ enum HitAction {
     Tile(usize),
     /// 点顶部条右端的右栏开关：与 `Ctrl-V` 同一条动作（票 15）。
     ToggleRail,
+    /// 点右栏页签条上的一个标签：切到那一页（`.scratch/flow-page/spec.md` §1）。
+    SwitchRailTab(RailTab),
     /// 点轨迹页上的一行**折叠把手**（组头那一行，或者一行折行）：折 / 展它代表的那一块
     /// （票 21 第 5 条）。
     ///
@@ -4608,6 +4621,8 @@ impl TuiState {
             // 右栏默认开（冻结项 6）：轨迹住在它里面，关掉只是收起来，不是不画轨迹。
             // 这里留关，真进程在 `Tui::run` 里打开 —— 集成测试的既有帧因此留在旧基线上。
             right_wanted: false,
+            // 右栏默认停在轨迹页 —— 流程页是第二签，切过去是点击的结果。
+            right_tab: RailTab::Trace,
             tiles: Vec::new(),
             tiled: false,
             tile_limit: crate::config::DEFAULT_TILE_LIMIT,
@@ -5464,6 +5479,16 @@ impl TuiState {
                 if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) {
                     self.events.push(FrontEndEvent::CloseSession { id });
                 }
+            }
+            Some(HitAction::SwitchRailTab(tab)) => {
+                self.right_tab = tab;
+                // 流程页不接键盘、不可滚动：切过去就把右栏的键盘交还给输入区
+                // （`.scratch/flow-page/spec.md` §1）。切回轨迹不会自动拿回来 —— 那是
+                // `Ctrl-V` 或点账本的事。
+                if tab == RailTab::Flow {
+                    self.release_trace_keyboard();
+                }
+                self.dirty = true;
             }
             Some(HitAction::SwitchTab(tab)) => {
                 self.tab = tab;
@@ -8023,6 +8048,14 @@ impl TuiState {
                 .is_some_and(|projection| projection.state.is_some())
     }
 
+    /// 焦点会话是不是**停在等人答**的那一步（流程页工具子块用它换一句话）。
+    fn awaiting_human(&self) -> bool {
+        self.projections
+            .get(&self.front)
+            .and_then(|projection| projection.state)
+            .is_some_and(|state| state == crate::session::host::SessionState::AwaitingHuman)
+    }
+
     /// 把打好的草稿交给循环并记住它。
     ///
     /// 提交也把转录送回末尾：用户刚问了一件事，想看着答案，不管他当时在读什么（spec §4）。
@@ -8045,6 +8078,9 @@ impl TuiState {
         };
         self.view.conversation.to_bottom();
         let line = self.editor.submitted();
+        // 流程页的第一站从这一次提交开始 —— 循环的 `TurnStarted` 通常紧随其后，但状态机
+        // 不为它猜（`.scratch/flow-page/spec.md` §2）。
+        self.view.flow.note_submitted(Utc::now());
         // 「改完再 `@` 它」是索引的主要用法，所以每提交一条消息就在后台重扫一次
         // （`.scratch/input-tokens/spec.md` §1）。位在这里置，遍历由循环去发。
         self.file_scan_wanted = true;
@@ -10533,6 +10569,18 @@ enum Tab {
     Changes,
 }
 
+/// 右栏显示哪一页（`.scratch/flow-page/spec.md` §1）。
+///
+/// 与左栏 [`Tab`] 同一档：点出来的、**纯视图偏好** —— 只活这一次进程，不落盘、不跨会话，
+/// 切会话不重置。它不进 [`View`]（它不属于某个会话）。
+///
+/// `轨迹` 是右栏的第一个家（ADR 0024）；`流程` 是 agent 回合循环的实时视图。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailTab {
+    Trace,
+    Flow,
+}
+
 /// 四个浮层表面共用的框架：`CHROME` 的虚线，**四角为空**
 /// （`.scratch/tui-visual-language/spec.md` §25）。
 ///
@@ -11095,25 +11143,113 @@ fn draw_tile_dividers(frame: &mut ratatui::Frame, pool: Rect, cells: &[Rect]) {
     }
 }
 
-/// 画右栏（票 13）：这一版右栏里只有轨迹一页，所以**顶部没有页面标签** —— 只有一页时不画
-/// 那一条（票 08 第 2 条）。后续页面（团队、任务板）只要求容器留得下。
+/// 画右栏：顶上先是页签条，然后按选中的那一页画内容
+/// （`.scratch/flow-page/spec.md` §1；轨迹页的来路见票 13）。
 ///
 /// 右栏的滚动、贴底与指示器都跟**会话**走（票 08 第 5 条）：它们就在 `View::trace` 里，与
-/// 主列轨迹页共用同一份视口意图。
+/// 主列轨迹页共用同一份视口意图。流程页不滚动、不接指针。
 fn draw_right_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let Some(text_area) = panes.right_trace else {
+    let Some(rail) = panes.right_rail else {
         return;
     };
-    let width = state.view.trace_width;
-    draw_trace_pane(
-        frame,
-        panes.right_band,
-        panes.right_band_kind,
-        text_area,
-        width,
-        panes.right_axis_width(),
-        state,
+    draw_rail_tabs(frame, panes, state, rail);
+    match state.right_tab {
+        RailTab::Trace => {
+            let Some(text_area) = panes.right_trace else {
+                return;
+            };
+            let width = state.view.trace_width;
+            draw_trace_pane(
+                frame,
+                panes.right_band,
+                panes.right_band_kind,
+                text_area,
+                width,
+                panes.right_axis_width(),
+                state,
+            );
+        }
+        RailTab::Flow => draw_flow_page(frame, panes, state),
+    }
+}
+
+/// 右栏顶上的页签条（`.scratch/flow-page/spec.md` §1）：与左栏同一种画法，只是跨右栏那一栏。
+///
+/// 上下各一条 `┄` 是它的花边，中间一行是标签。命中矩形由 [`draw_label_bar`] 在画出来时
+/// 记进 `regions`；这一帧没画出来时上一帧的命中已经随 `draw_frame` 开头的重置清空了。
+fn draw_rail_tabs(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &mut TuiState,
+    rail: Rect,
+) {
+    let Some(tabs) = panes.right_tabs else {
+        return;
+    };
+    for y in [tabs.y.saturating_sub(1), tabs.y + 1] {
+        paint_rule(frame, y, rail.x, rail.right());
+    }
+    let entries = [
+        (
+            wording::TAB_TRACE,
+            state.right_tab == RailTab::Trace,
+            HitAction::SwitchRailTab(RailTab::Trace),
+        ),
+        (
+            wording::TAB_FLOW,
+            state.right_tab == RailTab::Flow,
+            HitAction::SwitchRailTab(RailTab::Flow),
+        ),
+    ];
+    draw_label_bar(frame, state, tabs, &entries);
+}
+
+/// 流程页（`.scratch/flow-page/spec.md`）：轨道的相位机在 [`crate::render::flow`]，这里只
+/// 把它画出来的三段落进右栏内容区 —— 头部、轨道、贴底的说明区。
+fn draw_flow_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let Some(page) = panes.right_page else {
+        return;
+    };
+    if page.width == 0 || page.height == 0 {
+        return;
+    }
+    let share = wording::context_share_value(
+        state.view.panel.last_input(),
+        state.view.facts.context_window,
     );
+    let awaiting = state.awaiting_human();
+    let usage = state.view.turn_usage;
+    let usage = (usage.input_tokens + usage.output_tokens > 0)
+        .then_some((usage.input_tokens, usage.output_tokens));
+    let flow = state.view.flow.frame(&crate::render::flow::FrameInput {
+        turn: state.view.turn_ordinal,
+        share: &share,
+        awaiting,
+        usage,
+        number_style: state.view.facts.number_style,
+        width: page.width,
+        height: page.height,
+        now: Utc::now(),
+    });
+    // 说明区贴底：先给轨道留够地方，剩下的空行填在轨道与说明之间。
+    let note_len = flow.note.len();
+    let mut rows: Vec<Line<'static>> = Vec::with_capacity(page.height as usize);
+    rows.push(flow.head);
+    rows.push(Line::default());
+    let track_room = (page.height as usize).saturating_sub(note_len + 2);
+    rows.extend(flow.track.into_iter().take(track_room));
+    while rows.len() + note_len < page.height as usize {
+        rows.push(Line::default());
+    }
+    rows.extend(flow.note);
+    rows.truncate(page.height as usize);
+    frame.render_widget(Paragraph::new(rows), page);
+    // 收尾节点只在 `TurnEnded` 到达后的那一帧里亮着：画完这一帧就收成空闲，
+    // 并请下一帧（否则时钟不动的空闲态会停在收尾那一格上）。只在相位真的变了时才置脏，
+    // 不然流程页会让空闲的界面永远重绘。
+    if state.view.flow.settle() {
+        state.mark_dirty();
+    }
 }
 
 /// 把轨迹这一个视图画进一块区域：主列轨迹页（过渡）与右栏共用同一条路径。

@@ -204,6 +204,12 @@ pub struct Regions {
     /// 它与左栏**同时存在**（冻结项 6），窄屏时右栏先让位 —— 让位判据在
     /// [`right_rail_tier`]，这里只装结果。
     pub right_rail: Option<Rect>,
+    /// 右栏的页签标签行（`.scratch/flow-page/spec.md` §1）：右栏从一页变成两页之后，
+    /// 它恒在（右栏画出来时）。上下各一条 `┄`，中间这一行是 `轨迹┆流程`。
+    pub right_tabs: Option<Rect>,
+    /// 右栏内容区：页签条（[`TAB_ROWS`] 行）之下到底边。轨迹的横带与账本、流程页的整页
+    /// 都从它起算。
+    pub right_page: Option<Rect>,
     /// 右栏与主列之间那一列的分隔线。
     pub right_divide: Option<u16>,
     /// 右栏里轨迹的正文区：右栏内容区减去顶部那条横带之后剩下的一切。
@@ -565,25 +571,37 @@ fn plan_with(
     let right_divide = rail_tier.map(|_| main.right());
     // 右栏从屏幕顶上起、**画满全高**（顶部条只在主列里）。
     let right_rail = rail_tier.map(|tier| Rect::new(main.right() + 1, area.y, tier, area.height));
+    // 右栏顶上那条页签条（`.scratch/flow-page/spec.md` §1）：两页之后它常驻，占 TAB_ROWS
+    // 行 —— 上下面各一条 `┄`，中间一行 `轨迹┆流程`。内容区因此从它下面起算。
+    let right_tabs =
+        right_rail.map(|rail| Rect::new(rail.x, rail.y + TAB_RULE_ROWS, rail.width, 1));
+    let right_page = right_rail.map(|rail| {
+        Rect::new(
+            rail.x,
+            rail.y + TAB_ROWS,
+            rail.width,
+            rail.height.saturating_sub(TAB_ROWS),
+        )
+    });
     // 右栏里的时间轴：轴宽照票 04 的口径（右栏宽 − 2 列滚动条与指示器 − 九列时刻 − 五列
     // 泳道标签）。40 档 24 格、28 档 12 格，两档都落在 Compact（票 08 第 10 条：右栏只画
     // 这一档）。右栏**不做** Full / Sparse —— 那两档要的轴宽在 40 列里根本不存在。
-    let right_band_kind = right_rail.map_or(BandKind::Empty, |rail| {
-        match BandKind::of_axis(right_axis_width(rail)) {
+    let right_band_kind = right_page.map_or(BandKind::Empty, |page| {
+        match BandKind::of_axis(right_axis_width(page)) {
             BandKind::Full | BandKind::Sparse => BandKind::Compact,
             kind => kind,
         }
     });
-    let right_band = right_rail.and_then(|rail| {
+    let right_band = right_page.and_then(|page| {
         (right_band_kind.rows() > 0)
-            .then(|| Rect::new(rail.x, rail.y, rail.width, right_band_kind.rows()))
+            .then(|| Rect::new(page.x, page.y, page.width, right_band_kind.rows()))
     });
-    let right_trace = right_rail.map(|rail| {
+    let right_trace = right_page.map(|page| {
         Rect::new(
-            rail.x,
-            rail.y + right_band_kind.rows(),
-            rail.width,
-            rail.height.saturating_sub(right_band_kind.rows()),
+            page.x,
+            page.y + right_band_kind.rows(),
+            page.width,
+            page.height.saturating_sub(right_band_kind.rows()),
         )
     });
 
@@ -593,6 +611,8 @@ fn plan_with(
         top_tabs_rows: top_rows,
         main,
         right_rail,
+        right_tabs,
+        right_page,
         right_divide,
         right_trace,
         right_band,

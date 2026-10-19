@@ -94,6 +94,7 @@ DOC_FILES = [
     "docs/adr/0022-the-session-noun-is-session.md",
     "docs/adr/0023-tiling-lives-in-one-process.md",
     "docs/adr/0024-trace-lives-in-the-right-rail.md",
+    "docs/adr/0025-right-rail-has-more-than-one-page.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -394,13 +395,19 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-12 新增 `cli-modules` 与 `architecture-deepening` 两行索引时再跟一次**：同一类显式动作，
 #   `.scratch/README.md` 13,875 / 74 → **14,146 / 76**（一条 spec、一条种子）；字符棘轮
 #   13,900 → **14,200**、行数棘轮 74 → **76**。
+# **2026-10-19 新增 `flow-page` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   14,200 / 76 → **14,800 / 77**（feature 索引天然随 feature 增长；同日四张实现票全部落地，
+#   索引行直接写 `4/4 done`）。
+# **同日落 ADR 0025（右栏不止一页：轨迹之后加流程）时上调 `README.md`**：与前几次同因 ——
+#   每份 ADR 都该有入口。ADR 索引行把实测推到 **20,031**，棘轮 19,950 → **20,100**；
+#   `DOC_FILES` 同步补上那一份。
 ENTRY_BUDGET = {
-    # 2026-10-12：补 ADR 0022（会话量词从「场」换成「会话」）的索引入口，README 实测
-    # 19,901 —— 一次显式上调：19,800 → 19,950（终点 18,500 不变）。
-    "README.md": {"chars": 19950, "lines": 332, "target_chars": 18500, "target_lines": 320},
+    # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
+    # 19,950 → 20,100（终点 18,500 不变）。
+    "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 14200,
-        "lines": 76,
+        "chars": 14800,
+        "lines": 77,
         "target_chars": 13500,
         "target_lines": 100,
     },
