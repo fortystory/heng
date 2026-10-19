@@ -401,13 +401,16 @@ def review_rules(unit: Unit) -> list[str]:
 # **同日落 ADR 0025（右栏不止一页：轨迹之后加流程）时上调 `README.md`**：与前几次同因 ——
 #   每份 ADR 都该有入口。ADR 索引行把实测推到 **20,031**，棘轮 19,950 → **20,100**；
 #   `DOC_FILES` 同步补上那一份。
+# **2026-10-20 新增 `run-state-edge` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   14,800 / 77 → **15,100 / 78**（feature 索引天然随 feature 增长；这一行是一次缺陷修复的
+#   spec —— 问卷建立后 ≤80ms 就被撤下，见 `.scratch/run-state-edge/spec.md`，一张实现票同日落地）。
 ENTRY_BUDGET = {
     # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
     # 19,950 → 20,100（终点 18,500 不变）。
     "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 14800,
-        "lines": 77,
+        "chars": 15100,
+        "lines": 78,
         "target_chars": 13500,
         "target_lines": 100,
     },

@@ -11,8 +11,11 @@
 use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::questions::{UserAnswer, UserAnswers, UserQuestion};
 use heng::render::{
-    ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState, draw_frame,
+    ConsoleNotify, ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts,
+    TuiState, draw_frame,
 };
+use heng::session::HostFacts;
+use heng::session::host::SessionState;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
@@ -1204,4 +1207,58 @@ fn the_arrows_go_quiet_in_the_input_zone() {
             custom: Some("xy".to_owned()),
         }]
     );
+}
+
+#[test]
+fn a_repeated_run_state_does_not_withdraw_the_questionnaire() {
+    // 主循环在等输入时每 80ms 迭代一次，顶部那次「回到等一行」于是重复到达。它是**电平**，
+    // 不是一次运行的结束 —— 2026-10-19 维护者报告：真实会话里问卷一闪就被撤下，模型读到
+    // 「这份问卷没被作答就搁下了」，而人根本没见到操作区域（`run-state-edge` 票 01）。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("q", "Which framework?", &["serde"], false)],
+    );
+
+    state.request(ConsoleRequest::Notify(ConsoleNotify::RunState {
+        running: false,
+    }));
+    state.request(ConsoleRequest::Notify(ConsoleNotify::RunState {
+        running: false,
+    }));
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("Which framework?"), "问卷还在：{text}");
+    assert!(answer(&mut rx).is_none(), "问卷没有被撤下");
+}
+
+#[test]
+fn the_run_ending_withdraws_the_questionnaire() {
+    // 撤回仍归「这次运行结束了」—— 而那个边沿由宿主三态给出：前台会话从跑着回到空闲，
+    // 说明提出询问的那次动作已经收尾（票 31 的本意，`run-state-edge` 票 01 换掉了它的信号）。
+    let mut state = state();
+    let front = state.front().clone();
+    state.request(ConsoleRequest::Facts(HostFacts::foreground_only(
+        front.clone(),
+        SessionState::RunningTurn,
+    )));
+    let mut rx = ask(
+        &mut state,
+        vec![question("q", "Which framework?", &["serde"], false)],
+    );
+
+    state.request(ConsoleRequest::Facts(HostFacts::foreground_only(
+        front,
+        SessionState::Idle,
+    )));
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("Which framework?"),
+        "运行走了，问卷也跟着走：{text}"
+    );
+    match rx.try_recv() {
+        Err(oneshot::error::TryRecvError::Closed) => {}
+        other => panic!("问卷该被撤下，接收端该被丢掉：{other:?}"),
+    }
 }

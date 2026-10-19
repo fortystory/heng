@@ -989,9 +989,13 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
     assert!(asked.try_recv().is_err(), "那个问题没被回答");
 
-    // 运行结束，循环会说出来 —— 这正是让那个问题变陈旧的东西。
-    state.request(ConsoleRequest::Notify(
-        heng::render::ConsoleNotify::RunState { running: false },
+    // 运行结束，宿主三态回到空闲 —— 这正是让那个问题变陈旧的东西（`run-state-edge` 票 01：这条边沿
+    // 不再由 `RunState` 给出，它说的是主循环在不在处理一次提交）。
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::Idle,
+        ),
     ));
 
     // 于是下一个键又是普通键：它编辑草稿，而不是去回答一个

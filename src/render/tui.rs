@@ -1148,7 +1148,14 @@ impl TuiState {
                 self.file_scan_wanted = true;
             }
             self.editor = light.editor;
-            self.pending = light.pending;
+            // 一道询问属于提出它的那次运行：目标会话已经回到空闲，说明那次运行在后台结束了，
+            // 收起来的询问就作废了 —— 恢复它等于留一个没人接的模态（`run-state-edge` 票 01）。
+            // 仍在跑或仍在等人的会话把它的询问原样带回来。
+            self.pending = if incoming.state.is_some() {
+                light.pending
+            } else {
+                None
+            };
             self.detail_opener = light.detail_opener;
             self.detail_serial = light.detail_serial;
             // 那几个「上一帧画在哪」的矩形每帧重算：换会话时先清掉，免得旧坐标被当成这一帧的。
@@ -7676,24 +7683,17 @@ impl TuiState {
                 ConsoleNotify::RunState { running } => {
                     self.running = running;
                     // 时钟现在**一直**在走（§32），所以相位要在这里对齐：一次运行总是从帧 0 开始
-                    // 呼吸（`.scratch/tui-visual-language/spec.md` §30–§33）。
+                    // 呼吸（`.scratch/tui-visual-language/spec.md` §30–§33）。这是一条**边沿**
+                    // 通知 —— `ConsoleHandle::set_running` 只在值真的变了时才发，所以主循环
+                    // 等输入时每 80ms 的那一轮迭代不会把脉冲一直归零（`run-state-edge` 票 01）。
                     self.pulse = 0;
                     if !running {
                         // 一次运行结束：「正在做什么」没有主语了。
                         self.view.running_tool = None;
                     }
-                    // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
-                    // 不再等答案，它那次询问也随运行一起死了。丢掉发送端是对「没人在等」最诚实
-                    // 的读法。只有循环的问题随运行一起走；渲染器自己的那几个不是这次运行能撤回
-                    // 的（spec §6、§9）。
-                    if !running
-                        && matches!(
-                            self.pending,
-                            Some(Pending::Loop { .. } | Pending::Questionnaire(_))
-                        )
-                    {
-                        self.pending = None;
-                    }
+                    // 在飞询问的撤回**不在这里**：`RunState` 说的是「主循环在不在处理一次
+                    // 提交」，它回到等输入远早于会话跑完。询问属于提出它的那次运行，那个
+                    // 运行的结束由宿主三态给出 —— 见 `apply_host_facts`（`run-state-edge` 票 01）。
                 }
                 // 换完模型/档位之后循环推回来的新事实（spec §3）。
                 ConsoleNotify::SessionUpdate {
@@ -7826,6 +7826,11 @@ impl TuiState {
     /// 三态、只读、装载列表、后台计数与空宿主态从这一处更新；「谁不在宿主表里了」也由它推出
     /// （原先那条 `SessionClosed` 的账），于是前端不再为每种事实各守一条命令。
     fn apply_host_facts(&mut self, facts: crate::session::host_facts::HostFacts) {
+        // 一次运行的结束以宿主三态为准：前台会话从「跑着 / 等人」回到空闲，正是提出在飞
+        // 询问的那次动作收尾的时刻。循环不再等答案，它那次询问就变馊了 —— 丢掉发送端是
+        // 对「没人在等」最诚实的读法。只有循环的问题随运行一起走；渲染器自己的那几个确认
+        // 不是这次运行能撤回的（spec §6、§9，票 31 的原意、`run-state-edge` 票 01 换掉的信号）。
+        let front_was_busy = self.front_state().is_some();
         // 读数。
         self.sessions.host_sessions = Some(facts.sessions_count());
         self.sessions.host_running = Some(facts.running_count());
@@ -7876,6 +7881,16 @@ impl TuiState {
             self.muted = true;
         } else if was_empty {
             self.muted = false;
+        }
+        // 前台会话回到空闲（或它已经不在宿主表里）：提出在飞询问的那次运行结束了。
+        if front_was_busy
+            && self.front_state().is_none()
+            && matches!(
+                self.pending,
+                Some(Pending::Loop { .. } | Pending::Questionnaire(_))
+            )
+        {
+            self.pending = None;
         }
     }
 
@@ -8054,6 +8069,15 @@ impl TuiState {
             .get(&self.front)
             .and_then(|projection| projection.state)
             .is_some_and(|state| state == crate::session::host::SessionState::AwaitingHuman)
+    }
+
+    /// 眼前这个会话的宿主三态；`None` 就是空闲（或者它已经不在宿主表里）。
+    ///
+    /// 「一次运行的结束」由它给出：`RunState` 只描述主循环在不在处理一次提交（`run-state-edge` 票 01）。
+    fn front_state(&self) -> Option<crate::session::host::SessionState> {
+        self.projections
+            .get(&self.front)
+            .and_then(|projection| projection.state)
     }
 
     /// 把打好的草稿交给循环并记住它。

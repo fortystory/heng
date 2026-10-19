@@ -158,3 +158,35 @@ async fn the_line_oriented_front_end_ignores_a_session_update() {
     // 通道没被关掉、也没有崩：接下来的通知照旧发得出去。
     handle.set_running(false);
 }
+
+#[tokio::test]
+async fn run_state_is_pushed_only_when_it_changes() {
+    // `RunState` 是**边沿**通知：前端拿它重置脉冲、清「正在做什么」。主循环在等输入时每
+    // 80ms 迭代一次，顶部每轮都说一遍「回到等一行」—— 电平式的重复推送会把一次运行切成
+    // 每 80ms 一次（2026-10-19 的问卷消失就是它：`run-state-edge` 票 01）。去重放在发送端，调用点照旧
+    // 每轮说一遍。
+    let (handle, mut port, _events) = console();
+    handle.set_running(false);
+    handle.set_running(false);
+    handle.set_running(true);
+    handle.set_running(true);
+    handle.set_running(false);
+    handle.set_running(false);
+
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        match port.recv().await {
+            Some(ConsoleRequest::Notify(heng::render::ConsoleNotify::RunState { running })) => {
+                seen.push(running)
+            }
+            other => panic!("意料之外的请求：{other:?}"),
+        }
+    }
+    assert_eq!(seen, vec![false, true, false], "只推边沿");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), port.recv())
+            .await
+            .is_err(),
+        "重复的电平不再发出去"
+    );
+}

@@ -3,7 +3,11 @@
 
 use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::events::{Event, EventPayload, Role, SessionId, SpeakerId};
-use heng::render::{ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState, draw_frame, wording};
+use heng::questions::UserQuestion;
+use heng::render::{
+    ConsoleAsk, ConsoleRequest, Key, QuestionnaireRequest, RenderEvent, SessionFacts, TuiState,
+    draw_frame, wording,
+};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -302,4 +306,69 @@ fn a_new_session_is_the_only_one_that_builds_a_projection() {
         before + 2,
         "来回切都是常驻的那两份，不再新建"
     );
+}
+
+#[test]
+fn a_question_from_a_run_that_ended_in_the_background_does_not_come_back() {
+    // 询问属于提出它的那次运行。切走时它跟着轻状态收起来；如果那个会话在后台把这次运行跑完
+    // （取消或正常收尾），切回来时它已经作废了 —— 恢复它等于留一个没人接的模态
+    // （`run-state-edge` 票 01）。
+    let mut state = fresh();
+    let front = state.front().clone();
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            front.clone(),
+            heng::session::host::SessionState::RunningTurn,
+        ),
+    ));
+    let (reply, mut answers) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(ConsoleAsk::Questionnaire(
+        QuestionnaireRequest {
+            questions: vec![UserQuestion {
+                id: "q".to_owned(),
+                question: "Which framework?".to_owned(),
+                header: None,
+                options: vec![heng::questions::Choice {
+                    label: "serde".to_owned(),
+                    description: None,
+                }],
+                multi_select: false,
+            }],
+            reply,
+        },
+    )));
+    assert!(screen(120, 24, &mut state).contains("Which framework?"));
+
+    // 切到另一个会话：询问跟着轻状态收起来。
+    switch(&mut state, "s-b", vec![said(1, "乙")]);
+    // 原会话在后台把那次运行跑完：宿主三态回到空闲。
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: SessionId::new("s-b"),
+        sessions: vec![
+            heng::session::HostedSession {
+                id: SessionId::new("s-b"),
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+            heng::session::HostedSession {
+                id: front,
+                state: heng::session::host::SessionState::Idle,
+                read_only: false,
+            },
+        ],
+        waiting: 0,
+        finished: 0,
+    }));
+
+    // 切回去：那份询问不该再出现，接收端也该被丢掉。
+    switch(&mut state, "s-a", vec![said(1, "甲")]);
+    let text = screen(120, 24, &mut state);
+    assert!(
+        !text.contains("Which framework?"),
+        "作废的询问不再出现：{text}"
+    );
+    match answers.try_recv() {
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {}
+        other => panic!("作废的询问该把接收端丢掉：{other:?}"),
+    }
 }

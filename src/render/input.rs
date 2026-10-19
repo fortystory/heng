@@ -11,6 +11,9 @@
 //! 循环那一侧是 [`ConsoleHandle`]；前端那一侧是 [`ConsolePort`]。[`ConsoleAsker`] 在
 //! 同一个 handle 上实现权限门的 [`Asker`] 接缝，所以一个问题与一条提示走的是同一个键盘。
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI8, Ordering};
+
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
@@ -274,11 +277,19 @@ pub enum PickerKind {
 /// 请求发送端与手势接收端是**两个值**，不是一个：循环同时 select 一条提示与一个没人要的
 /// 手势，而合成一个结构体会被借两次。
 ///
-/// 克隆很便宜（内部是一条 `mpsc` 发送端）：输入归主循环之后，会话那一侧还要一份来问答案
-/// （`/model` 的清单、问卷那些）。
+/// 克隆很便宜（内部是一条 `mpsc` 发送端加一个原子）：输入归主循环之后，会话那一侧还要一份
+/// 来问答案（`/model` 的清单、问卷那些）。
 #[derive(Clone)]
 pub struct ConsoleHandle {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
+    /// 上一次推给前端的「循环在不在跑」：`-1` 是还没推过。
+    ///
+    /// [`set_running`](Self::set_running) 是**边沿**通知 —— 前端拿它对齐脉冲、清掉「正在
+    /// 做什么」。而主循环在等输入时每 80ms 迭代一次，顶部每轮都会说一遍「回到等一行」；
+    /// 电平式的重复推送会把一次运行切成每 80ms 一次（`run-state-edge` 票 01：问卷建立后 ≤80ms 就被当成
+    /// 「运行结束」撤掉，模型读到「这份问卷没被作答就搁下了」）。去重放在这里，调用点不
+    /// 需要各自记住上一次的值。
+    running: Arc<AtomicI8>,
 }
 
 impl ConsoleHandle {
@@ -368,7 +379,14 @@ impl ConsoleHandle {
     /// 与 [`catalog`](Self::catalog) 一样发完就完：这个事实是一则通知，不是一个问题，而
     /// 一个已经走了的前端不是错误。它必须被*推*过去 —— 知道一次运行何时开始何时结束的只有
     /// 循环，也没有哪条侧通道（渲染流、一个未决的提示）对每一种运行都说得出来。
+    ///
+    /// **只有值真的变了才发**：它是边沿通知，而主循环等输入时每 80ms 迭代一轮、每轮都会
+    /// 回到「等一行」。重复的电平会把一次运行切成每 80ms 一次（`run-state-edge` 票 01）。
     pub fn set_running(&self, running: bool) {
+        let next = i8::from(running);
+        if self.running.swap(next, Ordering::Relaxed) == next {
+            return;
+        }
         let _ = self
             .requests
             .send(ConsoleRequest::Notify(ConsoleNotify::RunState { running }));
@@ -478,6 +496,7 @@ pub fn console() -> (ConsoleHandle, ConsolePort, ConsoleEvents) {
     (
         ConsoleHandle {
             requests: request_tx,
+            running: Arc::new(AtomicI8::new(-1)),
         },
         ConsolePort {
             requests: request_rx,

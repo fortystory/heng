@@ -507,6 +507,9 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + 'a>>;
     let mut prompt: Option<LineFuture<'_>> = None;
     let code = loop {
+        // 「回到等一行」每轮都到这里（等输入时被 80ms 采样唤醒），但 `RunState` 是边沿
+        // 通知：`ConsoleHandle::set_running` 只在值真的变了时才发，所以重复的这条不会把
+        // 一次运行切成每 80ms 一次（`run-state-edge` 票 01）。
         console.set_running(false);
         if prompt.is_none() {
             prompt = Some(Box::pin(console.prompt()));

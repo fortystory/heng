@@ -3986,8 +3986,12 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
         rows.join("\n")
     );
 
-    state.request(ConsoleRequest::Notify(
-        heng::render::ConsoleNotify::RunState { running: false },
+    // 运行走了：宿主三态回到空闲（`run-state-edge` 票 01 —— `RunState` 不是这次运行的边沿）。
+    state.request(ConsoleRequest::Facts(
+        heng::session::HostFacts::foreground_only(
+            state.front().clone(),
+            heng::session::host::SessionState::Idle,
+        ),
     ));
     let rows = screen(120, 24, &mut state);
     assert!(
