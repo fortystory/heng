@@ -20,7 +20,6 @@ use heng::render::{ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState, dra
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
-use std::collections::BTreeMap;
 
 /// 这个会话的工具表里那些**声明**：`bash` 在里面（重放的那些工具调用用的就是它）。
 ///
@@ -28,20 +27,16 @@ use std::collections::BTreeMap;
 /// 逐字相同」这条契约也包括那个「声明」面（票 24 收口补的那一面）。
 ///
 /// **用法说明也在里面** —— 那正是今天丢掉的那一样（票 07）。
-fn tool_declarations() -> BTreeMap<String, heng::render::declaration::ToolDeclaration> {
-    let mut declarations = BTreeMap::new();
-    declarations.insert(
-        "bash".to_owned(),
-        heng::render::declaration::ToolDeclaration {
-            description: "在沙箱里跑一条命令。".to_owned(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {"command": {"type": "string"}},
-                "required": ["command"],
-            }),
-        },
-    );
-    declarations
+fn tool_declarations() -> Vec<heng::render::declaration::ToolDeclaration> {
+    vec![heng::render::declaration::ToolDeclaration {
+        name: "bash".to_owned(),
+        description: "在沙箱里跑一条命令。".to_owned(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        }),
+    }]
 }
 
 fn facts() -> SessionFacts {
@@ -321,7 +316,7 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
 
 /// 工具详情顶上那条标签条上的六个面名 —— 它同时是「覆盖层立着、正落在**参数**那一面」
 /// 的判据（票 13 第 5 条），而今天那块正文里的小节标题 `── 参数 ──` 不再画了。
-const TOOL_FACES: &str = "参数┆输出┆Schema┆计时┆来源┆概述";
+const TOOL_FACES: &str = "参数┆输出┆声明┆计时┆来源┆概述";
 
 /// 切到下一面（`Tab`）—— 那些输出正文住在「输出」那一面上，而打开时落在「参数」。
 fn next_face(state: &mut TuiState) {

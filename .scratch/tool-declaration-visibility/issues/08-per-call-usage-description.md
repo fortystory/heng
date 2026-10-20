@@ -1,7 +1,7 @@
 # 08: 工具调用的详情里能读到用法说明（per-call · 通道三）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 07, 04, 05
 Part of: ../map.md
 
@@ -50,4 +50,64 @@ Part of: ../map.md
 
 ## 评论
 
-（空 —— 开工时补：落地与实测）
+- 2026-10-21 落地：**那个面先画用法说明、再画参数 schema** —— 两节，各带一个小标题
+  （`── 用法说明 ──` / `── 参数 schema ──`），用法说明按正文宽折行（与参数面同一套
+  [`folded_text`] 排法），参数 schema 仍**原样** `pretty` 打印。
+
+  **面与标签改名**（06 的连带面清单点名的那一处）：`FaceId::Schema` → `FaceId::Declaration`，
+  标签 `wording::detail_schema_face()`（显示为「Schema」）→ `wording::detail_declaration_face()`
+  （显示为「**声明**」）。理由写进注释：它画的是**整份声明**（用法说明 + 参数 schema），而
+  「Schema」只对了其中一半。分派表那一行（工具那六面：参数 · 输出 · **声明** · 计时 · 来源 ·
+  概述）与面名一起改，位置不动 —— 界面不新增入口。
+
+  **查不到时照旧**：工具名不在表里时仍是那一句「工具表里没有「<名字>」，这次调用的声明查不到」
+  （`wording::detail_schema_missing`，**措辞一个字没动**）—— 不新造措辞、不画空面、不编一份
+  schema 出来。查得到时那一面是**两节**，于是两节的小标题都在（面里的 section 小标题只在
+  ≥ 2 节时画）；查不到时只有一节，于是那一面**一个字的小标题都不画**。
+
+  **模型可见文本零变化、事件流零变化**：新增的三处措辞只在 TUI 详情覆盖层里用，`messages`
+  与 `log.jsonl` 一个字节没动。
+
+  **动了哪些件**：`src/render/tui.rs`（面 id、标签、分派表那一行、画法与它的单元测试）、
+  `src/render/wording.rs`（**只**改这个面相关的措辞：标签与两段小标题；别的措辞一个字不动）、
+  `tests/render_layout.rs`（那一节的用例）。**另有一处范围外的必改**：`tests/history_replay.rs`
+  里那条标签条常量 `TOOL_FACES`（`"参数┆输出┆Schema┆…"` → `"参数┆输出┆声明┆…"`）——
+  面名改了它就过时，不改则那条测试必红，所以一并改了（只改那一个字符串）。
+
+  **测试**（先红后绿，一个 slice 一条）：
+  - 单元测试（`src/render/tui.rs` 的 `#[cfg(test)]`）**新增 2 条**：
+    `the_declaration_face_reads_the_usage_description_before_the_parameters`（两节都在位，且用法
+    说明那一节的正文排在参数 schema 那一节之前）、`the_declaration_face_wraps_the_usage_description_to_the_body_width`
+    （320 字符的说明在正文宽 40 上折成多行，且每一行都不宽于正文宽）。
+    **改写 2 条**：`the_schema_face_prints_the_declaration_verbatim` →
+    `the_declaration_face_prints_the_parameter_schema_verbatim`（参数 schema 那段仍原样 `pretty`
+    打印）、`a_call_with_no_started_event_reports_its_schema_as_missing`（查不到时仍是那一句）。
+    另加一条测试帮手 `face_body`（把面**连小节标题**一起摊成文本 —— `face_text` 不带标题）。
+  - 集成测试（`tests/render_layout.rs`）**新增 2 条**：
+    `the_declaration_face_reads_the_usage_description_before_the_parameters`（在画出来的那一帧上，
+    两节标题的先后与正文的先后都对）、`the_declaration_face_reads_a_long_usage_description_and_a_short_one`
+    （896 字符与 63 字符两种长度：开头可见、折成多行、滚到底读得到末尾）。
+    **改名 2 条**：`the_schema_face_shows_the_declaration_of_the_tool_this_call_used` →
+    `the_declaration_face_prints_the_parameter_schema_verbatim`（这一面仍不是参数面）、
+    `the_schema_face_says_so_when_the_tool_is_not_in_the_table` →
+    `the_declaration_face_says_so_when_the_tool_is_not_in_the_table`（**断言一个字没改**）。
+
+  **实测**（本机）：
+
+  | 命令 | 结果 |
+  | --- | --- |
+  | `cargo test --lib render::` | ok. **211** passed; 0 failed（改动前 209，新增 2） |
+  | `cargo test --test render_layout` | ok. **310** passed; 0 failed（改动前 308，新增 2） |
+  | `cargo test --test history_replay` | ok. **38** passed; 0 failed（只改了那一个常量字符串） |
+  | `cargo test --no-fail-fast` | ok. **1939** passed; **0** failed（89 个测试二进制） |
+  | `cargo clippy --all-targets` | Finished，无警告 |
+  | `cargo fmt --check` | 干净 |
+  | `python3 scripts/check-language.py` | OK |
+
+  **逐面文档要跟着改的**（并进[票 10](10-docs-glossary-and-walkthrough.md)）：
+  `docs/render.md` 的「检视器的面」那张分派表里「工具」那一行（`Schema` → **声明**）、
+  那一节里「**Schema**：……」那条 bullet（要写清它**先画用法说明、再画参数 schema**，两节各带
+  小标题；用法说明按正文宽折行，参数 schema 原样 `pretty` 打印），以及「系统提示词」那一节
+  （09 的先例）。**「声明」与「参数 schema」在文档里要分清**：前者是整份三件套（用法说明 +
+  参数 schema），后者只是其中一样。
+

@@ -10,7 +10,6 @@
 mod common;
 
 use common::{buffer, click, find_cell_char, row_text, screen_lines};
-use std::collections::BTreeMap;
 
 use heng::events::SessionId;
 
@@ -30,20 +29,16 @@ use ratatui::style::{Color, Modifier};
 /// 与查不到两条路都能在这条接缝上测（票 24 收口补的那一面）。
 ///
 /// **用法说明也在里面** —— 那正是今天丢掉的那一样（票 07）。
-fn tool_declarations() -> BTreeMap<String, heng::render::declaration::ToolDeclaration> {
-    let mut declarations = BTreeMap::new();
-    declarations.insert(
-        "bash".to_owned(),
-        heng::render::declaration::ToolDeclaration {
-            description: "在沙箱里跑一条命令。".to_owned(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {"command": {"type": "string", "description": "要跑的命令"}},
-                "required": ["command"],
-            }),
-        },
-    );
-    declarations
+fn tool_declarations() -> Vec<heng::render::declaration::ToolDeclaration> {
+    vec![heng::render::declaration::ToolDeclaration {
+        name: "bash".to_owned(),
+        description: "在沙箱里跑一条命令。".to_owned(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string", "description": "要跑的命令"}},
+            "required": ["command"],
+        }),
+    }]
 }
 
 fn facts() -> SessionFacts {
@@ -60,7 +55,7 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
-        // 工具表里那些声明：详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
+        // 工具表里那些声明：详情覆盖层的声明面按名字查它（票 24 收口补的那一面）。
         tool_declarations: tool_declarations(),
         speaker_order: Vec::new(),
     }
@@ -171,7 +166,7 @@ fn transcript_rows(rows: &[String]) -> usize {
 /// 它同时是「覆盖层立着、正落在**默认面**上」的判据：工具落在**参数**、消息落在**正文**
 /// （票 13 第 5 条）。今天那块正文里的小节标题 `── 参数 ──` 不再画了 —— 面名由标签条说，
 /// 正文不重复它（票 13 第 9 条）。
-const TOOL_FACES: &str = "参数┆输出┆Schema┆计时┆来源┆概述";
+const TOOL_FACES: &str = "参数┆输出┆声明┆计时┆来源┆概述";
 const MESSAGE_FACES: &str = "正文┆用量┆计时┆概述";
 
 /// 切到下一面：覆盖层立着时 `Tab` 是空键，于是它归标签条（票 13 第 3 条）。
@@ -6437,9 +6432,9 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
 }
 
 #[test]
-fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
-    // Schema 面画的是**这次调用那个工具在工具表里的声明**（发给 provider 的那份 JSON Schema），
-    // 原样 `pretty` 打印 —— 与参数面同一套排法。它是票 24 收口时补的第三面。
+fn the_declaration_face_reads_the_usage_description_before_the_parameters() {
+    // 声明面**先画用法说明、再画参数 schema** —— 于是「这次调用的那个工具声明是什么」在界面上
+    // 读得到（票 08）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -6451,14 +6446,50 @@ fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
     open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
-    // 打开落在参数面（票 13 第 5 条），参数 → 输出 → Schema 是三下 `Tab` 里的第三面。
+    // 打开落在参数面（票 13 第 5 条），参数 → 输出 → 声明 是三下 `Tab` 里的第三面。
+    next_face(&mut state);
+    next_face(&mut state);
+    let text = screen_lines(120, 40, &mut state).join("\n");
+    assert!(text.contains(TOOL_FACES), "标签条列着这几面：{text}");
+    let usage = text
+        .find(wording::declaration_usage_section())
+        .expect("用法说明那一节在屏幕上");
+    let parameters = text
+        .find(wording::declaration_parameters_section())
+        .expect("参数 schema 那一节在屏幕上");
+    assert!(usage < parameters, "用法说明在前：{text}");
+    let body = text
+        .find("在沙箱里跑一条命令。")
+        .expect("那段用法说明的正文在屏幕上");
+    assert!(
+        body < parameters,
+        "用法说明的正文在参数 schema 之前：{text}"
+    );
+}
+
+#[test]
+fn the_declaration_face_prints_the_parameter_schema_verbatim() {
+    // 声明面里**参数 schema 那一段**是原样 `pretty` 打印的 —— 与参数面同一套排法（票 24 收口
+    // 时补的那一面，票 08 把它放到用法说明之后）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-s1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-s1", true, Some("ok"), None));
+    open_trace_tab(&mut state, 120, 40);
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    // 打开落在参数面（票 13 第 5 条），参数 → 输出 → 声明 是三下 `Tab` 里的第三面。
     next_face(&mut state);
     next_face(&mut state);
     let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "标签条列着这几面：{text}");
     assert!(
         text.contains("\"type\": \"object\""),
-        "那一份声明原样画在上面：{text}"
+        "那一份参数 schema 原样画在上面：{text}"
     );
     assert!(text.contains("要跑的命令"), "连同它自己的描述一起：{text}");
     assert!(
@@ -6467,12 +6498,78 @@ fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
     );
 }
 
+/// 一段用法说明：正文重复到 `body_len` 个字符，末尾带一句**唯一**的结尾标记。
+///
+/// 结尾标记是给「读得下去」那条断言用的 —— 滚到底时它得在屏幕上。
+fn usage_description(body_len: usize) -> String {
+    const SENTENCE: &str = "在沙箱里跑一条命令。";
+    const TAIL: &str = "这一条用法说明到此为止。";
+    let mut body = String::new();
+    while body.chars().count() < body_len {
+        body.push_str(SENTENCE);
+    }
+    format!("{body}{TAIL}")
+}
+
 #[test]
-fn the_schema_face_says_so_when_the_tool_is_not_in_the_table() {
+fn the_declaration_face_reads_a_long_usage_description_and_a_short_one() {
+    // 最长的一条用法说明 896 字符、最短的一条 63 字符（研究 01 第 2 节）—— 两种长度下都
+    // 读得下去：长的折成多行、滚到底读得到末尾；短的整个在屏幕上。
+    for (tool, len) in [("long", 896), ("short", 63)] {
+        let declarations = vec![heng::render::declaration::ToolDeclaration {
+            name: tool.to_owned(),
+            description: usage_description(len),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let mut session_facts = facts_with_roster(&["kimi"]);
+        session_facts.tool_declarations = declarations;
+        let mut state = TuiState::new(session_facts, std::path::PathBuf::from("/x/heng"), None);
+        state.apply(tool_started(
+            1,
+            "call-x",
+            tool,
+            serde_json::json!({"command": "ls"}),
+        ));
+        state.apply(tool_completed(2, "call-x", true, Some("ok"), None));
+        open_trace_tab(&mut state, 120, 40);
+
+        click_row(&mut state, 120, 40, &format!("调用 {tool}"));
+        next_face(&mut state);
+        next_face(&mut state);
+        let rows = screen_lines(120, 40, &mut state);
+        let text = rows.join("\n");
+        assert!(
+            text.contains(wording::declaration_usage_section()),
+            "用法说明那一节在屏幕上（{tool}）：{text}"
+        );
+        assert!(
+            text.contains("在沙箱里跑一条命令。"),
+            "那段说明的开头在屏幕上（{tool}）：{text}"
+        );
+        // 那段说明**折成了多行** —— 896 字符在正文宽里放不下（票 08 第 3 条）。
+        let folded = rows
+            .iter()
+            .filter(|row| row.contains("在沙箱里跑一条命令。"))
+            .count();
+        assert!(folded > 1, "那段说明折成了多行（{tool}）：{rows:#?}");
+        // 滚到底 —— 末尾那一句得读得到。
+        for _ in 0..8 {
+            state.key(Key::PageDown);
+        }
+        let text = screen_lines(120, 40, &mut state).join("\n");
+        assert!(
+            text.contains("这一条用法说明到此为止。"),
+            "滚到底读得到那段说明的末尾（{tool}）：{text}"
+        );
+    }
+}
+
+#[test]
+fn the_declaration_face_says_so_when_the_tool_is_not_in_the_table() {
     // 工具表里没有这个名字时**写一句话说明查不到** —— 重放一个老会话时那个工具可能已经不在
     // 表里。不画空面、也不编一份 schema 出来（票 24 收口的降级）。
     let mut session_facts = facts_with_roster(&["kimi"]);
-    session_facts.tool_declarations = BTreeMap::new();
+    session_facts.tool_declarations = Vec::new();
     let mut state = TuiState::new(session_facts, std::path::PathBuf::from("/x/heng"), None);
     state.apply(tool_started(
         1,
@@ -6593,7 +6690,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
-            // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
+            // 工具表里那些声明：声明面按名字查它（票 24 收口补的那一面）。
             tool_declarations: tool_declarations(),
             speaker_order: vec!["kimi".to_owned()],
         },
@@ -7572,7 +7669,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
-            // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
+            // 工具表里那些声明：声明面按名字查它（票 24 收口补的那一面）。
             tool_declarations: tool_declarations(),
             speaker_order: vec!["kimi".to_owned()],
         },
@@ -10141,8 +10238,8 @@ fn a_tool_timing_face_only_shows_the_section_it_can_prove() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → Schema
-    next_face(&mut state); // Schema → 计时
+    next_face(&mut state); // 输出 → 声明
+    next_face(&mut state); // 声明 → 计时
 
     let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("开始时刻"), "{text}");
@@ -10202,13 +10299,13 @@ fn each_face_keeps_its_own_scroll_position() {
         "而开头的那些行早就不在窗口里了：{scrolled}"
     );
 
-    next_face(&mut state); // 输出 → Schema
-    next_face(&mut state); // Schema → 计时
+    next_face(&mut state); // 输出 → 声明
+    next_face(&mut state); // 声明 → 计时
     let timing = screen_lines(120, 40, &mut state).join("\n");
     assert!(timing.contains("开始时刻"), "而计时面从头开始：{timing}");
 
-    state.key(Key::BackTab); // 计时 → Schema
-    state.key(Key::BackTab); // Schema → 输出
+    state.key(Key::BackTab); // 计时 → 声明
+    state.key(Key::BackTab); // 声明 → 输出
     let back = screen_lines(120, 40, &mut state).join("\n");
     assert_eq!(back, scrolled, "切回来还在原处");
 }
@@ -10331,8 +10428,8 @@ fn a_chain_that_breaks_ends_there_instead_of_a_placeholder() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → Schema
-    next_face(&mut state); // Schema → 计时
+    next_face(&mut state); // 输出 → 声明
+    next_face(&mut state); // 声明 → 计时
     next_face(&mut state); // 计时 → 来源
 
     let text = screen_lines(120, 40, &mut state).join("\n");

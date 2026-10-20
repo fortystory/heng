@@ -36,7 +36,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
-use std::collections::BTreeMap;
 use tokio::sync::broadcast;
 
 use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId, Usage};
@@ -404,17 +403,20 @@ pub struct SessionFacts {
     /// 与 `file_viewer` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
     /// （`.scratch/diff-page/spec.md` §8）。
     pub diff_viewer: crate::config::DiffViewerSettings,
-    /// 这个会话的工具表里，每个工具的**声明**：工具名 → provider 收到的那份声明
-    /// （`Registry::specs()` 那三件套里的两样：**用法说明 + 参数 schema**；名字是键）。
+    /// 这个会话的**工具表**：一份**有序的清单**，一条一份**声明**（provider 收到的那三件套：
+    /// 名字 + 用法说明 + 参数 schema）。
     ///
-    /// 详情覆盖层那个「声明」面按工具名查它：用法说明原样摊开，参数 schema **原样** `pretty`
-    /// 打出来。与 `number_style` / `file_viewer` / `speaker_order` 同一条纪律：**组装期的事实，
-    /// 组装时注入一次，会话中途不变** —— 工具表在组装时就建好，此后只读（工具数组是缓存前缀的
-    /// 一部分，spec §14）。
+    /// **顺序**就是 `Registry::specs()` 给的那张表的顺序 —— 与 provider 收到的 `tools` 数组
+    /// 同序，于是「这张表长什么样」与「模型看到的那张」对得上（票 06 的「顺序」那一条）。
+    ///
+    /// 详情覆盖层那个「声明」面按工具名查它：用法说明按正文宽折行摊开，参数 schema **原样**
+    /// `pretty` 打出来。与 `number_style` / `file_viewer` / `speaker_order` 同一条纪律：**组装期的
+    /// 事实，组装时注入一次，会话中途不变** —— 工具表在组装时就建好，此后只读（工具数组是缓存
+    /// 前缀的一部分，spec §14）。
     ///
     /// 注入的是**主会话那张表**：执行者手里的 [`crate::tools::Registry::for_executor`] 是它的
     /// 子集（滤掉不可委派的），所以这个名字集合覆盖得了这个会话里出现的每一次调用。
-    pub tool_declarations: BTreeMap<String, crate::render::declaration::ToolDeclaration>,
+    pub tool_declarations: Vec<crate::render::declaration::ToolDeclaration>,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
@@ -14561,9 +14563,12 @@ enum FaceId {
     Args,
     /// 一次工具调用的输出。
     Output,
-    /// 这次调用那个工具在工具表里的**声明 schema**：发给 provider 的那份 JSON Schema（票 24
-    /// 收口时补的那一面）。
-    Schema,
+    /// 这次调用那个工具在工具表里的**整份声明**：provider 收到的那三件套里的两样 ——
+    /// **用法说明**与**参数 schema**（票 08）。
+    ///
+    /// 它原先叫 `Schema`、只画参数 schema，于是那段用法说明在界面上一个字都读不到；面名与
+    /// 它画的东西对齐，改为「声明」。
+    Declaration,
     /// 一条消息 / 一段思考的用量：本次与这一趟会话两节（票 15）。
     Usage,
     /// 这一块的时间：开始 / 总时长 / 首 token / 生成 / 吞吐 / 等审批。
@@ -14584,7 +14589,7 @@ impl FaceId {
             FaceId::Injection => wording::detail_injection_face(),
             FaceId::Args => wording::detail_args_section(),
             FaceId::Output => wording::detail_output_section(),
-            FaceId::Schema => wording::detail_schema_face(),
+            FaceId::Declaration => wording::detail_declaration_face(),
             FaceId::Usage => wording::detail_usage_face(),
             FaceId::Timing => wording::detail_timing_face(),
             FaceId::Source => wording::detail_source_face(),
@@ -14620,7 +14625,7 @@ const DETAIL_FACES: &[(RecordKind, &[FaceId])] = &[
         &[
             FaceId::Args,
             FaceId::Output,
-            FaceId::Schema,
+            FaceId::Declaration,
             FaceId::Timing,
             FaceId::Source,
             FaceId::Summary,
@@ -14725,7 +14730,7 @@ impl Face {
 fn detail_faces(
     detail: &Detail,
     session_dir: &str,
-    declarations: &BTreeMap<String, crate::render::declaration::ToolDeclaration>,
+    declarations: &[crate::render::declaration::ToolDeclaration],
     width: usize,
     numbers: wording::NumberStyle,
 ) -> Vec<Face> {
@@ -14749,7 +14754,7 @@ fn face_sections(
     detail: &Detail,
     face: FaceId,
     session_dir: &str,
-    declarations: &BTreeMap<String, crate::render::declaration::ToolDeclaration>,
+    declarations: &[crate::render::declaration::ToolDeclaration],
     width: usize,
     numbers: wording::NumberStyle,
 ) -> Vec<Section> {
@@ -14785,9 +14790,7 @@ fn face_sections(
         (Tool(tool), FaceId::Output) => {
             vec![Section::whole(tool_output_rows(tool, session_dir, width))]
         }
-        (Tool(tool), FaceId::Schema) => {
-            vec![Section::whole(tool_schema_rows(tool, declarations, width))]
-        }
+        (Tool(tool), FaceId::Declaration) => tool_declaration_sections(tool, declarations, width),
         _ => Vec::new(),
     }
 }
@@ -15052,26 +15055,44 @@ fn tool_output_rows(tool: &ToolBlock, session_dir: &str, width: usize) -> Vec<De
     rows
 }
 
-/// 一次调用的**声明 schema**：这次用的那个工具在工具表里的那一份（发给 provider 的 JSON
-/// Schema），**原样** `pretty` 打印、按正文宽度折行 —— 与参数面同一套 [`folded_text`] 排法。
+/// 一次调用的**整份声明**：这次用的那个工具在工具表里的那一份 —— **用法说明**在前、
+/// **参数 schema** 在后，两节各带一个小标题。
+///
+/// 用法说明按正文宽度折行（与参数面同一套 [`folded_text`] 排法），参数 schema **原样**
+/// `pretty` 打印 —— 与今天那一面同一套排法，只是前面多了一段用法说明。
 ///
 /// 查不到时写一句话（[`wording::detail_schema_missing`]）：不画空面、也不编一份 schema 出来。
 /// 工具表是**这个会话**建的那张，而重放一个老会话时那个工具可能已经不在表里，一条没有配对
 /// 开始的调用还会把工具名记成 `?`。
-fn tool_schema_rows(
+fn tool_declaration_sections(
     tool: &ToolBlock,
-    declarations: &BTreeMap<String, crate::render::declaration::ToolDeclaration>,
+    declarations: &[crate::render::declaration::ToolDeclaration],
     width: usize,
-) -> Vec<DetailLine> {
-    let Some(declaration) = declarations.get(&tool.tool) else {
-        return vec![DetailLine::plain(Line::from(Span::styled(
-            wording::detail_schema_missing(&tool.tool),
-            Style::default().fg(palette::MUTED),
-        )))];
+) -> Vec<Section> {
+    // 按名字找那一条 —— 二十来条，一次线性找就够（票 06 的「顺序」那一条）。
+    let Some(declaration) = declarations
+        .iter()
+        .find(|declaration| declaration.name == tool.tool)
+    else {
+        return vec![Section::whole(vec![DetailLine::plain(Line::from(
+            Span::styled(
+                wording::detail_schema_missing(&tool.tool),
+                Style::default().fg(palette::MUTED),
+            ),
+        ))])];
     };
     let pretty = serde_json::to_string_pretty(&declaration.parameters)
         .unwrap_or_else(|_| declaration.parameters.to_string());
-    folded_text(&pretty, width)
+    vec![
+        Section::named(
+            wording::declaration_usage_section(),
+            folded_text(&declaration.description, width),
+        ),
+        Section::named(
+            wording::declaration_parameters_section(),
+            folded_text(&pretty, width),
+        ),
+    ]
 }
 
 /// 一面已经带样式的行，按 `width` 折开，续行标成折出来的。
@@ -18944,43 +18965,114 @@ mod tests {
         .join("\n")
     }
 
+    /// 一面的正文**连小节标题**一起，作为一块文本 —— 读的人看见的就是这一块
+    /// （小节标题在「这一面 ≥ 2 节」时才画，见 [`Face::from_sections`]）。
+    fn face_body(detail: &Detail, id: FaceId) -> String {
+        Face::from_sections(
+            id,
+            face_sections(
+                detail,
+                id,
+                "/tmp",
+                &declarations(),
+                88,
+                wording::NumberStyle::Cn,
+            ),
+        )
+        .rows
+        .iter()
+        .map(|row| line_text(&row.line))
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
+
     /// 单位测试手里那份工具表：`bash` 的声明在里面，别的名字都不在 —— 于是那个「声明」面这一侧
     /// 查得到与查不到两条路都测得动（票 24 收口时补的那一面）。
     ///
     /// **用法说明也在里面** —— 那正是今天丢掉的���样（票 07）。
-    fn declarations() -> BTreeMap<String, crate::render::declaration::ToolDeclaration> {
-        let mut declarations = BTreeMap::new();
-        declarations.insert(
-            "bash".to_owned(),
-            crate::render::declaration::ToolDeclaration {
-                description: "在沙箱里跑一条命令。".to_owned(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "required": ["command"],
-                }),
-            },
-        );
-        declarations
+    fn declarations() -> Vec<crate::render::declaration::ToolDeclaration> {
+        vec![crate::render::declaration::ToolDeclaration {
+            name: "bash".to_owned(),
+            description: "在沙箱里跑一条命令。".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            }),
+        }]
     }
 
-    /// Schema 面画的是**这次调用那个工具**在工具表里的那一份，原样 `pretty` 打印
-    /// （票 24 收口时补的那一面）。
+    /// 声明面里**参数 schema 那一段**是**原样** `pretty` 打印的 —— 一个字节都不改
+    /// （票 24 收口时补的那一面，票 08 把它放到用法说明之后）。
     #[test]
-    fn the_schema_face_prints_the_declaration_verbatim() {
+    fn the_declaration_face_prints_the_parameter_schema_verbatim() {
         let (_, detail) = details_by_kind()
             .into_iter()
             .find(|(kind, _)| *kind == RecordKind::Tool)
             .expect("工具那一份");
-        let text = face_text(&detail, FaceId::Schema);
-        assert_eq!(
-            text,
-            serde_json::to_string_pretty(&declarations()["bash"].parameters).expect("pretty"),
-            "那一份声明原样在位"
+        let text = face_text(&detail, FaceId::Declaration);
+        let pretty = serde_json::to_string_pretty(&declarations()[0].parameters).expect("pretty");
+        assert!(text.contains(&pretty), "那一份参数 schema 原样在位：{text}");
+    }
+
+    /// **声明面先画用法说明、再画参数 schema** —— 于是「这次调用的那个工具声明是什么」在界面上
+    /// 读得到（票 08）。
+    #[test]
+    fn the_declaration_face_reads_the_usage_description_before_the_parameters() {
+        let (_, detail) = details_by_kind()
+            .into_iter()
+            .find(|(kind, _)| *kind == RecordKind::Tool)
+            .expect("工具那一份");
+        let text = face_body(&detail, FaceId::Declaration);
+        let usage = text
+            .find(wording::declaration_usage_section())
+            .expect("用法说明那一节在位");
+        let parameters = text
+            .find(wording::declaration_parameters_section())
+            .expect("参数 schema 那一节在位");
+        assert!(usage < parameters, "用法说明在前：{text}");
+        let body = text
+            .find("在沙箱里跑一条命令。")
+            .expect("那段用法说明的正文在位");
+        assert!(
+            body < parameters,
+            "用法说明的正文在参数 schema 之前：{text}"
         );
     }
 
-    /// 一条**没有配对开始**的调用（转录把工具名记成 `?`）在 Schema 面上写的是同一句实话 ——
+    /// 用法说明按**正文宽**折行 —— 与那个面里参数 schema 同一套排法（票 08 第 3 条）。
+    ///
+    /// 这一条不是摆设：最长的一条用法说明有 896 字符（研究 01 第 2 节）。
+    #[test]
+    fn the_declaration_face_wraps_the_usage_description_to_the_body_width() {
+        let (_, detail) = details_by_kind()
+            .into_iter()
+            .find(|(kind, _)| *kind == RecordKind::Tool)
+            .expect("工具那一份");
+        let DetailKind::Tool(tool) = &detail.kind else {
+            panic!("工具详情");
+        };
+        let mut tool = (**tool).clone();
+        tool.tool = "long".to_owned();
+        let mut declarations = declarations();
+        declarations.push(crate::render::declaration::ToolDeclaration {
+            name: "long".to_owned(),
+            description: "在沙箱里跑一条命令。".repeat(40),
+            parameters: serde_json::json!({"type": "object"}),
+        });
+        let sections = tool_declaration_sections(&tool, &declarations, 40);
+        let lines: Vec<String> = sections[0]
+            .rows
+            .iter()
+            .map(|row| line_text(&row.line))
+            .collect();
+        assert!(lines.len() > 1, "那段说明折成了多行：{lines:?}");
+        for line in &lines {
+            assert!(text_columns(line) <= 40, "每一行都不宽于正文宽：{line}");
+        }
+    }
+
+    /// 一条**没有配对开始**的调用（转录把工具名记成 `?`）在声明面上写的是同一句实话 ——
     /// 它落到与「老会话里那个工具已经不在表里」同一个 miss 上（票 24 收口的降级）。
     #[test]
     fn a_call_with_no_started_event_reports_its_schema_as_missing() {
@@ -18993,10 +19085,15 @@ mod tests {
         };
         let mut tool = (**tool).clone();
         tool.tool = "?".to_owned();
-        let rows = tool_schema_rows(&tool, &declarations(), 88);
-        let text: String = rows
+        let text: String = tool_declaration_sections(&tool, &declarations(), 88)
             .iter()
-            .map(|row| line_text(&row.line))
+            .flat_map(|section| {
+                section
+                    .rows
+                    .iter()
+                    .map(|row| line_text(&row.line))
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(text, wording::detail_schema_missing("?"));

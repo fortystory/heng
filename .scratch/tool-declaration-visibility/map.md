@@ -1,7 +1,7 @@
 # 工具声明在界面上看得见（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 6 resolved + 4 ready-for-agent —— 图走完，构建切片已拆出
+Status: 6 resolved + 2 done + 2 ready-for-agent
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-21）。两张事实票当场收回；四张决策票同日在维护者面前收口
 （原型帧**没有出** —— 形态被直接拍定）。
@@ -160,8 +160,8 @@ Charting: **已完成**（2026-10-21）。两张事实票当场收回；四张�
 **四张实现票全部**被决策票挡着** —— 它们是那张图走完之后要落的形状，形态由 04 拍、内容由 05 拍、
 账的形状由 06 拍。决策票一改形状，对应的票就改或关（map 的规矩：被排除的方向**关闭**，不实现）。
 
-- [ ] [07: 工具声明的账带上整份声明（prefactor）](issues/07-account-carries-the-whole-declaration.md)
-- [ ] [08: 工具调用的详情里能读到用法说明（per-call）](issues/08-per-call-usage-description.md)
+- [x] [07: 工具声明的账带上整份声明（prefactor）](issues/07-account-carries-the-whole-declaration.md)
+- [x] [08: 工具调用的详情里能读到用法说明（per-call）](issues/08-per-call-usage-description.md)
 - [ ] [09: 转录上一条「工具声明」记录，点开是全表（会话级）](issues/09-session-level-declaration-record.md)
 - [ ] [10: 文档、词表与真机走查收口](issues/10-docs-glossary-and-walkthrough.md)
 

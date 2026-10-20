@@ -45,7 +45,6 @@ use crate::{
     SessionScaffold, SynthesizerParts, assemble, assemble_discussion, load,
 };
 use ratatui::buffer::CellWidth;
-use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

@@ -326,17 +326,13 @@ pub(crate) fn web_service(config: &Config) -> WebService {
 /// **用法说明也在里面** —— 今天这份账只抄了 `parameters`，于是 provider 读到的那段用法说明在
 /// 界面上一个字都读不到
 /// （`.scratch/tool-declaration-visibility/issues/07-account-carries-the-whole-declaration.md`）。
-pub(crate) fn tool_declarations(specs: Vec<ToolSpec>) -> BTreeMap<String, ToolDeclaration> {
+pub(crate) fn tool_declarations(specs: Vec<ToolSpec>) -> Vec<ToolDeclaration> {
     specs
         .into_iter()
-        .map(|spec| {
-            (
-                spec.name,
-                ToolDeclaration {
-                    description: spec.description,
-                    parameters: spec.parameters,
-                },
-            )
+        .map(|spec| ToolDeclaration {
+            name: spec.name,
+            description: spec.description,
+            parameters: spec.parameters,
         })
         .collect()
 }
@@ -533,13 +529,14 @@ mod tests {
             parameters: serde_json::json!({"type": "object"}),
         }];
         let account = tool_declarations(specs);
+        let declaration = account
+            .iter()
+            .find(|declaration| declaration.name == "ask_user_question")
+            .expect("那一条在");
         assert_eq!(
-            account["ask_user_question"].description, "何时问、答案 JSON 怎么读",
+            declaration.description, "何时问、答案 JSON 怎么读",
             "用法说明得跟着声明一起抄过去"
         );
-        assert_eq!(
-            account["ask_user_question"].parameters["type"], "object",
-            "参数 schema 还在"
-        );
+        assert_eq!(declaration.parameters["type"], "object", "参数 schema 还在");
     }
 }
