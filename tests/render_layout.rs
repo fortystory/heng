@@ -3233,18 +3233,30 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
         ));
     }
     let rows = screen(120, 24, &mut state);
-    let transcript = transcript_rows(&rows) as u16;
+    // 滚动条只在滚动时出现（`.scratch/wheel-routing/spec.md` §5）：先滚一格再画。
+    state.mouse(wheel_at(60, 10, true));
+    let rows_after = screen(120, 24, &mut state);
+    assert_eq!(rows_after.len(), rows.len(), "帧的形状不变");
+    let transcript = transcript_rows(&rows_after) as u16;
     let frame = buffer(120, 24, &mut state);
     // 只画滑块、不画轨道（`.scratch/tui-visual-language/issues/07` 决定 1）：那一列于是
     // 有东西、但不占满。
     let thumbs = (0..transcript)
         .filter(|y| frame[(SCROLLBAR_X, *y)].symbol() == "█")
         .count();
-    assert!(thumbs > 0, "有东西可读时滑块在");
+    assert!(thumbs > 0, "滚了一格之后滑块在");
     assert!(
         thumbs < transcript as usize,
         "轨道不画，所以不是每一行都有字形：{thumbs} / {transcript}"
     );
+
+    // 贴底那一格：滑块最后一格落在轨道最后一格（旧公式到不了这里）。
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlG);
+    state.mouse(wheel_at(60, 10, false));
+    let frame = buffer(120, 24, &mut state);
+    let last_thumb = (0..transcript).rfind(|y| frame[(SCROLLBAR_X, *y)].symbol() == "█");
+    assert_eq!(last_thumb, Some(transcript - 1), "回到最底下时滑块贴底");
 }
 
 #[test]
@@ -4327,10 +4339,9 @@ fn the_sidebar_page_leads_with_the_progress_line_and_keeps_only_the_open_items()
 }
 
 #[test]
-fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
-    // 这一页不滚动：进度行占掉页区第一行，条目拿剩下的，放不下的
-    // 在末行报出来。页区撑满之后（`.scratch/trace-tab/spec.md` §4）这一页高 15 行，
-    // 所以要 30 项才逼得出溢出行。
+fn the_todo_page_scrolls_instead_of_saying_how_many_more_there_are() {
+    // 有了视口，装不下的那几条靠滚轮够到；「＋N 项」那句退场
+    // （`.scratch/wheel-routing/spec.md` §4、票 04）。
     let items: Vec<(String, &str)> = (0..30)
         .map(|index| (format!("第 {index} 项"), "pending"))
         .collect();
@@ -4345,24 +4356,101 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
 
     let rows = sidebar_rows(&mut state, 120, 24);
-    let count = rows
-        .iter()
-        .position(|line| line.contains("0/30"))
-        .unwrap_or_else(|| panic!("进度那一行在页面上：{rows:#?}"));
-    // 进度行**在页区第一行**（不是像旧的计数行那样在最后），所以条目在它下面。
-    let shown = rows
-        .iter()
-        .skip(count + 1)
-        .filter(|line| (0..30).any(|index| line.contains(&format!("第 {index} 项"))))
-        .count();
-    let overflow = rows.last().cloned().unwrap_or_default();
-    assert_eq!(
-        shown, 13,
-        "15 行的页区里进度行拿一行、溢出行拿一行，条目画得下十三行：{rows:#?}"
+    assert!(
+        rows.iter().any(|line| line.contains("0/30")),
+        "进度那一行在页面上：{rows:#?}"
     );
     assert!(
-        overflow.contains("＋17 项"),
-        "末行说的是**一条都没露过面**的那几条（这一条露过，所以不算）：{overflow}"
+        rows.iter().any(|line| line.contains("第 0 项")),
+        "顶上第一条在：{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|line| line.contains('＋')),
+        "没有溢出读数了：{rows:#?}"
+    );
+
+    // 指针落在 todo 页区里滚两格：视口下移两行 —— 进度行与第一条滚出去，新的两条进来。
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    state.mouse(wheel_at(2, page as u16 + 2, false));
+    state.mouse(wheel_at(2, page as u16 + 2, false));
+    let rows = sidebar_rows(&mut state, 120, 24);
+    assert!(
+        !rows.iter().any(|line| line.contains("0/30")),
+        "滚下去之后进度行滚出去了：{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|line| line.contains("第 15 项")),
+        "下面那两条进来了：{rows:#?}"
+    );
+}
+
+#[test]
+fn the_sessions_page_scrolls_and_keeps_the_focus_visible() {
+    // 会话页有了视口：滚轮只动视口、不动焦点；键盘移焦点时视口把焦点行带进来；
+    // 「＋N 个会话」退场（`.scratch/wheel-routing/spec.md` §4、§6，票 04）。
+    let mut state = state_with_roster(&["kimi"]);
+    let entries: Vec<(String, String)> = (0..30)
+        .map(|index| (format!("01J8ZQ4K7{index:02}"), format!("会话 {index:02}")))
+        .collect();
+    let entries: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(id, title)| (id.as_str(), title.as_str()))
+        .collect();
+    host_sessions(&mut state, &entries);
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_SESSIONS);
+    let _ = screen(120, 24, &mut state);
+
+    let rows = sidebar_rows(&mut state, 120, 24);
+    // 页顶那一行的「关闭「<标题>」」也含标题 —— 列表断言只看内容行。
+    let listed = |rows: &[String]| -> Vec<String> {
+        rows.iter()
+            .filter(|line| !line.contains("关闭"))
+            .cloned()
+            .collect()
+    };
+    assert!(
+        listed(&rows).iter().any(|line| line.contains("会话 00")),
+        "顶上第一条在：{rows:#?}"
+    );
+    assert!(
+        !rows.join("\n").contains('＋'),
+        "没有「＋N 个会话」了：{rows:#?}"
+    );
+
+    // 滚轮：只动视口。组头也占一行，所以滚两格之后第一条才滚出去。
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    state.mouse(wheel_at(2, page as u16 + 2, false));
+    state.mouse(wheel_at(2, page as u16 + 2, false));
+    let rows = sidebar_rows(&mut state, 120, 24);
+    assert!(
+        !listed(&rows).iter().any(|line| line.contains("会话 00")),
+        "滚两格之后第一条滚出去了：{rows:#?}"
+    );
+    assert!(
+        listed(&rows).iter().any(|line| line.contains("会话 01")),
+        "第二条顶上来：{rows:#?}"
+    );
+
+    // 键盘：点一条落焦点，再一路往下 —— 焦点行始终被视口带在屏幕里。
+    let rows = sidebar_rows(&mut state, 120, 24);
+    let at = listed(&rows)
+        .iter()
+        .position(|line| line.contains("会话 05"))
+        .map(|index| index + 1)
+        .expect("第五条在屏幕上") as u16;
+    click_in_row(&mut state, 120, 24, at, "会话 05");
+    for _ in 0..20 {
+        state.key(Key::Down);
+    }
+    let rows = sidebar_rows(&mut state, 120, 24);
+    assert!(
+        listed(&rows).iter().any(|line| line.contains("会话 25")),
+        "焦点行被带进可见区：{rows:#?}"
+    );
+    assert!(
+        !listed(&rows).iter().any(|line| line.contains("会话 05")),
+        "视口跟着焦点一起走：{rows:#?}"
     );
 }
 
@@ -8190,7 +8278,11 @@ fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
         ));
     }
     open_trace_tab(&mut state, 120, 24);
-    state.mouse(wheel_at(10, 12, true));
+    // 轨迹住在右栏：指针要落在右栏正文里才滚得动它（票 02、`tui-chrome` §5）。
+    let panes =
+        heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+    let trace = panes.right_trace.expect("右栏的轨迹正文");
+    state.mouse(wheel_at(trace.x + 1, trace.y + 1, true));
     let frame = buffer(120, 24, &mut state);
     let Some((column, row)) = cell_of(&frame, 120, 24, "点此到底") else {
         panic!(
@@ -8722,13 +8814,16 @@ fn the_conversation_page_carries_no_stamps() {
 }
 
 // ---------------------------------------------------------------------------
-// 详情按视图还原（`.scratch/trace-tab/spec.md` §5；票 13）
+// 滚轮归属：指针在哪一栏就滚哪一栏（`.scratch/wheel-routing/spec.md` §1；票 02）
 // ---------------------------------------------------------------------------
 
-/// 指针在左栏、但显示的不是轨迹页时，滚轮仍归转录：轨迹 pane 这一帧没被画出来，滚它会
-/// 算出错的落点。判据是「轨迹页在不在屏幕上」，不是「指针在不在左栏」。
+/// 指针在左栏、主列、右栏、输入区上滚时，滚的（或什么都不滚的）是**指针所在的那一块**。
+///
+/// 这一条推翻旧行为：左栏调用量页与右栏轨迹上的滚轮都会穿透去滚主列。
 #[test]
-fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hidden() {
+fn the_wheel_stays_in_the_rail_the_pointer_is_over() {
+    use ratatui::layout::Rect;
+
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
         state.apply(RenderEvent::notice(
@@ -8737,14 +8832,190 @@ fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hi
         ));
     }
     let _ = screen(120, 24, &mut state);
-    let conversation_before = conversation_rows(&mut state, 120, 24);
+    let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
+    // 主列那一块（转录）的行 —— 右栏打开时 `conversation_rows` 会把右栏也读进来，
+    // 所以这里按排版给的矩形取。
+    fn main_rows(state: &mut TuiState) -> Vec<String> {
+        let frame = buffer(120, 24, state);
+        let panes =
+            heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
+        let transcript = panes.transcript;
+        (transcript.y..transcript.bottom())
+            .map(|y| cells(&frame, y, transcript.x, transcript.right()))
+            .collect()
+    }
+    let before = main_rows(&mut state);
 
-    state.mouse(wheel_at(10, 12, true));
+    let sidebar = panes.sidebar.expect("左栏画出来了");
+    state.mouse(wheel_at(sidebar.x + 1, sidebar.y + 3, true));
+    assert_eq!(
+        main_rows(&mut state),
+        before,
+        "左栏上的滚轮归左栏，不滚主列"
+    );
+
+    let input = panes.input;
+    state.mouse(wheel_at(input.x + 1, input.y, false));
+    assert_eq!(
+        main_rows(&mut state),
+        before,
+        "输入区上没有落点：什么都不滚"
+    );
+
+    // 右栏默认关着：开起来、重画一帧，再在右栏里滚。
+    open_trace_tab(&mut state, 120, 24);
+    let before = main_rows(&mut state);
+    let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
+    let rail = panes.right_rail.expect("右栏打开着");
+    state.mouse(wheel_at(rail.x + 1, rail.y + 3, true));
+    assert_eq!(
+        main_rows(&mut state),
+        before,
+        "右栏上的滚轮归右栏，不滚主列"
+    );
+}
+
+/// 左栏收起之后，原来那一列属于主列：滚轮在那里落进主列（票 02 的「栏不在屏上」）。
+#[test]
+fn the_wheel_falls_through_to_the_conversation_when_the_sidebar_is_put_away() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
+    }
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::CtrlO);
+    let _ = screen(120, 24, &mut state);
+    let before = conversation_rows(&mut state, 120, 24);
+    state.mouse(wheel_at(2, 12, true));
     assert_ne!(
         conversation_rows(&mut state, 120, 24),
-        conversation_before,
-        "调用量页上滚的是转录"
+        before,
+        "左栏收起时，原来那一列属于主列"
     );
+}
+
+/// 平铺态：滚轮只滚指针所在那一格，不换前台、不动别格（票 06）。
+#[test]
+fn the_wheel_over_a_tile_scrolls_that_tile_only() {
+    use ratatui::layout::Rect;
+
+    let mut state = state_with_roster(&["kimi"]);
+    host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
+    }
+    let _ = screen(120, 40, &mut state);
+    let tiles = heng::render::layout::tile_cells(tile_pool(120, 40), 2).expect("两格");
+    fn tile_rows(state: &mut TuiState, rect: Rect) -> Vec<String> {
+        let frame = buffer(120, 40, state);
+        (rect.y..rect.bottom())
+            .map(|y| cells(&frame, y, rect.x, rect.right()))
+            .collect()
+    }
+
+    let focus_before = state.front().clone();
+    let first_before = tile_rows(&mut state, tiles[0]);
+
+    // 指针在非焦点格（第二格）上滚：前台与第一格都不动。
+    state.mouse(wheel_at(tiles[1].x + 2, tiles[1].y + 2, true));
+    assert_eq!(state.front(), &focus_before, "滚轮不换前台");
+    assert_eq!(
+        tile_rows(&mut state, tiles[0]),
+        first_before,
+        "别格一个字节不动"
+    );
+
+    // 指针在焦点格上滚：滚它自己。
+    state.mouse(wheel_at(tiles[0].x + 2, tiles[0].y + 3, true));
+    assert_ne!(
+        tile_rows(&mut state, tiles[0]),
+        first_before,
+        "焦点格上的滚轮滚它自己"
+    );
+}
+
+/// `/` 菜单是浮层：指针在它上面时滚轮挪高亮，而不是穿透去滚主列（票 07）。
+#[test]
+fn the_wheel_over_the_menu_moves_its_highlight() {
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+    let row = (0..24)
+        .find(|y| row_text(&frame, *y, 120).contains("/undo"))
+        .expect("菜单在屏幕上");
+    let text = row_text(&frame, row, 120);
+    let at = text.find("/undo").expect("第一项在那一行");
+    let column = text_columns(&text[..at]) as u16;
+    // 裸 `/` 打开时是一份用来看的列表：还没有任何一行被高亮。
+    assert!(
+        !frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "打开时没有高亮：{:?}",
+        frame[(column, row)].modifier
+    );
+    // 滚一格：高亮落到第一项。
+    state.mouse(wheel_at(column, row, false));
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "滚一格之后第一项拿到高亮"
+    );
+    // 再滚一格：高亮走到第二项。
+    state.mouse(wheel_at(column, row, false));
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        !frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "高亮离开第一项"
+    );
+    assert!(
+        frame[(column, row + 1)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "落到第二项"
+    );
+    // 回到第一项之后再往上滚：**停住**，不绕到最后一行（票 07）。
+    state.mouse(wheel_at(column, row, true));
+    state.mouse(wheel_at(column, row, true));
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "滚到顶上就停住，不绕回"
+    );
+}
+
+/// 右栏轨迹的滚动条也只在滚动时出现（票 05）。
+#[test]
+fn the_trace_rail_grows_a_scrollbar_only_while_it_is_scrolled() {
+    use ratatui::layout::Rect;
+
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
+    let trace = panes.right_trace.expect("右栏的轨迹正文");
+    let column = trace.right() - 1;
+    let thumbs = |state: &mut TuiState| -> usize {
+        let frame = buffer(120, 24, state);
+        (trace.y..trace.bottom())
+            .filter(|y| frame[(column, *y)].symbol() == "█")
+            .count()
+    };
+    assert_eq!(thumbs(&mut state), 0, "没滚过就不画");
+    state.mouse(wheel_at(trace.x + 2, trace.y + 2, true));
+    assert!(thumbs(&mut state) > 0, "滚过就画");
 }
 
 /// 维护者 2026-10-05 列的那几类运行日志只在轨迹页：回合 / 轮次的开始、正常的收尾、
@@ -9191,6 +9462,45 @@ fn picker_detailed(
         )),
         answer,
     )
+}
+
+#[test]
+fn the_wheel_over_the_picker_moves_its_highlight() {
+    // 选择器是浮层：指针在它框里滚轮挪高亮（票 07）；框外这一下归下面那一栏。
+    let mut state = state();
+    let (request, _answer) = picker_detailed(
+        "模型",
+        &[("a", true), ("b", true), ("c", true)],
+        0,
+        |_| String::new(),
+    );
+    state.request(request);
+    // 选择器的高亮是 `ACCENT` + `BOLD`（不是反显）；按候选自己所在的那一行找。
+    fn row_of(frame: &Buffer, label: &str) -> u16 {
+        (0..24)
+            .find(|y| row_text(frame, *y, 120).contains(label))
+            .unwrap_or_else(|| panic!("候选 {label:?} 在屏幕上"))
+    }
+    fn highlighted(frame: &Buffer, row: u16) -> bool {
+        (0..120).any(|x| {
+            let cell = &frame[(x, row)];
+            cell.fg == palette::ACCENT && cell.modifier.contains(Modifier::BOLD)
+        })
+    }
+    let frame = buffer(120, 24, &mut state);
+    let row_a = row_of(&frame, " a ");
+    assert!(highlighted(&frame, row_a), "一开始高亮在 a 上");
+    let column = (0..120)
+        .find(|x| {
+            let cell = &frame[(*x, row_a)];
+            cell.fg == palette::ACCENT && cell.modifier.contains(Modifier::BOLD)
+        })
+        .expect("a 行的列");
+    state.mouse(wheel_at(column, row_a, false));
+    let frame = buffer(120, 24, &mut state);
+    let row_b = row_of(&frame, " b ");
+    assert_ne!(row_a, row_b, "滚轮把高亮挪到了下一行");
+    assert!(highlighted(&frame, row_b), "高亮落在 b 上");
 }
 
 #[test]
@@ -11577,4 +11887,65 @@ fn a_medium_terminal_windows_the_track_around_the_current_node() {
         "窗口外的裁掉：{text}"
     );
     assert!(text.contains('⋮'), "被裁那一端有 ⋮：{text}");
+}
+
+/// 顶部页签条与状态行都没有视口：指针在它们上面滚，任何一栏都不动（票 02）。
+#[test]
+fn the_wheel_over_the_top_tabs_or_the_status_row_does_nothing() {
+    use ratatui::layout::Rect;
+
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
+    }
+    let _ = screen(120, 24, &mut state);
+    let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
+    let before = conversation_rows(&mut state, 120, 24);
+
+    let tabs = panes.top_tabs;
+    state.mouse(wheel_at(tabs.x + 2, tabs.y, true));
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        before,
+        "顶部页签条上什么都不滚"
+    );
+
+    let status = panes.status;
+    state.mouse(wheel_at(status.x + 2, status.y, false));
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        before,
+        "状态行上什么都不滚"
+    );
+}
+
+/// 流程页上的滚轮归右栏，不穿透去滚主列（票 02、05）。
+#[test]
+fn the_wheel_over_the_flow_page_does_not_reach_the_conversation() {
+    use ratatui::layout::Rect;
+
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(
+            heng::events::SessionId::new("01J8ZQ4K7M"),
+            format!("第 {index} 句话"),
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
+    click(&mut state, column, row);
+    let _ = screen(120, 24, &mut state);
+    let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
+    let rail = panes.right_rail.expect("右栏打开着");
+    let before = conversation_rows(&mut state, 120, 24);
+    state.mouse(wheel_at(rail.x + 2, rail.y + 4, false));
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        before,
+        "流程页上的滚轮不滚主列"
+    );
 }

@@ -2445,11 +2445,6 @@ pub fn session_count(total: usize, running: usize, wide: bool) -> String {
     }
 }
 
-/// 末行那句「还有多少个会话没露面」。
-pub fn session_more(missing: usize) -> String {
-    format!("＋{missing} 个会话")
-}
-
 /// 一行右端的相对时间，两档（`.scratch/session-tab/spec.md` §3）。
 ///
 /// 窄档只留得下 5 列（`刚刚` / `3分` / `2时` / `昨天` / `08-12`），宽档 11 列
@@ -3004,11 +2999,6 @@ pub fn changes_not_a_repo() -> &'static str {
 /// `PATH` 上找不到 `git`。与上一句分开：那是环境问题，不是「没改动」。
 pub fn changes_no_git() -> &'static str {
     "找不到 git"
-}
-
-/// 装不下时末行那一句：`还有 12 处改动`。
-pub fn changes_more(remaining: usize) -> String {
-    format!("还有 {remaining} 处改动")
 }
 
 /// 键盘在改动页上按 `r` 之后的那一句回执 —— 它说清这一下真的去取数了。

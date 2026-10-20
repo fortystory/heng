@@ -254,25 +254,27 @@ fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
 }
 
 #[test]
-fn the_more_line_counts_what_never_showed() {
+fn the_list_scrolls_instead_of_counting_what_never_showed() {
+    // 会话页有了视口：装不下的那几条靠滚轮够到，「＋N 个会话」那句退场
+    // （`.scratch/wheel-routing/spec.md` §4、票 04）。
     let mut state = fresh();
-    load(
-        &mut state,
-        vec![row(
-            "s-a",
-            "只露一面的那个会话",
-            "heng",
-            SessionMark::Idle,
-            1,
-        )],
-        6,
-    );
+    let rows = (0..30)
+        .map(|index| {
+            row(
+                &format!("s-{index:02}"),
+                &format!("会话 {index:02}"),
+                "heng",
+                SessionMark::Idle,
+                index + 1,
+            )
+        })
+        .collect();
+    load(&mut state, rows, 30);
     open_sessions(&mut state, 120, 24);
     let text = screen(120, 24, &mut state);
-    assert!(
-        text.contains(&wording::session_more(5)),
-        "末行说还有 5 个会话没露面：{text}"
-    );
+    assert!(!text.contains('＋'), "不再有溢出读数：{text}");
+    assert!(text.contains("会话 00"), "顶上第一条在：{text}");
+    assert!(!text.contains("会话 20"), "装不下的那条不在屏幕上：{text}");
 }
 
 #[test]

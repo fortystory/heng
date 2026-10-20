@@ -407,13 +407,16 @@ def review_rules(unit: Unit) -> list[str]:
 # **同日新增 `tool-declaration-visibility` 种子行时再跟一次**：同一类显式动作，`.scratch/README.md`
 #   15,100 / 78 → **15,250 / 79**（种子索引行也随 feature 增长；这一条记的是「工具声明在界面上
 #   看不见」这个缺口，见 `.scratch/tool-declaration-visibility/seed.md`）。
+# **2026-10-20 新增 `wheel-routing` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   15,250 / 79 → **15,500 / 80**（滚轮归属那一 feature 的 spec 索引行；见
+#   `.scratch/wheel-routing/spec.md`，七张实现票同日落地）。
 ENTRY_BUDGET = {
     # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
     # 19,950 → 20,100（终点 18,500 不变）。
     "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 15250,
-        "lines": 79,
+        "chars": 15500,
+        "lines": 80,
         "target_chars": 13500,
         "target_lines": 100,
     },

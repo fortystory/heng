@@ -35,10 +35,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block as WidgetBlock, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
-};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
 use std::collections::BTreeMap;
 use tokio::sync::broadcast;
 
@@ -876,6 +873,10 @@ mod projection {
         /// 与 [`Self::timeline`] 同一族：只吃渲染通道上已经到手的事件，每帧只读它一遍；
         /// 不进事件流、不落盘，切会话与重播都靠事件自然重建。
         pub(super) flow: crate::render::flow::FlowPanel,
+        /// 流程页的视口：起点、上一帧的总行数与窗口高（票 05）。内容装得下时恒 0。
+        pub(super) flow_top: usize,
+        pub(super) flow_total: usize,
+        pub(super) flow_window: usize,
         /// 块身份 → 它在轴上的落点（哪一刻、落哪条泳道）。
         ///
         /// 横带要问三件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
@@ -1219,6 +1220,9 @@ impl View {
             painted: Vec::new(),
             timeline: Timeline::default(),
             flow: crate::render::flow::FlowPanel::default(),
+            flow_top: 0,
+            flow_total: 0,
+            flow_window: 0,
             block_at: std::collections::HashMap::new(),
             in_call: false,
             turn_calls: 0,
@@ -2694,10 +2698,14 @@ mod keyboard_layers {
     use crate::render::keyboard::{KeyOutcome, KeyboardLayer};
 
     /// 一次分派用的层表。7 个 unit struct；除了这个 `Vec` 本身没有别的状态。
+    ///
+    /// 表尾那一层最先试：重放 > 文件查看器 > 选择器 > 详情覆盖层 > 左栏 > 平铺格 > 右栏 >
+    /// 输入区。滚轮也沿这条链认领，但认的是**矩形**而不是「持不持键盘」（票 02）。
     pub(super) fn table() -> Vec<Box<dyn KeyboardLayer<TuiState>>> {
         vec![
             Box::new(InputLayer),
             Box::new(TraceLayer),
+            Box::new(TilesLayer),
             Box::new(SidebarLayer),
             Box::new(DetailLayer),
             Box::new(PickerLayer),
@@ -2778,6 +2786,26 @@ mod keyboard_layers {
                 KeyOutcome::NotMine
             }
         }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            column: u16,
+            row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            // 选择器是浮层：指针在它框里滚轮挪高亮（票 07），框外归下面那一栏。
+            let Some(picker) = state.picker.as_mut() else {
+                return KeyOutcome::NotMine;
+            };
+            if !picker
+                .rect
+                .is_some_and(|rect| rect.contains((column, row).into()))
+            {
+                return KeyOutcome::NotMine;
+            }
+            picker.move_highlight(if up { -1 } else { 1 });
+            KeyOutcome::Handled
+        }
     }
 
     /// 详情覆盖层：自成一体的视图模式，立着时独占键盘与指针（票 02 §4）。
@@ -2824,11 +2852,19 @@ mod keyboard_layers {
         fn handle_wheel(
             &mut self,
             state: &mut TuiState,
-            _column: u16,
-            _row: u16,
+            column: u16,
+            row: u16,
             up: bool,
         ) -> KeyOutcome {
-            if state.detail_open() {
+            if !state.detail_open() {
+                return KeyOutcome::NotMine;
+            }
+            // 框内滚详情；框外这一下归**下面那一栏**（票 07）—— 点击仍然整块独占（框外关掉
+            // 它），滚轮不是点击。
+            let inside = state
+                .detail_rect
+                .is_some_and(|rect| rect.contains((column, row).into()));
+            if inside {
                 state.detail_scroll(if up { -1 } else { 1 });
                 KeyOutcome::Handled
             } else {
@@ -2872,17 +2908,45 @@ mod keyboard_layers {
             if pending_owns_pointer(state, column, row) {
                 return KeyOutcome::NotMine;
             }
-            if state
-                .sidebar_page_rect()
-                .is_some_and(|page| page.contains((column, row).into()))
-            {
-                // 改动页**没有滚动机制**：滚轮落在它上面时这一格归它，但什么都不动。
-                if state.tab == Tab::Files {
-                    state.files_wheel(up);
-                }
-                return KeyOutcome::Handled;
+            let Some(sidebar) = state.layout.and_then(|layout| layout.sidebar) else {
+                return KeyOutcome::NotMine;
+            };
+            if !sidebar.contains((column, row).into()) {
+                return KeyOutcome::NotMine;
             }
+            state.sidebar_wheel(up);
+            state.mark_wheel(WheelTarget::Left);
+            KeyOutcome::Handled
+        }
+    }
+
+    /// 平铺态每一格：一个独立的落点（票 02 先认领，票 06 让它滚那一格）。
+    pub(super) struct TilesLayer;
+    impl KeyboardLayer<TuiState> for TilesLayer {
+        fn owns_keyboard(&self, _state: &TuiState) -> bool {
+            false
+        }
+        fn handle_key(&mut self, _state: &mut TuiState, _key: Key) -> KeyOutcome {
             KeyOutcome::NotMine
+        }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            column: u16,
+            row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            let Some(index) = state
+                .tile_rects
+                .iter()
+                .position(|(rect, _)| rect.contains((column, row).into()))
+            else {
+                return KeyOutcome::NotMine;
+            };
+            // 每一格是一个窗口：滚指针所在那一格，**不换前台**（票 06）。
+            state.tile_wheel(index, up);
+            state.mark_wheel(WheelTarget::Tile(index));
+            KeyOutcome::Handled
         }
     }
 
@@ -2911,6 +2975,28 @@ mod keyboard_layers {
                 state.take_trace_keyboard();
             }
             KeyOutcome::NotMine
+        }
+        fn handle_wheel(
+            &mut self,
+            state: &mut TuiState,
+            column: u16,
+            row: u16,
+            up: bool,
+        ) -> KeyOutcome {
+            // 问卷 / 中间模态那块区域先归它们。
+            if pending_owns_pointer(state, column, row) {
+                return KeyOutcome::NotMine;
+            }
+            // 指针落在右栏这一栏里（含页签条）：归右栏当前页（票 05 接上两个视口）。
+            let Some(rail) = state.layout.and_then(|layout| layout.right_rail) else {
+                return KeyOutcome::NotMine;
+            };
+            if !rail.contains((column, row).into()) {
+                return KeyOutcome::NotMine;
+            }
+            state.rail_wheel(up);
+            state.mark_wheel(WheelTarget::Right);
+            KeyOutcome::Handled
         }
     }
 
@@ -3111,6 +3197,34 @@ mod keyboard_layers {
                 }
                 return KeyOutcome::Handled;
             }
+            // 开着的 `/` 或 `@` 菜单是浮层：指针在它上面时滚轮挪高亮（票 07）。
+            if state
+                .menu_rect
+                .is_some_and(|rect| rect.contains((column, row).into()))
+            {
+                state.menu_wheel(up);
+                return KeyOutcome::Handled;
+            }
+            // 平铺态的主列是一池格：落点只有格（上一层的 `TilesLayer` 已试过），
+            // 格与格之间的虚线和空白什么都不滚（票 02/06）。
+            if state.tiled {
+                return KeyOutcome::NotMine;
+            }
+            // 主列：指针落在转录那一块里才滚它。状态行、输入区、提示行、顶部页签条上都
+            // **无动作**（票 02）；转录右缘那一列**回合条**也不是落点。
+            let Some(transcript) = state.layout.map(|layout| layout.transcript) else {
+                return KeyOutcome::NotMine;
+            };
+            let wheel_area = Rect::new(
+                transcript.x,
+                transcript.y,
+                transcript.width.saturating_sub(1),
+                transcript.height,
+            );
+            if !wheel_area.contains((column, row).into()) {
+                return KeyOutcome::NotMine;
+            }
+            state.mark_wheel(WheelTarget::Main);
             state.wheel_current(up);
             KeyOutcome::Handled
         }
@@ -3303,8 +3417,24 @@ pub struct TuiState {
     /// 上一帧问卷占着的那块底部（输入区**与**提示行，连它们中间那条线一起）在哪里。问卷
     /// 没有边框，所以它「在哪儿」只能这样记；滚轮据此决定归谁（`tui-chrome` §5）。
     questionnaire_bottom: Option<Rect>,
+    /// 上一帧 `/` 或 `@` 的候选菜单画在哪里（票 07）：滚轮落在它上面时挪高亮，而不是
+    /// 穿透去滚主列。
+    menu_rect: Option<Rect>,
     /// 上一帧把一个问题的可点部分画在了哪里。
     regions: Regions,
+    /// 上一帧的**排版结果**（布局那一侧的 `Regions`）：滚轮按指针落在哪一块来分派
+    /// （`.scratch/wheel-routing/spec.md` §1）。每帧在画任何东西之前重填，没画出来就是
+    /// `None` —— 与 `regions` / `screen_text` 同一条「这一帧真画了什么就记什么」。
+    ///
+    /// 名字避开 `panes`：那个词在这份代码里指转录窗格（见 `CONTEXT.md` 的 `_Avoid_`）。
+    layout: Option<layout::Regions>,
+    /// 上一帧平铺态每一格的矩形与会话 id：滚轮据此找到指针所在那一格（票 02 记、票 06 用）。
+    tile_rects: Vec<(Rect, crate::events::SessionId)>,
+    /// 各栏最近一次滚轮的时刻（票 03）：滚动条只在**被滚的那一栏**出现 1 秒
+    /// （`.scratch/wheel-routing/spec.md` §5）。下标 0 = 左栏、1 = 主列、2 = 右栏；
+    /// 平铺格各算一格。纯渲染器状态，不进事件流。
+    wheel_shown: [Option<std::time::Instant>; 3],
+    tile_wheel_shown: Option<(usize, std::time::Instant)>,
     /// 上一帧每块区域画了哪些显示行 —— 拖选取文本用的那一层
     /// （`.scratch/tui-feedback/spec.md` §5）。与 [`TuiState::regions`] 同一套纪律：每帧重建。
     screen_text: selection::ScreenText,
@@ -4650,7 +4780,12 @@ impl TuiState {
             detail_serial: 0,
             modal_rect: None,
             questionnaire_bottom: None,
+            menu_rect: None,
             regions: Regions::default(),
+            layout: None,
+            tile_rects: Vec::new(),
+            wheel_shown: [None; 3],
+            tile_wheel_shown: None,
             screen_text: selection::ScreenText::default(),
             drag: None,
             copied: None,
@@ -5373,6 +5508,135 @@ impl TuiState {
             (self.files_page.scroll + 1).min(max_top)
         };
         self.dirty = true;
+    }
+
+    /// 左栏滚一格：滚的是**这一页自己的视口**（票 04）。列表页一格一行；装得下时不动。
+    fn sidebar_wheel(&mut self, up: bool) {
+        match self.tab {
+            Tab::Sessions => self.sessions_wheel(up),
+            Tab::Todo => self.view.todo.wheel(up),
+            Tab::Files => self.files_wheel(up),
+            Tab::Changes => self.changes_wheel(up),
+            Tab::Usage => {}
+        }
+        self.dirty = true;
+    }
+
+    /// 会话页滚一格：只动视口，不动焦点行（票 04）。
+    fn sessions_wheel(&mut self, up: bool) {
+        move_viewport(
+            &mut self.sessions.top,
+            self.sessions.list_len,
+            self.sessions.list_window,
+            up,
+        );
+    }
+
+    /// 改动页滚一格：只动视口，不动焦点行（票 04）。
+    fn changes_wheel(&mut self, up: bool) {
+        let window = self.changes.rect.map_or(0, |page| page.height as usize);
+        move_viewport(&mut self.changes.top, self.changes.rows.len(), window, up);
+    }
+
+    /// 会话页：焦点行滚进窗口里（键盘走到窗口之外时视口跟着它走，票 04）。
+    fn sessions_scroll_to_focus(&mut self) {
+        let window = self.sessions.list_window;
+        let Some(at) = self
+            .sessions
+            .list_hits
+            .iter()
+            .find(|(_, id)| self.sessions.focus.as_ref() == Some(id))
+            .map(|(at, _)| *at)
+        else {
+            return;
+        };
+        if window == 0 {
+            return;
+        }
+        if at < self.sessions.top {
+            self.sessions.top = at;
+        } else if at >= self.sessions.top + window {
+            self.sessions.top = at + 1 - window;
+        }
+    }
+
+    /// 改动页：焦点行滚进窗口里（票 04）。
+    fn changes_scroll_to_focus(&mut self) {
+        let window = self.changes.rect.map_or(0, |page| page.height as usize);
+        let Some(at) = self.changes.focus else {
+            return;
+        };
+        if window == 0 {
+            return;
+        }
+        if at < self.changes.top {
+            self.changes.top = at;
+        } else if at >= self.changes.top + window {
+            self.changes.top = at + 1 - window;
+        }
+    }
+
+    /// 右栏滚一格：滚的是**右栏当前页的视口**。
+    ///
+    /// 轨迹只动视口 —— 不动块选中、也不拿键盘（按块认的选中是 `↑` / `↓` 的事，
+    /// `.scratch/wheel-routing/spec.md` §6）。流程页同理。
+    fn rail_wheel(&mut self, up: bool) {
+        match self.right_tab {
+            RailTab::Trace => {
+                self.view.trace.wheel(up);
+            }
+            RailTab::Flow => {
+                move_viewport(
+                    &mut self.view.flow_top,
+                    self.view.flow_total,
+                    self.view.flow_window,
+                    up,
+                );
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// 平铺态滚一格：滚的是指针所在那一格的对话视图，**不换前台**（票 06）。
+    fn tile_wheel(&mut self, index: usize, up: bool) {
+        let Some((_, id)) = self.tile_rects.get(index).cloned() else {
+            return;
+        };
+        if id == self.front {
+            self.view.conversation.wheel(up);
+        } else if let Some(view) = self
+            .projections
+            .get_mut(&id)
+            .and_then(|projection| projection.view.as_mut())
+        {
+            view.conversation.wheel(up);
+        }
+        self.dirty = true;
+    }
+
+    /// 记下这一格滚轮落在哪儿（票 03）：滚动条据此在那一栏出现 1 秒。
+    fn mark_wheel(&mut self, target: WheelTarget) {
+        let now = std::time::Instant::now();
+        match target {
+            WheelTarget::Left => self.wheel_shown[0] = Some(now),
+            WheelTarget::Main => self.wheel_shown[1] = Some(now),
+            WheelTarget::Right => self.wheel_shown[2] = Some(now),
+            WheelTarget::Tile(index) => self.tile_wheel_shown = Some((index, now)),
+        }
+    }
+
+    /// 这一栏的滚动条这一帧画不画：它自己最后一次滚轮还在 1 秒以内。
+    fn wheel_bar_visible(&self, target: WheelTarget) -> bool {
+        let at = match target {
+            WheelTarget::Left => self.wheel_shown[0],
+            WheelTarget::Main => self.wheel_shown[1],
+            WheelTarget::Right => self.wheel_shown[2],
+            WheelTarget::Tile(index) => self
+                .tile_wheel_shown
+                .filter(|(shown, _)| *shown == index)
+                .map(|(_, at)| at),
+        };
+        at.is_some_and(|at| pane::bar_visible(at.elapsed()))
     }
 
     /// 左键按下：记下起点与它落进的那块**文本区域**，别的什么都不做 —— 那一次点击属于抬起。
@@ -7028,6 +7292,7 @@ impl TuiState {
             None => 0,
         };
         self.sessions.focus = Some(self.sessions.shown[next as usize].id.clone());
+        self.sessions_scroll_to_focus();
     }
 
     /// 点会话页上的一行：交键盘 + 落焦点（能不能切由票 20 接）。
@@ -8272,6 +8537,7 @@ impl TuiState {
             None => *files.last().expect("刚判过它非空"),
         };
         self.changes.focus = Some(next);
+        self.changes_scroll_to_focus();
         self.dirty = true;
     }
 
@@ -8548,6 +8814,25 @@ impl TuiState {
     }
 
     /// 把高亮移动 `delta`，两端回绕。
+    /// 菜单上滚一格：**到两端停住**（票 07）。键盘的 `↑` / `↓` 走的是绕回
+    /// （[`Self::menu_move`]），滚轮是阅读手势，不该把光标从末尾弹回开头。
+    fn menu_wheel(&mut self, up: bool) {
+        let Some(menu) = self.token_menu() else {
+            return;
+        };
+        let len = menu.entries.len();
+        if len == 0 {
+            return;
+        }
+        self.slash.selected = Some(match menu.selected {
+            Some(at) if up => at.saturating_sub(1),
+            Some(at) => (at + 1).min(len - 1),
+            None if up => len - 1,
+            None => 0,
+        });
+        self.slash.token = self.menu_key();
+    }
+
     fn menu_move(&mut self, delta: isize) {
         let Some(menu) = self.token_menu() else {
             return;
@@ -9144,6 +9429,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （`tui-chrome` §5）。两者都在下面各自画出来时被重新填上。
     state.modal_rect = None;
     state.questionnaire_bottom = None;
+    state.menu_rect = None;
     // 两个视图的矩形与指示器同理：这一帧真画了才有值，指针只回应真看见的东西（票 09）。
     // 主列页签让同一时刻只有一页在屏幕上，所以没被画出来的那一页必须失去它的命中区域 ——
     // 否则点击会落在上一帧留下的位置上（`.scratch/trace-in-main/spec.md` §4）。
@@ -9155,6 +9441,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         // 什么都不画，好让点击无处可落。
         state.indicator = None;
         state.detail_rect = None;
+        // 滚轮的落点同理：这一帧什么都没画，就没有哪一栏接得住它（票 02）。
+        state.layout = None;
+        state.tile_rects.clear();
         // 查看器是一块**进程**，看不见它时留着没有意义（详情覆盖层不一样：它不占别的资源，
         // 收起来反而会丢掉读的人翻到的那一页）—— 收掉，别把键盘扣在看不见的东西上。
         state.close_file_viewer();
@@ -9180,6 +9469,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         tiled = false;
         panes = plan_for(area, content_rows, false, questionnaire, state);
     }
+    // 滚轮的落点判据：这一帧排出来的那几块区域（票 02）。它在画之前定稿，于是指针分派读到
+    // 的永远是**上一帧真的画出来的**那一份。
+    state.layout = Some(panes);
     // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：对话视图按**焦点格**那一条
     // 排（标签态就是主列），轨迹视图按**右栏**那一条排 —— 票 13 起轨迹的家是右栏。
     let conversation_width = if tiled {
@@ -9208,6 +9500,8 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         ));
     }
     draw_shell(frame, &panes, state, area);
+    // 平铺格的矩形每帧重建：只有这一帧真画出来的格才是滚轮的落点（票 02/06）。
+    state.tile_rects.clear();
     if tiled {
         draw_tiles(frame, &panes, state);
     } else {
@@ -9531,8 +9825,11 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     state.view.todo.clear_rect();
     // `调用量` 那一块也进屏幕文本层：它是「一页已经排好的行」，没有软折可言
     // （`.scratch/tui-feedback/spec.md` §5）。
+    let total = rows.len();
     note_rows(state, page, &rows, &[], &[]);
     frame.render_widget(Paragraph::new(rows), page);
+    // 统一：这一页也归左栏的滚动条管 —— 内容固定、永远装得下，所以它不会真的出现。
+    draw_page_scrollbar(frame, page, state, total, 0);
 }
 
 /// 左栏的 `todo` 页：页顶一条进度行（末行右端留着那个按钮）、下面是全部未完成的项
@@ -9541,9 +9838,16 @@ fn draw_todo_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) 
     state.view.todo.set_rect(page);
     state.files_page.rect = None;
     state.changes.rect = None;
-    let (rows, folded) = state.view.todo.lines_with_folds(page);
-    note_rows(state, page, &rows, &folded, &[]);
-    frame.render_widget(Paragraph::new(rows), page);
+    let (rows, folded) = state.view.todo.all_lines(page.width as usize);
+    let total = rows.len();
+    let window = page.height as usize;
+    let top = state.view.todo.top().min(total.saturating_sub(window));
+    state.view.todo.set_viewport(total, window, top);
+    let lines: Vec<Line<'static>> = rows.into_iter().skip(top).take(window).collect();
+    let folded: Vec<bool> = folded.into_iter().skip(top).take(window).collect();
+    note_rows(state, page, &lines, &folded, &[]);
+    frame.render_widget(Paragraph::new(lines), page);
+    draw_page_scrollbar(frame, page, state, total, top);
 }
 
 /// 左栏第一签：store 里跑过的会话（`.scratch/session-tab/spec.md` §3）。
@@ -9554,6 +9858,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
     state.sessions.rect = Some(page);
     state.sessions.headers.clear();
     state.sessions.hits.clear();
+    state.sessions.list_hits.clear();
     // 这一帧没画的那几页：指针不该落在一页已经不在屏幕上的东西上。
     state.files_page.rect = None;
     state.changes.rect = None;
@@ -9566,36 +9871,50 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
     let show_head = height >= 6;
     let show_groups = height >= 8;
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut drawn_rows = 0usize;
+    // 页顶那一条（读数与两个入口）**不滚**，画在页区第一行；列表在它下面滚（票 04）。
+    let head_rows = usize::from(show_head);
     if show_head {
-        lines.push(session_head_line(state, &page, wide, title_w));
+        let head = session_head_line(state, &page, wide, title_w);
+        // 页顶那一行虽然不滚，照样进屏幕文本层：读数和两个入口都该拖得动、复制得走。
+        note_rows(
+            state,
+            Rect::new(page.x, page.y, page.width, 1),
+            std::slice::from_ref(&head),
+            &[],
+            &[],
+        );
+        frame.render_widget(
+            Paragraph::new(head),
+            Rect::new(page.x, page.y, page.width, 1),
+        );
     }
-    if let Some(note) = state.sessions.note() {
+    let window = height.saturating_sub(head_rows);
+
+    // 列表的全部行：组头独占一行、会话行一行。`line_ids` 只在会话行上有 id —— 命中与
+    // 「按 id 找焦点」都读它。
+    // 空态要在 `shown` 被取走**之前**判：`note()` 读的就是它（票 04 改视口时踩过这一条）。
+    let note = state.sessions.note();
+    let rows = std::mem::take(&mut state.sessions.shown);
+    let focus = state.sessions.focus.clone();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut line_ids: Vec<Option<crate::events::SessionId>> = Vec::new();
+    let mut last_group: Option<&str> = None;
+    if let Some(note) = note {
         lines.push(Line::from(Span::styled(
             note,
             Style::default().fg(palette::MUTED),
         )));
+        line_ids.push(None);
     } else {
-        let rows = std::mem::take(&mut state.sessions.shown);
-        let focus = state.sessions.focus.clone();
-        let mut last_group: Option<&str> = None;
         for row in &rows {
             if show_groups && last_group != Some(row.group.as_str()) {
-                state.sessions.headers.push(lines.len());
                 lines.push(Line::from(Span::styled(
                     row.group.clone(),
                     Style::default().fg(palette::MUTED),
                 )));
+                line_ids.push(None);
                 last_group = Some(row.group.as_str());
             }
-            // 行命中：一整行都是落点（点击 = 交键盘 + 落焦点，票 17）。
-            let line = lines.len();
-            state.sessions.hits.push((line, row.id.clone()));
-            state.regions.cells.push(Region {
-                rect: Rect::new(page.x, page.y + line as u16, page.width, 1),
-                action: HitAction::SessionRow(line),
-            });
             lines.push(session_line(
                 row,
                 focus.as_ref(),
@@ -9605,26 +9924,45 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 state.projections.get(&row.id).and_then(|p| p.state),
                 state.sessions.hosted.contains(&row.id),
             ));
-            drawn_rows += 1;
+            line_ids.push(Some(row.id.clone()));
         }
-        state.sessions.shown = rows;
     }
-    // 「这一页放下多少」：过滤行的命中读数是**筛出多少**，这一行是**放下多少**
-    // （决策票 10 §3）。没过滤时那份「要画的全部」是 store 的总数。
-    let base = if state.sessions.filter.is_some() {
-        state.sessions.shown.len()
-    } else {
-        state.sessions.total
-    };
-    let missing = base.saturating_sub(drawn_rows);
-    if missing > 0 {
-        lines.push(Line::from(Span::styled(
-            wording::session_more(missing),
-            Style::default().fg(palette::MUTED),
-        )));
+    state.sessions.shown = rows;
+
+    let total = lines.len();
+    let top = state.sessions.top.min(total.saturating_sub(window));
+    state.sessions.top = top;
+    state.sessions.list_len = total;
+    state.sessions.list_window = window;
+    // 键盘要按 id 找回焦点行 —— 记**全部**会话行的列表下标，不只是窗口里那几行。
+    state.sessions.list_hits = line_ids
+        .iter()
+        .enumerate()
+        .filter_map(|(line, id)| id.clone().map(|id| (line, id)))
+        .collect();
+
+    let window_lines: Vec<Line<'static>> = lines.into_iter().skip(top).take(window).collect();
+    for offset in 0..window_lines.len() {
+        let line = top + offset;
+        if line_ids.get(line).is_some_and(Option::is_none) {
+            state.sessions.headers.push(head_rows + offset);
+            continue;
+        }
+        let Some(id) = line_ids.get(line).and_then(Option::as_ref) else {
+            continue;
+        };
+        // 行命中：一整行都是落点（点击 = 交键盘 + 落焦点，票 17）。
+        let screen = head_rows + offset;
+        state.sessions.hits.push((screen, id.clone()));
+        state.regions.cells.push(Region {
+            rect: Rect::new(page.x, page.y + screen as u16, page.width, 1),
+            action: HitAction::SessionRow(screen),
+        });
     }
-    lines.truncate(height);
-    frame.render_widget(Paragraph::new(lines), page);
+    let body = Rect::new(page.x, page.y + head_rows as u16, page.width, window as u16);
+    note_rows(state, body, &window_lines, &[], &[]);
+    frame.render_widget(Paragraph::new(window_lines), body);
+    draw_page_scrollbar(frame, body, state, total, top);
 }
 
 /// 会话页页顶那一行：左端读数、右端两个入口（都 `ACCENT`、都可点）。
@@ -9847,6 +10185,8 @@ fn draw_files_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState)
     state.files_page.rows = tree;
     note_rows(state, page, &lines, &[], &[]);
     frame.render_widget(Paragraph::new(lines), page);
+    let total = state.files_page.rows.len();
+    draw_page_scrollbar(frame, page, state, total, top);
 }
 
 /// 这一帧的树；索引还没就绪（或一次遍历正在飞）时是 `None`。
@@ -9938,21 +10278,17 @@ fn draw_changes_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiStat
         return;
     }
     let rows = changes::rows(&state.changes.files);
-    let total = state.changes.files.len();
     let window = page.height as usize;
-    // 装不下就画满页区，最后一行留给那一句「还有 M 处改动」（§5）。**不给这一页加滚动**：
-    // 那是新机制，等真机反馈再谈。
-    let overflow = rows.len() > window;
-    let shown = if overflow {
-        window.saturating_sub(1)
-    } else {
-        rows.len()
-    };
-    let mut lines: Vec<Line<'static>> = rows
+    let total = rows.len();
+    let top = state.changes.top.min(total.saturating_sub(window));
+    state.changes.top = top;
+    let lines: Vec<Line<'static>> = rows
         .iter()
-        .take(shown)
+        .skip(top)
+        .take(window)
         .enumerate()
-        .map(|(index, item)| {
+        .map(|(offset, item)| {
+            let index = top + offset;
             changes_line(
                 item,
                 page.width as usize,
@@ -9960,21 +10296,11 @@ fn draw_changes_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiStat
             )
         })
         .collect();
-    if overflow {
-        let drawn = rows
-            .iter()
-            .take(shown)
-            .filter(|item| matches!(item, changes::Item::File(_)))
-            .count();
-        lines.push(Line::from(Span::styled(
-            wording::changes_more(total.saturating_sub(drawn)),
-            Style::default().fg(palette::MUTED),
-        )));
-    }
     // 焦点与点击要拿屏幕行换下标，所以整份可见行都留着（不只是窗口里那几行）。
     state.changes.rows = rows;
     note_rows(state, page, &lines, &[], &[]);
     frame.render_widget(Paragraph::new(lines), page);
+    draw_page_scrollbar(frame, page, state, total, top);
 }
 
 /// 从 `rows` 的第 `from` 行起找最近的一个**文件行**：先往后找，找不到再回头往前找。整份清单
@@ -10397,6 +10723,14 @@ struct SessionsPage {
     focus: Option<crate::events::SessionId>,
     /// 这一页画出来的矩形（命中的判据：只认真画出来的东西）。
     rect: Option<Rect>,
+    /// 列表视口的起点：列表行（组头也算一行）里的第几条（票 04）。
+    top: usize,
+    /// 上一帧列表有多少行、窗口多高，以及「列表行下标 → 会话 id」。
+    ///
+    /// 滚轮与键盘跟随都读上一帧真的画出来的那一份（与 [`SessionsPage::hits`] 同一条纪律）。
+    list_len: usize,
+    list_window: usize,
+    list_hits: Vec<(usize, crate::events::SessionId)>,
     /// 这一帧哪些行是组头 —— `↑` / `↓` 要跳过它们。
     headers: Vec<usize>,
     /// 画在屏幕上的行下标 → 会话 id。
@@ -10537,6 +10871,8 @@ struct ChangesPage {
     focus: Option<usize>,
     /// 上一帧页区画在哪；没画改动页时是 `None`（与文件页同一条「只认真画出来的东西」）。
     rect: Option<Rect>,
+    /// 视口的起点（[`ChangesPage::rows`] 里的下标；票 04）。
+    top: usize,
 }
 
 /// 改动页的取数处在哪一态。
@@ -10603,6 +10939,18 @@ enum Tab {
 enum RailTab {
     Trace,
     Flow,
+}
+
+/// 上一格滚轮落在哪一个落点（`.scratch/wheel-routing/spec.md` §5）。
+///
+/// 滚动条只在**被滚的那一栏**出现 1 秒，所以滚轮落下时要把落点记下来；平铺态每一格各算
+/// 一个落点，于是同一时刻只有被滚的那一格长出一条滚动条。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelTarget {
+    Left,
+    Main,
+    Right,
+    Tile(usize),
 }
 
 /// 四个浮层表面共用的框架：`CHROME` 的虚线，**四角为空**
@@ -11038,7 +11386,17 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     note_rows(state, text_area, &rows, &folded, &hotspots);
     state.conversation_rect = Some(text_area);
     frame.render_widget(Paragraph::new(rows), text_area);
-    draw_scrollbar(frame, panes.scrollbar(), &state.view.conversation);
+    // 滚动条只在滚动时出现（票 03）：这一格滚轮落在主列，1 秒内才画。
+    if state.wheel_bar_visible(WheelTarget::Main) {
+        let pane = &state.view.conversation;
+        draw_scrollbar(
+            frame,
+            panes.scrollbar(),
+            pane.total(),
+            pane.top(),
+            pane.following(),
+        );
+    }
     draw_turn_rail(frame, panes, state);
     draw_indicator(frame, text_area, state, Viewport::Conversation);
 }
@@ -11065,6 +11423,8 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         .filter_map(|(index, rect)| state.tiles.get(index).cloned().map(|id| (index, *rect, id)))
         .collect();
     for (index, rect, id) in slots {
+        // 这一格是滚轮的落点之一（票 02）：记的是整格，标题行也算这一格。
+        state.tile_rects.push((rect, id.clone()));
         let focused = id == focus;
         let title = state.hosted_title(&id);
         let title = fit_title(&title, rect.width.saturating_sub(4) as usize);
@@ -11105,7 +11465,30 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         {
             let rows = draw_tile_body(frame, body, &mut view);
             note_rows(state, body, &rows, &[], &[]);
-            state.projections.entry(id).or_default().view = Some(view);
+            state.projections.entry(id.clone()).or_default().view = Some(view);
+        }
+        // 格内滚动条：与三栏同一条读数，只在滚动时出现（票 06）。
+        if state.wheel_bar_visible(WheelTarget::Tile(index)) {
+            let (total, top, following) = if focused {
+                let pane = &state.view.conversation;
+                (pane.total(), pane.top(), pane.following())
+            } else {
+                state
+                    .projections
+                    .get(&id)
+                    .and_then(|projection| projection.view.as_ref())
+                    .map_or((0, 0, true), |view| {
+                        let pane = &view.conversation;
+                        (pane.total(), pane.top(), pane.following())
+                    })
+            };
+            draw_scrollbar(
+                frame,
+                Rect::new(body.right().saturating_sub(1), body.y, 1, body.height),
+                total,
+                top,
+                following,
+            );
         }
     }
 }
@@ -11192,6 +11575,25 @@ fn draw_right_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
                 panes.right_axis_width(),
                 state,
             );
+            // 轨迹的滚动条：右栏内容区右缘那一列，只在滚动时出现（票 05）。
+            if state.wheel_bar_visible(WheelTarget::Right) {
+                let (total, top, following) = {
+                    let pane = &state.view.trace;
+                    (pane.total(), pane.top(), pane.following())
+                };
+                draw_scrollbar(
+                    frame,
+                    Rect::new(
+                        text_area.right().saturating_sub(1),
+                        text_area.y,
+                        1,
+                        text_area.height,
+                    ),
+                    total,
+                    top,
+                    following,
+                );
+            }
         }
         RailTab::Flow => draw_flow_page(frame, panes, state),
     }
@@ -11255,19 +11657,47 @@ fn draw_flow_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
         height: page.height,
         now: Utc::now(),
     });
-    // 说明区贴底：先给轨道留够地方，剩下的空行填在轨道与说明之间。
-    let note_len = flow.note.len();
-    let mut rows: Vec<Line<'static>> = Vec::with_capacity(page.height as usize);
-    rows.push(flow.head);
-    rows.push(Line::default());
-    let track_room = (page.height as usize).saturating_sub(note_len + 2);
-    rows.extend(flow.track.into_iter().take(track_room));
-    while rows.len() + note_len < page.height as usize {
+    // 这一页的自然内容：头部、空行、轨道、说明。装得下时按旧观感贴底画；装不下时窗口滚
+    // （票 05：流程页也有视口）。
+    let total = 2 + flow.track.len() + flow.note.len();
+    let window = page.height as usize;
+    let top = state.view.flow_top.min(total.saturating_sub(window));
+    state.view.flow_top = top;
+    state.view.flow_total = total;
+    state.view.flow_window = window;
+    let rows: Vec<Line<'static>> = if total <= window {
+        // 说明区贴底：先给轨道留够地方，剩下的空行填在轨道与说明之间。
+        let note_len = flow.note.len();
+        let mut rows: Vec<Line<'static>> = Vec::with_capacity(window);
+        rows.push(flow.head);
         rows.push(Line::default());
-    }
-    rows.extend(flow.note);
-    rows.truncate(page.height as usize);
+        let track_room = window.saturating_sub(note_len + 2);
+        rows.extend(flow.track.into_iter().take(track_room));
+        while rows.len() + note_len < window {
+            rows.push(Line::default());
+        }
+        rows.extend(flow.note);
+        rows.truncate(window);
+        rows
+    } else {
+        let mut content: Vec<Line<'static>> = Vec::with_capacity(total);
+        content.push(flow.head);
+        content.push(Line::default());
+        content.extend(flow.track);
+        content.extend(flow.note);
+        content.into_iter().skip(top).take(window).collect()
+    };
     frame.render_widget(Paragraph::new(rows), page);
+    if state.wheel_bar_visible(WheelTarget::Right) {
+        let following = top + window >= total;
+        draw_scrollbar(
+            frame,
+            Rect::new(page.right().saturating_sub(1), page.y, 1, page.height),
+            total,
+            top,
+            following,
+        );
+    }
     // 收尾节点只在 `TurnEnded` 到达后的那一帧里亮着：画完这一帧就收成空闲，
     // 并请下一帧（否则时钟不动的空闲态会停在收尾那一格上）。只在相位真的变了时才置脏，
     // 不然流程页会让空闲的界面永远重绘。
@@ -11713,37 +12143,73 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
     }
 }
 
-/// 转录的滚动条：只在内容多于一屏时才画，画在排版一直为它留的那一列里。
-/// 转录（或轨迹页）右缘的位置指示：**只画滑块，不画轨道**。
+/// 视口起点按一格滚：往上不越 0，往下不越「最后那一屏」（票 04）。
+fn move_viewport(top: &mut usize, total: usize, window: usize, up: bool) {
+    let last = total.saturating_sub(window);
+    *top = if up {
+        top.saturating_sub(1)
+    } else {
+        (*top + 1).min(last)
+    };
+}
+
+/// 左栏一页的滚动条：画在页区右缘那一列，只在滚动时出现（票 04）。
+fn draw_page_scrollbar(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &TuiState,
+    total: usize,
+    top: usize,
+) {
+    if !state.wheel_bar_visible(WheelTarget::Left) {
+        return;
+    }
+    let following = top + area.height as usize >= total;
+    draw_scrollbar(
+        frame,
+        Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
+        total,
+        top,
+        following,
+    );
+}
+
+/// 一栏的滚动条：只在内容多于一屏、且这一栏最近被滚过时画，画在那一列里。
+/// **只画滑块，不画轨道**。
 ///
 /// 轨道与紧邻的回合条是同一族细竖线，两条并排读起来是噪音（`.scratch/tui-visual-language/
 /// issues/07` 决定 1）；位置靠滑块本身表达。`TRAILING_COLUMNS` 那两列的预留**不动** —— 它防
 /// 的是文字重新折行，与画不画无关。
-fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
-    if track.width == 0 || pane.total() <= track.height as usize {
+///
+/// 滑块的位置与长度由 [`pane::thumb`] 自己算 —— ratatui 的 `Scrollbar` 在贴底时到不了轨底
+/// （`.scratch/wheel-routing/spec.md` §5）。
+fn draw_scrollbar(
+    frame: &mut ratatui::Frame,
+    track: Rect,
+    total: usize,
+    top: usize,
+    following: bool,
+) {
+    let (start, len) = pane::thumb(track.height as usize, total, top, track.height as usize);
+    if track.width == 0 || len == 0 {
         return;
     }
     // 跟着末尾与在读历史看起来不一样，所以位置不用读数字就看得出来。
-    let thumb = if pane.following() {
+    let thumb = if following {
         Style::default().fg(palette::MUTED)
     } else {
         Style::default()
             .fg(palette::MUTED)
             .add_modifier(Modifier::BOLD)
     };
-    let mut scrollbar = ScrollbarState::new(pane.total())
-        .position(pane.top())
-        .viewport_content_length(track.height as usize);
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            // 轨道与它两端的箭头都不画：只留滑块，位置靠它自己表达。
-            .track_symbol(None)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .thumb_style(thumb),
-        track,
-        &mut scrollbar,
-    );
+    let buffer = frame.buffer_mut();
+    for offset in 0..len {
+        let y = track.y.saturating_add((start + offset) as u16);
+        if y >= track.bottom() {
+            break;
+        }
+        buffer[(track.x, y)].set_symbol("█").set_style(thumb);
+    }
 }
 
 /// 窗格右下那个「来了什么、以及回去的路」的指示器。
@@ -12184,6 +12650,8 @@ fn draw_menu(
     let Some(area) = panes.menu(anchor, room as u16) else {
         return;
     };
+    // 菜单是一个浮层：指针落在它上面时滚轮挪高亮（票 07）。
+    state.menu_rect = Some(area);
 
     let rows: Vec<Line<'static>> = visible
         .iter()

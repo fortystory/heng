@@ -36,6 +36,11 @@ pub struct TodoPanel {
     /// 上一帧真的画出来的那块矩形。指针只回应它 —— 与文件页 / 改动页同一条纪律
     /// （`.scratch/todo-page/spec.md` §5）。
     rect: Option<Rect>,
+    /// 视口的起点（行下标；`.scratch/wheel-routing/spec.md` §2、票 04）。
+    top: usize,
+    /// 上一帧这一页有多少行、窗口多高 —— 滚轮据此夹住两端。
+    total_rows: usize,
+    window: usize,
     /// 当前生效的那份列表**是谁提交的**。讨论会话里各方各有一份，而页上是最后一个落地
     /// 落地者的那份 —— 弹窗标题要说清这一点（§1、§6）。
     speaker: Option<SpeakerId>,
@@ -61,6 +66,25 @@ impl TodoPanel {
     /// 页签条上有没有 `todo` 这个标签。
     pub fn visible(&self) -> bool {
         self.seen
+    }
+
+    /// 这一页**全部**的行（不按页高截断），以及哪些行是折出来的续行。
+    ///
+    /// TUI 的视口要这份：滚轮滚的是它的一部分，而「还有几条没露过面」那句在有了视口之后
+    /// 退场（`.scratch/wheel-routing/spec.md` §4）。plain 仍走 [`Self::lines_with_folds`]：
+    /// 它没有滚轮，截断 + 一句实话就是它该有的样子。
+    pub fn all_lines(&self, width: usize) -> (Vec<Line<'static>>, Vec<bool>) {
+        if self.items.is_empty() {
+            return (vec![empty_line()], vec![false]);
+        }
+        let mut rows = vec![self.progress_line(width)];
+        let mut folded = vec![false];
+        for item in self.open() {
+            let part = item_rows(item, width);
+            folded.extend_from_slice(&part.folded);
+            rows.extend(part.lines);
+        }
+        (rows, folded)
     }
 
     /// 这一页从上到下的行，给这个高度的页区。
@@ -166,6 +190,28 @@ impl TodoPanel {
     /// 「只认真画出来的东西」。
     pub fn clear_rect(&mut self) {
         self.rect = None;
+    }
+
+    /// 上一帧视口的起点（行下标；票 04）。
+    pub fn top(&self) -> usize {
+        self.top
+    }
+
+    /// 记下一帧的视口几何，并夹住起点：滚轮据此知道两端在哪（票 04）。
+    pub fn set_viewport(&mut self, total: usize, window: usize, top: usize) {
+        self.total_rows = total;
+        self.window = window;
+        self.top = top;
+    }
+
+    /// 滚一格：只动视口，列表本身与它的完成状态一个字节不动（票 04）。
+    pub fn wheel(&mut self, up: bool) {
+        let last = self.total_rows.saturating_sub(self.window);
+        self.top = if up {
+            self.top.saturating_sub(1)
+        } else {
+            (self.top + 1).min(last)
+        };
     }
 
     /// 当前生效的那份列表（弹窗的快照就是它的一份拷贝）。

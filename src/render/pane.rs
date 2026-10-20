@@ -26,6 +26,34 @@ const PAGE_OVERLAP: usize = 2;
 /// 一格滚轮滚几行（spec §4）。
 const WHEEL_ROWS: usize = 3;
 
+/// 滚动条在最后一次滚轮之后还画多久（`.scratch/wheel-routing/spec.md` §5）。
+pub const WHEEL_BAR_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 滚动条的滑块：`(起点, 长度)`，以轨道格数计；不画时是 `(0, 0)`。
+///
+/// 刻意**不用** ratatui 的 `Scrollbar`：那条公式的分母是 `content_length − 1 +
+/// viewport_length`，`top` 取到 `total − viewport`（贴底）也到不了轨底 —— 内容越短偏得越
+/// 明显。贴底贴顶是这一条唯一的硬约束（`.scratch/wheel-routing/spec.md` §5）。
+pub fn thumb(track: usize, total: usize, top: usize, viewport: usize) -> (usize, usize) {
+    if track == 0 || total == 0 || viewport == 0 || total <= viewport {
+        return (0, 0);
+    }
+    // 四舍五入的整数除法：滑块的长度与位置都不需要浮点。
+    fn rounding(numerator: usize, denominator: usize) -> usize {
+        (numerator + denominator / 2) / denominator
+    }
+    let len = rounding(track * viewport, total).clamp(1, track);
+    let span = track - len;
+    let travel = total - viewport;
+    let start = rounding(top.min(travel) * span, travel);
+    (start, len)
+}
+
+/// 滚动条这一帧画不画：最后一次滚轮落在 [`WHEEL_BAR_WINDOW`] 以内。
+pub fn bar_visible(elapsed: std::time::Duration) -> bool {
+    elapsed < WHEEL_BAR_WINDOW
+}
+
 /// 对话窗格的缓冲与视口。
 pub struct Pane {
     /// 来源行，最旧的在前。长度永不超过 [`CAP`]。
@@ -643,6 +671,28 @@ pub(crate) fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 滑块的硬约束：贴顶时第一格落在轨道第一格，贴底时最后一格落在轨道最后一格。
+    ///
+    /// 短内容那一档是旧公式偏得最厉害的地方（总行数只比视口多几行）。
+    #[test]
+    fn the_scrollbar_thumb_reaches_both_ends() {
+        // 100 行 / 40 行视口 / 40 格轨道。
+        assert_eq!(thumb(40, 100, 0, 40), (0, 16));
+        assert_eq!(thumb(40, 100, 60, 40), (24, 16), "贴底就是轨底");
+        // 45 行：只多 5 行，滑块长 36 格、可走 4 格。
+        assert_eq!(thumb(40, 45, 0, 40), (0, 36));
+        assert_eq!(thumb(40, 45, 5, 40), (4, 36), "短内容也贴底");
+        // 装得下就不画。
+        assert_eq!(thumb(40, 20, 0, 40), (0, 0));
+    }
+
+    /// 滚动条只在最后一次滚轮之后 1 秒内出现。
+    #[test]
+    fn the_bar_shows_for_one_second_after_the_last_wheel() {
+        assert!(bar_visible(std::time::Duration::from_millis(999)));
+        assert!(!bar_visible(WHEEL_BAR_WINDOW));
+    }
 
     /// **账本行号裁不掉**：被上限挪出窗口的那些行仍报得出「第几行」，而它们的文字取不到了
     /// （票 14 第 6 条：来源面那一环退成只给位置）。

@@ -304,7 +304,20 @@ fn a_path_that_does_not_fit_is_cut_with_an_ellipsis() {
 }
 
 #[test]
-fn too_many_changes_fill_the_page_and_say_how_many_are_left() {
+fn too_many_changes_fill_the_page_and_scroll_instead_of_counting_what_is_left() {
+    fn wheel(column: u16, row: u16, up: bool) -> MouseEvent {
+        MouseEvent {
+            kind: if up {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            },
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
     let mut state = state();
     let many: Vec<(String, changes::Kind)> = (0..30)
         .map(|index| (format!("file{index:02}.rs"), changes::Kind::Modified))
@@ -318,23 +331,24 @@ fn too_many_changes_fill_the_page_and_say_how_many_are_left() {
     let rows = sidebar(&mut state, 120, 24, 40);
 
     // 宽档 120×24 下页区是 40 列 × 15 行（左栏全高，2026-10-17 修订）：标题一行 +
-    // 13 个文件 + 末行那一句。
-    let last = rows
-        .iter()
-        .rev()
-        .find(|row| !row.is_empty())
-        .expect("页区里有东西");
-    assert!(
-        last.contains("还有 17 处改动"),
-        "画满 15 行之后说清省掉了多少：{last:?}\n{rows:#?}"
-    );
+    // 14 个文件。末行不再是一句「还有 N 处改动」—— 那是不可滚时代的写法（票 04）。
+    assert!(!rows.join("\n").contains("还有"), "没有溢出读数：{rows:#?}");
     assert!(
         !rows.iter().any(|row| row.contains("file29.rs")),
-        "装不下的那些一行都不画：{rows:#?}"
+        "装不下的那些仍不在屏幕上：{rows:#?}"
     );
     assert!(
-        rows.iter().any(|row| row.contains("file10.rs")),
+        rows.iter().any(|row| row.contains("file13.rs")),
         "装得下的都画了：{rows:#?}"
+    );
+
+    // 滚一格：下一条进来。
+    let at = sidebar_row_of(&rows, "file13.rs") as u16;
+    state.mouse(wheel(2, at, false));
+    let rows = sidebar(&mut state, 120, 24, 40);
+    assert!(
+        rows.iter().any(|row| row.contains("file14.rs")),
+        "滚一格之后下一条进来：{rows:#?}"
     );
 }
 
@@ -1422,4 +1436,69 @@ async fn reading_the_changes_does_not_write_the_index_back() {
         .modified()
         .expect("它有 mtime");
     assert_eq!(after, old, "读一次不改动用户的 index");
+}
+
+/// 改动页的滚轮与键盘：滚轮只动视口、不动焦点；键盘移焦点时视口跟着走；「还有 M 处改动」
+/// 退场（`.scratch/wheel-routing/spec.md` §4、§6，票 04）。
+#[test]
+fn the_changes_page_scrolls_and_keeps_the_focus_visible() {
+    fn wheel(column: u16, row: u16, up: bool) -> MouseEvent {
+        MouseEvent {
+            kind: if up {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            },
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    let mut state = state();
+    let files: Vec<(String, changes::Kind)> = (0..40)
+        .map(|index| (format!("f{index:02}.rs"), changes::Kind::Modified))
+        .collect();
+    let borrowed: Vec<(&str, changes::Kind)> = files
+        .iter()
+        .map(|(path, kind)| (path.as_str(), *kind))
+        .collect();
+    loaded(&mut state, &borrowed);
+    open_changes(&mut state, 120, 24);
+
+    let rows = sidebar(&mut state, 120, 24, 40);
+    assert!(
+        rows.iter().any(|row| row.contains("f00.rs")),
+        "顶上第一个在：{rows:#?}"
+    );
+    assert!(
+        !rows.join("\n").contains("还有"),
+        "有了视口就不再有「还有 M 处改动」：{rows:#?}"
+    );
+
+    // 滚轮：只动视口。两格之后组头与第一个文件都滚出去（组头也占一行）。
+    let at = sidebar_row_of(&rows, "f00.rs") as u16;
+    state.mouse(wheel(2, at, false));
+    state.mouse(wheel(2, at, false));
+    let rows = sidebar(&mut state, 120, 24, 40);
+    assert!(
+        !rows.iter().any(|row| row.contains("f00.rs")),
+        "滚两格之后第一个滚出去：{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("f01.rs")),
+        "第二个顶上来：{rows:#?}"
+    );
+
+    // 键盘：焦点行移出窗口时视口跟着它走。
+    for _ in 0..26 {
+        state.key(Key::Down);
+    }
+    let frame = buffer(120, 24, &mut state);
+    assert!(focused_sidebar_row(&frame, 24).is_some(), "焦点行在屏幕上");
+    let rows = sidebar(&mut state, 120, 24, 40);
+    assert!(
+        rows.iter().any(|row| row.contains("f25.rs")),
+        "焦点行被带进可见区：{rows:#?}"
+    );
 }
