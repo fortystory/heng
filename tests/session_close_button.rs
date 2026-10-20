@@ -7,8 +7,8 @@
 mod common;
 
 use common::{
-    buffer, click, find_leftmost_cell, fresh, host, host_read_only, host_running, hover, load,
-    open_sessions, row, row_text, screen, switch_front,
+    buffer, click, find_cell_below, find_leftmost_cell, fresh, host, host_read_only, host_running,
+    hover, load, open_sessions, row, row_text, screen, switch_front,
 };
 use heng::events::SessionId;
 use heng::render::{ConsoleNotify, ConsoleRequest, FrontEndEvent, Key};
@@ -486,6 +486,23 @@ fn closing_the_last_session_leaves_an_empty_host() {
     open_sessions(&mut state, 120, 24);
 
     // 宿主表空了：循环层推来的那份事实里一个会话都没有。
+    // 先走「点那个 `✖`」这条路 —— 渲染层发出关闭请求；库层执行完之后宿主表空了，
+    // 循环层把那份空事实推过来。
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+    click(&mut state, 0, row);
+    let events = state.take_events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            FrontEndEvent::CloseSession { id } if id.as_str() == "s-a"
+        )),
+        "发出去的关闭请求指着那一个：{events:?}"
+    );
+
     host(&mut state, "s-a", &[]);
     let frame = buffer(120, 24, &mut state);
     let text = screen(120, 24, &mut state);
@@ -529,7 +546,23 @@ fn a_busy_session_gives_two_segments_on_the_hint_line() {
     let text = screen(120, 24, &mut state);
 
     assert!(text.contains("正在跑回合"), "提示行前半：{text}");
-    assert!(text.contains("切到「"), "提示行后半是可点的：{text}");
+    assert!(
+        text.contains("切到「改一下左栏」"),
+        "可点段点名**被拒的那一个**（切过去好在那儿按 ctrl-c 取消）：{text}"
+    );
+
+    // 点它 → 前台切到那个正在跑的会话。
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_cell_below(&frame, 120, 24, "切到「改一下左栏」", 0);
+    click(&mut state, column, row);
+    let events = state.take_events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            FrontEndEvent::OpenSession { id } if id.as_str() == "s-a"
+        )),
+        "点它切到那个正在跑的会话：{events:?}"
+    );
 }
 
 /// 正在跑的那一行点标记 → **只发一条**关闭请求，**不先切走**（票 06）。
@@ -563,4 +596,51 @@ fn a_running_session_is_not_switched_away_first() {
         matches!(&events[0], FrontEndEvent::CloseSession { id } if id.as_str() == "s-b"),
         "关的是那个在跑的：{events:?}"
     );
+}
+
+/// 宿主表顺序里**没有下一个**时，取上一个（票 06）。
+#[test]
+fn closing_the_last_hosted_session_switches_to_the_previous_one() {
+    let mut state = two_hosted();
+    // 前台挪到宿主表里的**最后一个**（s-a）。
+    switch_front(&mut state, "s-a");
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+
+    click(&mut state, 0, row);
+    let events = state.take_events();
+
+    assert_eq!(events.len(), 2, "两条请求：{events:?}");
+    assert!(
+        matches!(&events[0], FrontEndEvent::OpenSession { id } if id.as_str() == "s-b"),
+        "没有下一个就取上一个：{events:?}"
+    );
+    assert!(
+        matches!(&events[1], FrontEndEvent::CloseSession { id } if id.as_str() == "s-a"),
+        "再关掉前台那一个：{events:?}"
+    );
+}
+
+/// 平铺态里关掉前台那一个之后，**焦点格落到相邻格**（票 06）：焦点格就是新的前台那一个。
+#[test]
+fn the_focus_tile_lands_on_the_neighbour() {
+    let mut state = two_hosted();
+    switch_front(&mut state, "s-b");
+    // 先有一帧（平铺按这一帧的尺寸算放不放得下），再进平铺。
+    let _ = buffer(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = buffer(120, 40, &mut state);
+    assert!(state.tiled(), "进平铺态");
+
+    // 循环层执行「先切到相邻」：前台换成 s-a。
+    switch_front(&mut state, "s-a");
+
+    assert_eq!(state.front().as_str(), "s-a", "前台落到相邻那一个");
+    assert!(state.tiled(), "两个会话还在，平铺态不变");
+    // 平铺的**焦点格就是前台那一个**（既有规则：`draw_tiles` 里 `let focus = state.front()`），
+    // 所以前台一换，焦点格就落到相邻格上了。
+    let _ = buffer(120, 40, &mut state);
 }

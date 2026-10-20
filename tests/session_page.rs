@@ -673,7 +673,8 @@ fn fg_of(frame: &Buffer, column: u16, row: u16) -> ratatui::style::Color {
     frame[(column, row)].fg
 }
 
-/// 票 32：前台被拒时提示行给一段可点的，点它把前台切到相邻的那一个。
+/// 票 32、票 06：关闭被拒时提示行给一段可点的，点它把前台切到**被拒的那一个**
+/// （正在跑的那个）—— 切过去好在那儿按 ctrl-c 取消。
 #[test]
 fn a_refused_close_offers_a_clickable_switch() {
     let mut state = fresh();
@@ -688,7 +689,7 @@ fn a_refused_close_offers_a_clickable_switch() {
         2,
     );
     open_sessions(&mut state, 120, 24);
-    // 循环判出「要关的这一个正在前台」，把目标告诉渲染器；相邻是谁由它自己算。
+    // 循环判出「关不掉（那个正在跑）」，把目标告诉渲染器。
     state.request(ConsoleRequest::Notify(
         heng::render::ConsoleNotify::CloseBlocked {
             target: SessionId::new("01J8ZQ4K7M"),
@@ -696,14 +697,15 @@ fn a_refused_close_offers_a_clickable_switch() {
     ));
 
     let frame = buffer(120, 24, &mut state);
-    let (column, line) = find_cell(&frame, 120, 24, "切到「另一个会话」");
+    // 可点段点名**被拒的那一个**（票 06）：原先它切的是邻居，到不了文案说的地方。
+    let (column, line) = find_cell(&frame, 120, 24, "切到「前台这一个」");
     click(&mut state, column, line);
     assert_eq!(
         state.take_events(),
         vec![FrontEndEvent::OpenSession {
-            id: SessionId::new("s-b")
+            id: SessionId::new("01J8ZQ4K7M")
         }],
-        "点那段可点的 = 把前台切到相邻的那一个"
+        "点那段可点的 = 把前台切到被拒的那一个"
     );
 }
 
