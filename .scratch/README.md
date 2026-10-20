@@ -28,7 +28,6 @@
 | [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那个会话走；退出回执因此改成 `heng -c <id>` | 1/1 done |
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |
 | [`sidebar-toggle/`](sidebar-toggle/spec.md) | spec | 左栏开关：`Ctrl-O` 收起与叫回 —— 意愿与宽度档**相乘**（< 80 列叫不回来）、意愿只活在进程内、提示行最末加一条 `ctrl-o 左栏`；推翻 `tui-sidebar` spec §2 与 `CONTEXT.md` 左栏词条里「去留只由宽度决定」那半句（2026-10-02，一次十问的 grilling，不建图） | 2 done + 1 ready-for-walkthrough（票 03 剩 ㉖ 的真机走查） |
-| [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 —— **已落成 [`mcp-support` 票 19](mcp-support/issues/19-mcp-catalog-in-context.md)（done）**：注入那条记录点得开、`DetailKind::Context` 通吃所有来源，本目录不会再有 spec | — |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
 | [`agent-teams/`](agent-teams/seed.md) | seed | 同目录的会话互相通信：信箱、共享任务板、团队成员怎么被看见（`task` 派出的执行者今天只共用同一份流） | — |
 | [`session-panes/`](session-panes/spec.md) | map + spec | **多会话平铺与右侧栏**：顶部页签条 + 最多四会话并排 + 右栏（轨迹第一页）+ herdr 默认关左栏 —— 2026-10-17 十二张决策票折成 spec、十六张实现票全部落地 | 12/12 + 16/16 done |
@@ -77,3 +76,4 @@
 | [`run-state-edge/`](run-state-edge/spec.md) | spec | **`RunState` 收回成边沿**：发送端去重，在飞询问的撤回改由前台会话三态「非 Idle → Idle」给出 —— 修掉问卷建立后 ≤80ms 就被撤下（2026-10-19 维护者报告，会话记录为证）；替换 [`fs-agent-v1` 票 31](fs-agent-v1/issues/31-modal-outlives-the-run-it-belongs-to.md) 的实现信号 | 1/1 done |
 | [`tool-declaration-visibility/`](tool-declaration-visibility/seed.md) | seed | 工具声明（含那段**用法描述**）在界面上看不见：请求的三样里只有 `system` 与 `messages` 有通道，`tools` 没有；`Schema` 面只抄了 `parameters` —— 三个方向待选，未访谈 | — |
 | [`wheel-routing/`](wheel-routing/spec.md) | spec | **滚轮归属**：指针落在哪一栏就滚哪一栏 —— 左栏五页 / 主列（含平铺每格）/ 右栏两页 / 浮层都补上视口与「只在滚动时出现」的滚动条，滚轮不再穿透到主列；滚动条位置自己算（贴底必须贴底）；推翻 session-tab、todo-page、diff-page、flow-page 与 `docs/render.md` 里「不滚动 / 滚轮落进输入区」那几条 | 1 张契约票（01）+ 7 张实现票（02–08）全 done |
+| [`session-close-button/`](session-close-button/spec.md) | map + spec | **会话标题上的关闭按钮**：平铺格标题行 / 顶部页签条 / 左栏「会话」页行三处，**悬浮**出现红色 `✖`，点它关掉**那一会话**（前台也能关，忙时仍拒）；左栏页顶 `关闭` 删掉；关后前台落到相邻的一个会话；另加 `Ctrl-X` 与会话页内 `x` 两条键位 | 3/3 resolved + 8 张实现票（`04`–`11`）待认领 |
