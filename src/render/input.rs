@@ -213,7 +213,8 @@ pub enum ConsoleNotify {
     Replay { events: Vec<Event> },
     /// 提示行那句话有**可点入口**（票 23）：把会话页交到前台、焦点落在这一行上。
     Attention { id: crate::events::SessionId },
-    /// **关闭被前台规则拒了**（票 32）：提示行给一段可点的「切到相邻会话」。
+    /// **关闭被拒了**（票 32、票 06）：被拒的是那个正在跑的会话 —— 提示行给一段可点的
+    /// 「切到「<它>」」，切过去好在那儿按 ctrl-c 取消。
     CloseBlocked { target: crate::events::SessionId },
     /// **退出被闸门拒了**（票 28）：提示行那句话的可点入口指向第一个会话。
     ExitBlocked {
@@ -332,7 +333,7 @@ impl ConsoleHandle {
             }));
     }
 
-    /// 说关闭被前台规则拒了（票 32）。
+    /// 说关闭被拒了（票 32、票 06）：被拒的是那个正在跑的会话。
     pub fn close_blocked(&self, target: crate::events::SessionId) {
         let _ = self
             .requests

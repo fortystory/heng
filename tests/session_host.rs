@@ -502,13 +502,14 @@ async fn the_close_rules_spare_the_last_session_and_refuse_the_rest() {
     let mut host = SessionHost::new(SessionId::new("s-1"));
     host.adopt(first.harness, workspace.clone()).unwrap();
 
-    // 「只剩一个时前台可关」那条由 `the_last_session_may_close_itself` 专门守着。
-    // 有别的会话在场时，前台自己：禁止 —— 它是脚下那块地板。
+    // 前台**不再被拒**（票 06）：脚下那块地板也能拆 —— 关之前渲染层先切到相邻的那一个，
+    // 库层在关完之后把前台落到那个邻居上。
     let (second, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
     host.adopt(second.harness, workspace.clone()).unwrap();
     assert_eq!(
         close_check(&host, &SessionId::new("s-1")),
-        Err(CloseRefusal::Foreground(SessionId::new("s-1")))
+        Ok(()),
+        "前台也关得掉（票 06）"
     );
 
     // 空闲的非前台：单击即关（不二次确认）。
@@ -638,4 +639,27 @@ async fn the_last_session_may_close_itself() {
         .await
         .unwrap();
     assert!(host.is_empty(), "关掉最后一个会话就是空宿主");
+}
+
+#[tokio::test]
+async fn closing_after_switching_keeps_the_neighbour_as_the_foreground() {
+    // 票 06：库层**不碰前台指针** —— 前台落到相邻是**切换**做出来的事（渲染层先切到相邻、
+    // 再关掉目标，两条请求顺序固定；spec §17「关闭只从表里移除、不碰前台指针」）。
+    // 这一条守的是那一半：切到邻居之后关掉原来那个，前台仍是邻居、宿主表少一行。
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let (first, _) = load_session(dir.path(), "s-1", vec![Reply::text("在")]).await;
+    let mut host = SessionHost::new(SessionId::new("s-1"));
+    host.adopt(first.harness, workspace.clone()).unwrap();
+    let (second, _) = load_session(dir.path(), "s-2", vec![Reply::text("在")]).await;
+    host.adopt(second.harness, workspace.clone()).unwrap();
+
+    // 切到 s-2（渲染层算好的那个邻居），再关掉 s-1。
+    host.switch(&SessionId::new("s-2"));
+    host.close_with(&SessionId::new("s-1"), SessionCommand::Close)
+        .await
+        .unwrap();
+
+    assert_eq!(host.foreground().as_str(), "s-2", "前台是切过去的那个邻居");
+    assert_eq!(host.len(), 1, "宿主表少一行");
 }

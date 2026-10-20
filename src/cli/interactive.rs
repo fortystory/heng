@@ -1053,9 +1053,10 @@ pub(crate) enum CliRequest {
     Close(SessionId),
 }
 
-/// 关掉一个会话（票 21 的四条规则）。
+/// 关掉一个会话（票 21 的规则、票 06）。
 ///
-/// 四条：前台自己禁止、正在跑回合拒绝、空闲会话单击即关不二次确认、只读预览也能关。
+/// 三条：正在跑回合拒绝、空闲会话单击即关不二次确认、只读预览也能关。
+/// **前台也关得掉**（票 06）：渲染层先切到相邻的那一个、再关它（两条请求，顺序固定）。
 /// 它不属于装载（票 34）：关是把一行从宿主表里卸下来，装是把它放进去。
 pub(crate) async fn close_session(
     host: &mut SessionHost<CliCommand>,
@@ -1065,12 +1066,12 @@ pub(crate) async fn close_session(
 ) {
     if let Err(refusal) = crate::session::close_check(host, id) {
         match &refusal {
-            // 前台被拒走**提示行**，并给一段可点的「切到「<相邻会话>」」（票 32）—— 那句话落在
-            // 转录里会滚走，而「切到哪一个」只有渲染侧算得出（列表顺序在它手里）。
-            crate::session::CloseRefusal::Foreground(target) => {
+            // 正在跑的那一个：走**提示行**，并给一段可点的「切到「<相邻会话>」」—— 切过去好
+            // 在那儿按 ctrl-c 取消（票 06：前台不再被拒，这条提示行是给「在跑」用的）。
+            crate::session::CloseRefusal::Running(target) => {
                 console.close_blocked(target.clone());
             }
-            // 别的拒绝（跑着回合 / 不在表里）照旧进转录：它们是动作层面的说明，没有可点的下一步。
+            // 不在表里：进转录说一句 —— 动作层面的说明，没有可点的下一步。
             _ => kit.notice(&host.foreground(), &refusal.to_string()),
         }
         return;

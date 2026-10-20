@@ -476,8 +476,9 @@ fn title_colour(state: &mut TuiState, title: &str) -> ratatui::style::Color {
     // 顶部页签条（票 15）也写标题，但那是另一种颜色语义；要找的是左栏列表行。
     for y in 2..24u16 {
         let text = row_text(&frame, y, 120);
-        // 页顶那一行是读数（票 05 起页顶没有 `关闭` 了）—— 要读的是**列表行**那一档色。
-        if !text.contains(title) || text.contains("已装载") {
+        // 页顶那一行是读数与 `新建`（票 05 起页顶没有 `关闭` 了）—— 要读的是**列表行**
+        // 那一档色。（别拿「已装载」当判据：会话标题里可能就有那几个字。）
+        if !text.contains(title) || text.contains(wording::SESSION_NEW) {
             continue;
         }
         for x in 0..120u16 {

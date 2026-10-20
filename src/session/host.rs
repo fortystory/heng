@@ -155,15 +155,16 @@ impl SessionActor<SessionCommand> for TurnActor {
     }
 }
 
-/// 关闭被拒的理由（`.scratch/session-tab/spec.md` §5、票 21 的四条规则）。
+/// 关闭被拒的理由（`.scratch/session-tab/spec.md` §5、票 21 的四条规则、票 06）。
 ///
-/// 两条拒绝各有各的说法：前台是自己脚下那块地板，先切走；正在跑的那个会话先取消 —— 别的都是
+/// **前台不再是被拒的一条**：脚下那块地板也能拆 —— 关之前先切到相邻的那一个（渲染层发两条
+/// 请求，顺序固定）。剩下的两条拒绝各有各的说法：正在跑的那个会话先取消 —— 别的都是
 /// **单击即关、不二次确认**（只读预览也一样）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CloseRefusal {
-    #[error("别关脚下这个会话：先切到别的会话再关")]
-    Foreground(SessionId),
-    #[error("这个会话正在跑回合：先在那个会话按 ctrl-c 取消")]
+    // 这半句与提示行那半是同一句话（`wording::close_blocked_lead`）—— 两边各写一份
+    // 长文案就会各自漂，所以这里只留短的那半。
+    #[error("这个会话正在跑回合")]
     Running(SessionId),
     #[error("会话 {0} 不在宿主表里")]
     NotHosted(SessionId),
@@ -179,11 +180,8 @@ pub fn close_check<C: Send + 'static>(
     let entry = host
         .get(id)
         .ok_or_else(|| CloseRefusal::NotHosted(id.clone()))?;
-    // 前台优先：它是脚下那块地板，别的理由都排在它后面。**唯一的例外是只剩它一个**（票 32）：
-    // 那时没有「先切走」这条出路，而票 07 §5 本来就要「关掉最后一个会话 → 空宿主」这条路走得通。
-    if &host.foreground() == id && host.len() > 1 {
-        return Err(CloseRefusal::Foreground(id.clone()));
-    }
+    // **前台不再拒绝**（票 06）：脚下那块地板也能拆 —— 拆之前渲染层先切到相邻的那一个，
+    // 库层在关完之后把前台指针落到那个邻居上。
     if *entry.state.borrow() == SessionState::RunningTurn {
         return Err(CloseRefusal::Running(id.clone()));
     }
@@ -396,6 +394,10 @@ impl<C: Send + 'static> SessionHost<C> {
     /// `SessionCommand::Close`（见 [`SessionHost::close`] 那一层）。
     ///
     /// **不写盘、不删盘** —— 盘上那份还在，随时能再装载（票 18）。
+    ///
+    /// **不碰前台指针**：关掉的是前台时，前台落到相邻的那一个是**切换**做出来的事 ——
+    /// 渲染层先发「切到相邻」、再发「关掉目标」两条请求，顺序固定（票 06）。这一层只保证
+    /// 「表里真的少了一行、task 真的结束了」。
     pub async fn close_with(&mut self, id: &SessionId, shutdown: C) -> Result<(), HostError> {
         let index = self
             .entries
@@ -412,8 +414,8 @@ impl<C: Send + 'static> SessionHost<C> {
 impl SessionHost<SessionCommand> {
     /// 关掉一个缺省命令类型的会话：发 `Close`、等它那个 task 结束。
     ///
-    /// 前台自己不许关、正在跑回合的那个会话怎么处理是票 21 的规则，这一层只保证「表里真的少了
-    /// 一行、task 真的结束了」。
+    /// 能不能关由 [`close_check`] 判（正在跑的那个拒绝）；这一层只保证「表里真的少了一行、
+    /// task 真的结束了」。
     pub async fn close(&mut self, id: &SessionId) -> Result<(), HostError> {
         self.close_with(id, SessionCommand::Close).await
     }

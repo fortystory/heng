@@ -3370,8 +3370,8 @@ pub struct TuiState {
     /// 会话页上**上一次点击**落在哪一行、什么时候（票 32）。crossterm 没有双击事件，双击只能
     /// 自己按「同一行 + `GESTURE_WINDOW`」判。
     last_session_click: Option<(usize, std::time::Instant)>,
-    /// 关闭被前台规则拒了之后那对：要关的 `target` 在前台，可点段会把前台切到 `alternative`
-    /// （票 32）。相邻是谁只有渲染侧算得出 —— 列表顺序在它手里。
+    /// 关闭被拒了之后那一个：被拒的 `target`（正在跑的那个），提示行的可点段把前台切到它
+    /// （票 32、票 06）。
     close_blocked: Option<RefusedClose>,
     /// 轨迹页持有键盘吗。
     ///
@@ -3927,11 +3927,11 @@ struct Region {
     action: HitAction,
 }
 
-/// 关闭被前台规则拒了之后，渲染侧算出的那一对（票 32）：要关的 `target` 在前台，可点段会把
-/// 前台切到 `alternative`（列表里的邻居）。
+/// 关闭被拒了之后，渲染侧记下的那一个（票 32、票 06）：被拒的 `target`（正在跑的那个）。
+///
+/// 提示行的可点段把前台切到**它** —— 切过去好在那儿按 ctrl-c 取消（票 06）。
 struct RefusedClose {
     target: crate::events::SessionId,
-    alternative: crate::events::SessionId,
 }
 
 /// 提示行上那两半（票 32）：前半说明为什么被拒，后半整段可点。
@@ -3977,7 +3977,7 @@ enum HitAction {
     /// 存**行号**而不是会话身份，与 [`HitAction::SessionRow`] 同一条理由：`HitAction` 要保持
     /// `Copy`，而命中表只在画出来的那一帧里有效。
     SessionCloseRow(usize),
-    /// 点提示行上那段「切到「…」」（票 32）：关闭被前台规则拒了之后，把前台切到相邻的那一个，
+    /// 点提示行上那段「切到「…」」（票 32）：关闭被拒了之后，把前台切到**被拒的那一个**，
     /// 焦点仍留在要关的那一行上。
     CloseBlockedSwitch,
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
@@ -5856,10 +5856,9 @@ impl TuiState {
             Some(HitAction::SessionRow(line)) => self.sessions_row_click(line),
             Some(HitAction::CloseBlockedSwitch) => {
                 if let Some(blocked) = self.close_blocked.take() {
-                    self.sessions.focus = Some(blocked.target);
-                    self.events.push(FrontEndEvent::OpenSession {
-                        id: blocked.alternative,
-                    });
+                    self.sessions.focus = Some(blocked.target.clone());
+                    self.events
+                        .push(FrontEndEvent::OpenSession { id: blocked.target });
                 }
             }
             // 页顶那个入口的动作由票 21 接：这一片只把位置与命中立起来。
@@ -5868,9 +5867,9 @@ impl TuiState {
                 self.events.push(FrontEndEvent::NewSession);
             }
             Some(HitAction::SessionCloseRow(line)) => {
-                // 点那一行的关闭标记：关掉**那一行**的会话 —— 不落焦点、不切前台（票 05）。
+                // 点那一行的关闭标记：关掉**那一行**的会话 —— 不落焦点（票 05）。
                 if let Some(id) = self.session_of_action(HitAction::SessionRow(line)) {
-                    self.events.push(FrontEndEvent::CloseSession { id });
+                    self.close_session(id);
                 }
             }
             Some(HitAction::SwitchRailTab(tab)) => {
@@ -7467,21 +7466,45 @@ impl TuiState {
         self.events.push(FrontEndEvent::OpenSession { id });
     }
 
-    /// 目标行的**邻居**（票 32）：列表里的下一行，没有下一行就上一行 —— 那是唯一可预期的顺序。
-    fn alternative_for(
+    /// 关掉这一个会话（票 06）。
+    ///
+    /// 关的是**前台**时：**先切到相邻的那一个、再关掉它** —— 两条请求，顺序固定（切在前）。
+    /// 脚下那块地板拆之前得先站到另一块上；不切就关，前台会落空。
+    ///
+    /// 关的不是前台时只有一条请求，前台不动（票 05 的验收）。
+    fn close_session(&mut self, id: crate::events::SessionId) {
+        // 正在跑的那一个**不先切走**（票 06）：切走了也关不掉，还把用户脚下的地板抽走。
+        // 让库层拒它，提示行给一段可点的「切到「<它>」」—— 那才是能解决问题的那一步。
+        let running = self.projections.get(&id).is_some_and(|slot| {
+            slot.state == Some(crate::session::host::SessionState::RunningTurn)
+        });
+        if !running
+            && id == self.front
+            && let Some(neighbour) = self.neighbour_in_host(&id)
+        {
+            self.events
+                .push(FrontEndEvent::OpenSession { id: neighbour });
+        }
+        self.events.push(FrontEndEvent::CloseSession { id });
+    }
+
+    /// 宿主表顺序里的**相邻**（下一个；没有就上一个）—— 票 06。
+    ///
+    /// **按宿主表顺序**，不是列表顺序：页签条的标签就按那个顺序排，它也是「下一个会话是谁」
+    /// 这件事唯一的口径。
+    fn neighbour_in_host(
         &self,
         target: &crate::events::SessionId,
     ) -> Option<crate::events::SessionId> {
-        let at = self
-            .sessions
-            .shown
-            .iter()
-            .position(|row| &row.id == target)?;
-        let next = self.sessions.shown.get(at + 1).or_else(|| {
-            at.checked_sub(1)
-                .and_then(|before| self.sessions.shown.get(before))
-        })?;
-        Some(next.id.clone())
+        let at = self.sessions.hosted.iter().position(|id| id == target)?;
+        self.sessions
+            .hosted
+            .get(at + 1)
+            .or_else(|| {
+                at.checked_sub(1)
+                    .and_then(|before| self.sessions.hosted.get(before))
+            })
+            .cloned()
     }
 
     /// 关闭被拒时提示行那两段（票 32）：前半固定，后半点名**相邻的那一个会话**。
@@ -7490,7 +7513,8 @@ impl TuiState {
     /// 点不动了（`hint_region` 不肯给出屏外的矩形），而「可点」正是这条提示的全部意义。
     fn close_blocked_hint(&self, width: usize, exit_w: usize) -> Option<CloseHint> {
         let blocked = self.close_blocked.as_ref()?;
-        let alternative = self.shown_row(&blocked.alternative)?;
+        // 可点段点名**被拒的那一个**（正在跑的那个）：切过去好在那儿按 ctrl-c 取消（票 06）。
+        let refused = self.shown_row(&blocked.target)?;
         let sep_w = text_columns(wording::SEP);
         // `切到「」` 那四步的固定开销。
         let frame = text_columns("切到「」");
@@ -7504,7 +7528,7 @@ impl TuiState {
         } else {
             room.saturating_sub(frame)
         };
-        let action = wording::close_blocked_switch(&fit_title(&alternative.title, budget));
+        let action = wording::close_blocked_switch(&fit_title(&refused.title, budget));
         let receipt = if with_lead {
             format!("{lead}{}{action}", wording::SEP)
         } else {
@@ -8137,23 +8161,18 @@ impl TuiState {
                     self.sidebar_keyboard = true;
                     self.sessions.focus = Some(id);
                 }
-                // 关闭被前台规则拒了（票 32）：提示行给一段可点的。
+                // 关闭被拒了（票 06）：被拒的是那个**正在跑**的会话 —— 提示行给一段可点的
+                // 「切到「<它>」」，切过去好在那儿按 ctrl-c 取消。
                 ConsoleNotify::CloseBlocked { target } => {
-                    match self.alternative_for(&target) {
-                        Some(alternative) => {
-                            self.close_blocked = Some(RefusedClose {
-                                target,
-                                alternative,
-                            });
-                        }
-                        // 算不出相邻（列表还没推来、或者目标刚好被过滤掉）：至少说一句。
-                        None => {
-                            self.close_blocked = None;
-                            self.notice = Some((
-                                std::time::Instant::now(),
-                                wording::close_blocked_note().to_owned(),
-                            ));
-                        }
+                    if self.shown_row(&target).is_some() {
+                        self.close_blocked = Some(RefusedClose { target });
+                    } else {
+                        // 列表里没有它（列表还没推来、或者它刚好被过滤掉）：至少说一句。
+                        self.close_blocked = None;
+                        self.notice = Some((
+                            std::time::Instant::now(),
+                            wording::close_blocked_note().to_owned(),
+                        ));
                     }
                 }
                 // 退出被闸门拒了（票 28）：那一把举手随之作废。
@@ -8246,7 +8265,7 @@ impl TuiState {
                 if self
                     .close_blocked
                     .as_ref()
-                    .is_some_and(|blocked| blocked.target == id || blocked.alternative == id)
+                    .is_some_and(|blocked| blocked.target == id)
                 {
                     self.close_blocked = None;
                 }

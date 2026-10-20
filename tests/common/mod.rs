@@ -84,6 +84,27 @@ pub fn host(state: &mut TuiState, foreground: &str, sessions: &[&str]) {
     }));
 }
 
+/// 推一份宿主表事实，其中一个会话**正在跑**。
+pub fn host_running(state: &mut TuiState, foreground: &str, sessions: &[&str], running: &str) {
+    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
+        foreground: SessionId::new(foreground),
+        sessions: sessions
+            .iter()
+            .map(|id| heng::session::HostedSession {
+                id: SessionId::new(*id),
+                state: if *id == running {
+                    heng::session::SessionState::RunningTurn
+                } else {
+                    heng::session::SessionState::Idle
+                },
+                read_only: false,
+            })
+            .collect(),
+        waiting: 0,
+        finished: 0,
+    }));
+}
+
 /// 推一份宿主表事实，其中一个会话是**只读预览**。
 pub fn host_read_only(state: &mut TuiState, foreground: &str, sessions: &[(&str, bool)]) {
     state.request(ConsoleRequest::Facts(heng::session::HostFacts {
@@ -99,6 +120,21 @@ pub fn host_read_only(state: &mut TuiState, foreground: &str, sessions: &[(&str,
         waiting: 0,
         finished: 0,
     }));
+}
+
+/// 把渲染侧的**前台**切到某一个会话（就像循环层发来的那次切换）。
+///
+/// 宿主表事实只说「谁在表里」，前台指针是切换通知推的 —— 两件不同的事。
+pub fn switch_front(state: &mut TuiState, id: &str) {
+    let mut switched = facts();
+    switched.session_id = id.to_owned();
+    state.request(ConsoleRequest::Notify(
+        heng::render::ConsoleNotify::SwitchSession {
+            facts: switched,
+            cwd: std::path::PathBuf::from("/x/heng"),
+            events: Vec::new(),
+        },
+    ));
 }
 
 pub fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {

@@ -7,10 +7,11 @@
 mod common;
 
 use common::{
-    buffer, click, find_leftmost_cell, fresh, host, host_read_only, hover, load, open_sessions,
-    row, row_text, screen,
+    buffer, click, find_leftmost_cell, fresh, host, host_read_only, host_running, hover, load,
+    open_sessions, row, row_text, screen, switch_front,
 };
-use heng::render::FrontEndEvent;
+use heng::events::SessionId;
+use heng::render::{ConsoleNotify, ConsoleRequest, FrontEndEvent, Key};
 use heng::session::listing::{SessionMark, SessionRow};
 
 /// 两行会话：都在宿主表里（关得掉）。
@@ -398,5 +399,168 @@ fn the_focused_row_is_accent_and_bold() {
         frame[(time_at, row)].fg,
         ratatui::style::Color::LightMagenta,
         "焦点行的时间列是 ACCENT"
+    );
+}
+
+/// 关掉**前台**那一会话：**先切到相邻、再关掉它** —— 两条请求，顺序固定（票 06）。
+#[test]
+fn closing_the_foreground_switches_to_the_neighbour_first() {
+    let mut state = two_hosted();
+    switch_front(&mut state, "s-b");
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "左栏会话页");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+
+    click(&mut state, 0, row);
+    let events = state.take_events();
+
+    assert_eq!(events.len(), 2, "两条请求：{events:?}");
+    assert!(
+        matches!(&events[0], FrontEndEvent::OpenSession { id } if id.as_str() == "s-a"),
+        "先切到宿主表里相邻的那一个：{events:?}"
+    );
+    assert!(
+        matches!(&events[1], FrontEndEvent::CloseSession { id } if id.as_str() == "s-b"),
+        "再关掉前台那一个：{events:?}"
+    );
+}
+
+/// 关掉**非前台**的那一会话 → 只发一条关闭请求，前台不动。
+#[test]
+fn closing_a_background_session_sends_one_request() {
+    let mut state = two_hosted();
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+
+    click(&mut state, 0, row);
+    let events = state.take_events();
+
+    assert_eq!(events.len(), 1, "只一条请求：{events:?}");
+    assert!(
+        matches!(&events[0], FrontEndEvent::CloseSession { id } if id.as_str() == "s-a"),
+        "关的是被点的那一行：{events:?}"
+    );
+}
+
+/// 只剩一个会话时关掉它 → 没有相邻可切，只有那一条请求（关完之后进空宿主态，票 06）。
+#[test]
+fn closing_the_last_session_sends_only_the_close() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![row("s-a", "改一下左栏", "heng", SessionMark::Idle, 2)],
+        1,
+    );
+    host(&mut state, "s-a", &["s-a"]);
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+
+    click(&mut state, 0, row);
+    let events = state.take_events();
+
+    assert_eq!(events.len(), 1, "没有相邻可切，只有那一条：{events:?}");
+    assert!(
+        matches!(&events[0], FrontEndEvent::CloseSession { id } if id.as_str() == "s-a"),
+        "关的是那一个：{events:?}"
+    );
+}
+
+/// 关掉最后一个会话 → 空宿主态：页区说「没有会话」、输入区禁用、读数是 0 个（票 06）。
+#[test]
+fn closing_the_last_session_leaves_an_empty_host() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![row("s-a", "改一下左栏", "heng", SessionMark::Idle, 2)],
+        1,
+    );
+    host(&mut state, "s-a", &["s-a"]);
+    open_sessions(&mut state, 120, 24);
+
+    // 宿主表空了：循环层推来的那份事实里一个会话都没有。
+    host(&mut state, "s-a", &[]);
+    let frame = buffer(120, 24, &mut state);
+    let text = screen(120, 24, &mut state);
+
+    assert!(text.contains("没有会话"), "页区说没有会话：{text}");
+    assert!(text.contains("已装载 0 个"), "读数是 0 个：{text}");
+    assert!(
+        !row_text(&frame, 0, 120).contains("改一下左栏"),
+        "页签条空了：{}",
+        row_text(&frame, 0, 120)
+    );
+}
+
+/// 平铺态里只剩一格时**回标签态**（票 06）：页签条回来了。
+#[test]
+fn the_last_tile_gives_the_tab_strip_back() {
+    let mut state = two_hosted();
+    switch_front(&mut state, "s-b");
+    // 先有一帧（平铺按**这一帧**的尺寸算放不放得下）。
+    let _ = buffer(120, 40, &mut state);
+    state.key(Key::CtrlR);
+    let _ = buffer(120, 40, &mut state);
+    assert!(state.tiled(), "进平铺态");
+
+    // 关掉一个 → 宿主表只剩一个 → 回标签态。
+    host(&mut state, "s-b", &["s-b"]);
+
+    assert!(!state.tiled(), "只剩一个会话 → 回标签态");
+}
+
+/// 忙碌时点标记 → 提示行**两段**：前半说为什么，后半是可点的「切到「…」」（票 06）。
+#[test]
+fn a_busy_session_gives_two_segments_on_the_hint_line() {
+    let mut state = two_hosted();
+    open_sessions(&mut state, 120, 24);
+
+    // 循环层说：关不掉（那个会话正在跑回合）。
+    state.request(ConsoleRequest::Notify(ConsoleNotify::CloseBlocked {
+        target: SessionId::new("s-a"),
+    }));
+    let text = screen(120, 24, &mut state);
+
+    assert!(text.contains("正在跑回合"), "提示行前半：{text}");
+    assert!(text.contains("切到「"), "提示行后半是可点的：{text}");
+}
+
+/// 正在跑的那一行点标记 → **只发一条**关闭请求，**不先切走**（票 06）。
+///
+/// 切走了也关不掉，还把用户脚下的地板抽走 —— 该做的是让库层拒它，提示行给一段可点的
+/// 「切到「<它>」」。
+#[test]
+fn a_running_session_is_not_switched_away_first() {
+    let mut state = fresh();
+    load(
+        &mut state,
+        vec![
+            row("s-b", "左栏会话页", "heng", SessionMark::Idle, 2),
+            row("s-a", "改一下左栏", "heng", SessionMark::Idle, 90),
+        ],
+        2,
+    );
+    host_running(&mut state, "s-b", &["s-b", "s-a"], "s-b");
+    switch_front(&mut state, "s-b");
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "左栏会话页");
+    hover(&mut state, column, row);
+    let _ = buffer(120, 24, &mut state);
+
+    click(&mut state, 0, row);
+    let events = state.take_events();
+
+    assert_eq!(events.len(), 1, "只发关闭，不先切走：{events:?}");
+    assert!(
+        matches!(&events[0], FrontEndEvent::CloseSession { id } if id.as_str() == "s-b"),
+        "关的是那个在跑的：{events:?}"
     );
 }

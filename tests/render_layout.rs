@@ -4402,10 +4402,10 @@ fn the_sessions_page_scrolls_and_keeps_the_focus_visible() {
     let _ = screen(120, 24, &mut state);
 
     let rows = sidebar_rows(&mut state, 120, 24);
-    // 页顶那一行是读数（票 05 起页顶没有 `关闭` 了）—— 列表断言只看内容行。
+    // 页顶那一行是读数与 `新建`（票 05 起页顶没有 `关闭` 了）—— 列表断言只看内容行。
     let listed = |rows: &[String]| -> Vec<String> {
         rows.iter()
-            .filter(|line| !line.contains("已装载"))
+            .filter(|line| !line.contains(heng::render::wording::SESSION_NEW))
             .cloned()
             .collect()
     };
