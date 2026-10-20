@@ -7,6 +7,9 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
+mod common;
+
+use common::{buffer, row_text, screen_lines};
 use std::collections::BTreeMap;
 
 use heng::events::SessionId;
@@ -86,15 +89,10 @@ fn idle() -> TuiState {
 }
 
 /// 按固定尺寸画一帧，再把屏幕读回来，一行一段文本。
-fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
-    let frame = buffer(width, height, state);
-    (0..height).map(|y| row_text(&frame, y, width)).collect()
-}
-
 /// 一条画出 [`buffer`] 与 [`screen`] 两样东西。
 ///
 /// 菜单开没开这种判据要读几何（上下那两条虚线），而失败消息仍然要贴一段屏幕文本 —— 于是要几何
-/// 的那些测试拿这一对，而不是先 `screen()` 再画一遍。
+/// 的那些测试拿这一对，而不是先 `screen_lines()` 再画一遍。
 fn framed(width: u16, height: u16, state: &mut TuiState) -> (Buffer, String) {
     let frame = buffer(width, height, state);
     let text = screen_text(&frame, width, height);
@@ -133,10 +131,6 @@ fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
 }
 
 /// 缓冲的一整行，作为文本。
-fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
-    cells(buffer, y, 0, width)
-}
-
 /// 转录的第一行。外框走了之后它曾经就是终端的第一行
 /// （`.scratch/tui-chrome/spec.md` §1）；后来主列顶上多了页签条那两行。票 16 删掉那条主列
 /// 页签条之后，转录直接长在顶部页签条（票 15）下面 —— 它从**第三行**（下标 2）起。
@@ -167,14 +161,6 @@ fn transcript_rows(rows: &[String]) -> usize {
 }
 
 /// 画出来的这一帧本身，用来断言某个具体的格子。
-fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
-    terminal
-        .draw(|frame| draw_frame(frame, state))
-        .expect("画一帧");
-    terminal.backend().buffer().clone()
-}
-
 /// 详情覆盖层顶上那条标签条上的那几个面名 —— 它们连成一串，就是那一行。
 ///
 /// 它同时是「覆盖层立着、正落在**默认面**上」的判据：工具落在**参数**、消息落在**正文**
@@ -193,7 +179,7 @@ fn a_terminal_below_the_minimum_shows_one_centred_notice() {
     // 39x24 比下限少一列；40x9 少一行。两种都只画
     // 那句提示，别的什么都不画 —— 不画半截的窗格（spec §2）。
     for (width, height) in [(39, 24), (40, 9)] {
-        let rows = screen(width, height, &mut state());
+        let rows = screen_lines(width, height, &mut state());
         let text = rows.join("\n");
         assert!(
             text.contains("终端太小：至少 40×10"),
@@ -221,7 +207,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     // 页签条与六项读数，外加主列的转录、状态行、
     // 输入区与提示行 —— 它们之间不留一条空行
     // （`.scratch/tui-sidebar/spec.md` §1）。
-    let rows = screen(120, 24, &mut state());
+    let rows = screen_lines(120, 24, &mut state());
 
     // 四周没有边框：外框已经离开（`.scratch/tui-chrome/spec.md` §1），
     // 终端自己就是边界。
@@ -381,7 +367,7 @@ fn the_mark_keeps_a_dim_preamble_in_both_its_forms() {
         (40, 24, false),
     ] {
         let mut fresh = state();
-        let rows = screen(width, height, &mut fresh);
+        let rows = screen_lines(width, height, &mut fresh);
         assert!(
             !any_mark_on_screen(&rows.join("\n")),
             "{width}x{height} 在标记的那一档之下：{:#?}",
@@ -443,7 +429,7 @@ fn ctrl_o_takes_the_sidebar_away_and_brings_it_back() {
     // `Ctrl-O` 是左栏的开关：收起时那一栏连同分隔线整列还给主列，
     // 再按一下逐格回到原样（`.scratch/sidebar-toggle/spec.md` §2、§3）。
     let mut state = state();
-    let open = screen(120, 24, &mut state);
+    let open = screen_lines(120, 24, &mut state);
     assert!(
         open.join("\n").contains('┆'),
         "收起之前左栏与分隔线在：{}",
@@ -451,7 +437,7 @@ fn ctrl_o_takes_the_sidebar_away_and_brings_it_back() {
     );
 
     state.key(Key::CtrlO);
-    let closed = screen(120, 24, &mut state);
+    let closed = screen_lines(120, 24, &mut state);
     assert!(
         !closed.join("\n").contains("调用量"),
         "收起之后整帧没有分隔列：{}",
@@ -460,7 +446,7 @@ fn ctrl_o_takes_the_sidebar_away_and_brings_it_back() {
     assert_ne!(open, closed, "收起改变了这一帧");
 
     state.key(Key::CtrlO);
-    let reopened = screen(120, 24, &mut state);
+    let reopened = screen_lines(120, 24, &mut state);
     assert_eq!(open, reopened, "再按一下逐格回到原样");
 }
 
@@ -470,9 +456,9 @@ fn ctrl_o_cannot_bring_the_sidebar_back_below_eighty_columns() {
     // 按开关不该改变任何东西 —— 不报错、不弹文案、帧逐格相等。
     for (width, height) in [(79u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
-        let before = screen(width, height, &mut state);
+        let before = screen_lines(width, height, &mut state);
         state.key(Key::CtrlO);
-        let after = screen(width, height, &mut state);
+        let after = screen_lines(width, height, &mut state);
         assert_eq!(
             before, after,
             "{width}x{height} 下按 Ctrl-O 不该改变任何东西"
@@ -481,12 +467,12 @@ fn ctrl_o_cannot_bring_the_sidebar_back_below_eighty_columns() {
 
     // 80 列是窄档的门槛：这里它收得起来，也叫得回来。
     let mut state = state();
-    let open = screen(80, 24, &mut state);
+    let open = screen_lines(80, 24, &mut state);
     state.key(Key::CtrlO);
-    let closed = screen(80, 24, &mut state);
+    let closed = screen_lines(80, 24, &mut state);
     assert_ne!(open, closed, "80 列下 Ctrl-O 收得起左栏");
     state.key(Key::CtrlO);
-    assert_eq!(open, screen(80, 24, &mut state), "80 列下也叫得回来");
+    assert_eq!(open, screen_lines(80, 24, &mut state), "80 列下也叫得回来");
 }
 
 #[test]
@@ -500,11 +486,11 @@ fn ctrl_o_works_while_a_run_is_in_flight() {
             heng::session::host::SessionState::RunningTurn,
         ),
     ));
-    let open = screen(120, 24, &mut state);
+    let open = screen_lines(120, 24, &mut state);
     assert!(open.join("\n").contains('┆'), "跑着的时候左栏还在");
 
     state.key(Key::CtrlO);
-    let closed = screen(120, 24, &mut state);
+    let closed = screen_lines(120, 24, &mut state);
     assert_ne!(open, closed, "跑着的时候 Ctrl-O 也算数");
     assert!(
         !closed.join("\n").contains("调用量"),
@@ -527,7 +513,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
     state.apply(tool_completed(2, "call-24", true, Some("body"), None));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
-    let open = screen(120, 40, &mut state);
+    let open = screen_lines(120, 40, &mut state);
     assert!(
         open.join("\n").contains(TOOL_FACES),
         "覆盖层立着：{}",
@@ -535,7 +521,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
     );
 
     state.key(Key::CtrlO);
-    let after = screen(120, 40, &mut state);
+    let after = screen_lines(120, 40, &mut state);
     assert_eq!(open, after, "覆盖层立着时 Ctrl-O 一个像素都不动");
     assert!(after.join("\n").contains(TOOL_FACES), "覆盖层也没被关掉");
 }
@@ -555,9 +541,9 @@ fn ctrl_o_still_works_while_a_questionnaire_is_up() {
             description: None,
         }],
     });
-    let open = screen(120, 24, &mut state);
+    let open = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlO);
-    let closed = screen(120, 24, &mut state);
+    let closed = screen_lines(120, 24, &mut state);
     assert_ne!(open, closed, "问卷立着时 Ctrl-O 也生效");
     assert!(
         !closed.join("\n").contains("调用量"),
@@ -572,18 +558,20 @@ fn the_hidden_sidebar_has_no_tabs_to_click() {
     // 消失 —— 没有第二处要同步的状态（`.scratch/sidebar-toggle/spec.md` §2）。
     let mut state = state();
     assert!(
-        screen(120, 24, &mut state).join("\n").contains("调用量"),
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("调用量"),
         "左栏带着页签"
     );
 
     state.key(Key::CtrlO);
-    let closed = screen(120, 24, &mut state);
+    let closed = screen_lines(120, 24, &mut state);
     let text = closed.join("\n");
     assert!(!text.contains("调用量"), "收起后页签不在：{text}");
 
     // 原先页签所在的那一格现在是转录区：点它什么都不发生。
     click(&mut state, 2, 6);
-    let after = screen(120, 24, &mut state);
+    let after = screen_lines(120, 24, &mut state);
     assert_eq!(closed, after, "收起后点页签原来的位置没有反应");
 }
 
@@ -617,7 +605,7 @@ fn a_todo_list_landing_while_the_sidebar_is_hidden_does_not_pop_it_back() {
 
     // 那一页的内容也在：意愿只决定栏在不在，不决定标签或页里的东西。
     click_row(&mut state, 120, 24, wording::TAB_TODO);
-    let shown = screen(120, 24, &mut state).join("\n");
+    let shown = screen_lines(120, 24, &mut state).join("\n");
     assert!(shown.contains("写测试"), "todo 页的内容还在：{shown}");
 }
 
@@ -677,7 +665,7 @@ fn the_main_rules_stop_short_of_the_divide_column() {
 fn a_floor_sized_terminal_still_draws_the_main_column() {
     // 40x10 在下限之内：左栏被藏起来，主列仍然
     // 有它的转录、状态行、输入区与提示行（spec §2）。
-    let rows = screen(40, 10, &mut state());
+    let rows = screen_lines(40, 10, &mut state());
     for (row, line) in rows.iter().enumerate() {
         assert!(
             !line.contains(['┌', '┐', '└', '┘']),
@@ -721,7 +709,7 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
 
 /// 状态照原样时，提示行里有多少个 `·` 分隔的项。
 fn hint_items_of(width: u16, state: &mut TuiState) -> Vec<String> {
-    let rows = screen(width, 24, state);
+    let rows = screen_lines(width, 24, state);
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-d"))
@@ -767,7 +755,7 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
             heng::session::host::SessionState::RunningTurn,
         ),
     ));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-d"))
@@ -885,7 +873,7 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         hint_items(120)
     );
     assert!(
-        !screen(174, 24, &mut state())
+        !screen_lines(174, 24, &mut state())
             .join("\n")
             .contains("shift+enter"),
         "任何宽度下都没有幽灵换行键"
@@ -954,7 +942,7 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
         text: "正在读文件".to_owned(),
     });
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("heng：会话 abc"),
         "提示是转录里的一行：{text}"
@@ -965,18 +953,18 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
 /// 屏幕上那版**块字**标记在不在：找它最上面那行字形。
 ///
 /// 不能拿汉字当判据 —— 块字是拼出来的，屏幕上一个大标记里一个「衡」字都没有。
-fn block_mark_on_screen(text: &str) -> bool {
+fn block_mark_on_screen_lines(text: &str) -> bool {
     text.contains(wording::logo_lines()[1].trim())
 }
 
 /// 屏幕上那版**收起来**的标记在不在：它仍是拼音加一个汉字。
-fn compact_mark_on_screen(text: &str) -> bool {
+fn compact_mark_on_screen_lines(text: &str) -> bool {
     text.contains(wording::logo_lines_compact()[2].trim())
 }
 
 /// 两者的并集：屏幕上画了标记，无论哪一版。
 fn any_mark_on_screen(text: &str) -> bool {
-    block_mark_on_screen(text) || compact_mark_on_screen(text)
+    block_mark_on_screen_lines(text) || compact_mark_on_screen_lines(text)
 }
 
 /// 标记在 120x24 下的五行颜色，自上而下：画家写的那一列
@@ -1226,7 +1214,7 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
     ));
     for frame in 0..5 {
         state.tick();
-        let text = screen(100, 24, &mut state).join("\n");
+        let text = screen_lines(100, 24, &mut state).join("\n");
         assert!(
             text.contains(&format!("heng {}", env!("CARGO_PKG_VERSION"))),
             "第 {frame} 帧：身份还是它自己：{text}"
@@ -1327,7 +1315,7 @@ fn a_speaker_who_says_several_things_in_a_row_is_named_once() {
     state.apply(message(2, "票的格式清楚了。", None));
     state.apply(message(3, "开始写 spec 前先确认两条文档护栏。", None));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     // 只看主列：左栏那几行里也有字，混进来会把「空行」判错。
     let main =
         |row: &String| -> String { row.chars().skip(41).collect::<String>().trim().to_owned() };
@@ -1370,7 +1358,7 @@ fn a_message_in_the_conversation_is_not_an_entry() {
         let frame = buffer(120, 24, &mut state);
         let (column, row) = cell_of(&frame, 120, 24, needle).expect("在屏幕上");
         click(&mut state, column, row);
-        let text = screen(120, 24, &mut state).join("\n");
+        let text = screen_lines(120, 24, &mut state).join("\n");
         assert!(!text.contains(MESSAGE_FACES), "点 {needle} 不弹窗：{text}");
     }
 
@@ -1381,7 +1369,7 @@ fn a_message_in_the_conversation_is_not_an_entry() {
     let frame = buffer(120, 24, &mut trace);
     let (column, row) = cell_of(&frame, 120, 24, "第一行在这里").expect("轨迹页上那行消息");
     click(&mut trace, column, row);
-    let text = screen(120, 24, &mut trace).join("\n");
+    let text = screen_lines(120, 24, &mut trace).join("\n");
     assert!(text.contains("第二行在那里"), "轨迹页照旧开全文：{text}");
 }
 
@@ -1442,7 +1430,7 @@ fn dragging_across_the_transcript_highlights_it_and_swallows_the_click() {
 
     // 抬起：那一次点击被拖选拦下（正文详情不开），反白跟着走掉。
     state.mouse(release(column + 4, row + 1));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains(MESSAGE_FACES), "拖选不吃成一次点击：{text}");
     let frame = buffer(120, 24, &mut state);
     assert!(
@@ -1461,7 +1449,7 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     state.mouse(press(column, row));
     state.mouse(drag_to(column + 3, row + 1));
     state.mouse(release(column + 3, row + 1));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("已复制"), "提示行给回执：{text}");
     assert!(text.contains("字"), "带着字数：{text}");
 
@@ -1482,7 +1470,7 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     let frame = buffer(120, 24, &mut plain);
     let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
     click(&mut plain, column, row);
-    let text = screen(120, 24, &mut plain).join("\n");
+    let text = screen_lines(120, 24, &mut plain).join("\n");
     assert!(!text.contains("已复制"), "点一下不留回执：{text}");
 }
 
@@ -1507,7 +1495,7 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         (174, 50, Some(40), "mark", true, 41),
     ];
     for (width, height, tier, identity, model, rows_expected) in cases {
-        let rows = screen(width, height, &mut state());
+        let rows = screen_lines(width, height, &mut state());
         let text = rows.join("\n");
         assert!(
             !text.contains("终端太小"),
@@ -1607,15 +1595,15 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     ];
     for (height, kind, page_rows) in cases {
         let mut state = state();
-        let rows = screen(120, height, &mut state);
+        let rows = screen_lines(120, height, &mut state);
         let text = rows.join("\n");
         assert_eq!(
-            block_mark_on_screen(&text),
+            block_mark_on_screen_lines(&text),
             kind == SidebarKind::Mark,
             "{height} 行画不画篆书：{text}"
         );
         assert_eq!(
-            compact_mark_on_screen(&text),
+            compact_mark_on_screen_lines(&text),
             kind == SidebarKind::MarkCompact,
             "{height} 行画不画收起来那版标记：{text}"
         );
@@ -1671,7 +1659,7 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
 /// 不再拿身份去换那六行读数（`.scratch/trace-tab/issues/08-sidebar-page-fills-height.md`）。
 #[test]
 fn the_tiny_terminal_keeps_its_text_identity() {
-    let rows = screen(80, 10, &mut state());
+    let rows = screen_lines(80, 10, &mut state());
     let text = rows.join("\n");
     assert!(text.contains("heng"), "80×10 保住文字身份：{text}");
     assert!(
@@ -1771,7 +1759,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
         heng::events::SessionId::new("01J8ZQ4K7M"),
         "换页之前的一句话".to_owned(),
     ));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("token"), "在显示调用量那一页：{text}");
 
     // 切到 `文件`：这一页现在画的是工作区那棵树（还没有索引时说的是它在等），
@@ -1780,7 +1768,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_FILES);
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains(wording::files_loading()),
         "文件页说它在等工作区那份索引：{text}"
@@ -1797,7 +1785,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     // 再切回来：调用量恢复了那些字段。
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_USAGE);
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("token"), "读数回来了：{text}");
     assert!(
         !text.contains(wording::files_loading()),
@@ -1815,7 +1803,7 @@ fn open_files_page(state: &mut TuiState, width: u16, height: u16) {
     let frame = buffer(width, height, state);
     let (column, row) = tab_cell(&frame, width, height, wording::TAB_FILES);
     click(state, column, row);
-    let _ = screen(width, height, state);
+    let _ = screen_lines(width, height, state);
 }
 
 #[test]
@@ -1826,7 +1814,7 @@ fn the_files_page_lists_the_workspace_top_level() {
     install_files(&mut state, &["README.md", "src/", "src/a.rs", "z.rs"]);
     open_files_page(&mut state, 120, 24);
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("src/"), "目录带尾斜杠画出来：{text}");
     assert!(
         text.contains("README.md") && text.contains("z.rs"),
@@ -1846,7 +1834,7 @@ fn the_tree_is_two_columns_per_level_and_puts_directories_first() {
     );
     open_files_page(&mut state, 120, 24);
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let page = sidebar_page(&rows);
     assert_eq!(
         sidebar_row(&rows[page]).trim_end(),
@@ -1870,11 +1858,15 @@ fn clicking_a_directory_expands_and_collapses_it() {
     let mut state = state();
     install_files(&mut state, &["src/", "src/a.rs"]);
     open_files_page(&mut state, 120, 24);
-    assert!(!screen(120, 24, &mut state).join("\n").contains("a.rs"));
+    assert!(
+        !screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("a.rs")
+    );
 
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows.join("\n").contains("a.rs"),
         "点一下目录就摊开：{rows:#?}"
@@ -1892,7 +1884,9 @@ fn clicking_a_directory_expands_and_collapses_it() {
 
     click_in_row(&mut state, 120, 24, page as u16, "src/");
     assert!(
-        !screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        !screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("a.rs"),
         "再点一下收起"
     );
 }
@@ -1904,7 +1898,7 @@ fn the_tree_keeps_its_shape_across_repaints_and_a_tab_switch() {
     let mut state = state();
     install_files(&mut state, &["src/", "src/a.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
 
     // 切到调用量再切回来。
@@ -1913,7 +1907,7 @@ fn the_tree_keeps_its_shape_across_repaints_and_a_tab_switch() {
         let (column, row) = tab_cell(&frame, 120, 24, label);
         click(&mut state, column, row);
     }
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows.join("\n").contains("a.rs"),
         "切页回来仍然是摊开的：{rows:#?}"
@@ -1926,7 +1920,7 @@ fn the_files_page_names_the_two_empty_states() {
     // 两者都不画一块空白，也不编数据（`.scratch/files-page/spec.md` §1，用户故事 31）。
     let mut pending = state();
     open_files_page(&mut pending, 120, 24);
-    let text = screen(120, 24, &mut pending).join("\n");
+    let text = screen_lines(120, 24, &mut pending).join("\n");
     assert!(text.contains(wording::files_loading()), "还没就绪：{text}");
     assert!(
         !text.contains(wording::files_empty()),
@@ -1936,7 +1930,7 @@ fn the_files_page_names_the_two_empty_states() {
     let mut empty = state();
     install_files(&mut empty, &[]);
     open_files_page(&mut empty, 120, 24);
-    let text = screen(120, 24, &mut empty).join("\n");
+    let text = screen_lines(120, 24, &mut empty).join("\n");
     assert!(
         text.contains(wording::files_empty()),
         "读完了就是空的：{text}"
@@ -1955,13 +1949,13 @@ fn the_wheel_over_the_files_page_scrolls_the_tree() {
     install_files(&mut state, &paths);
     open_files_page(&mut state, 120, 24);
 
-    let page = sidebar_page(&screen(120, 24, &mut state));
-    let before = screen(120, 24, &mut state);
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
+    let before = screen_lines(120, 24, &mut state);
     assert!(before.join("\n").contains("file-00.rs"), "从顶上开始");
 
     // 指针落在左栏页区里（第一列就是左栏），滚轮归这一页。
     state.mouse(wheel_at(2, page as u16 + 1, false));
-    let after = screen(120, 24, &mut state);
+    let after = screen_lines(120, 24, &mut state);
     assert!(
         !after.join("\n").contains("file-00.rs") && after.join("\n").contains("file-01.rs"),
         "滚轮挪动了这一页：{after:#?}"
@@ -1969,7 +1963,7 @@ fn the_wheel_over_the_files_page_scrolls_the_tree() {
 
     // 指针在主列里时照旧滚主列那一页。
     state.mouse(wheel_at(100, 5, false));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("file-01.rs"), "主列上的滚轮没有动这一页");
 }
 
@@ -1983,10 +1977,10 @@ fn a_narrow_sidebar_still_reads_the_tree() {
         &["src/", "src/a-very-long-file-name-that-will-not-fit.rs"],
     );
     open_files_page(&mut state, 80, 24);
-    let page = sidebar_page(&screen(80, 24, &mut state));
+    let page = sidebar_page(&screen_lines(80, 24, &mut state));
     click_in_row(&mut state, 80, 24, page as u16, "src/");
 
-    let rows = screen(80, 24, &mut state);
+    let rows = screen_lines(80, 24, &mut state);
     let child = sidebar_row(&rows[page + 1]);
     assert!(child.contains('…'), "放不下的名字被截断：{child:?}");
     assert!(
@@ -2002,7 +1996,7 @@ fn clicking_the_tree_hands_it_the_keyboard_and_the_arrows_walk_the_rows() {
     let mut state = state();
     install_files(&mut state, &["a.rs", "b.rs", "c.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
 
     click_in_row(&mut state, 120, 24, page as u16 + 2, "c.rs");
     // 点文件行会打开内容弹窗（票 08）：这一条只问焦点行，所以先把它关掉 ——
@@ -2045,7 +2039,7 @@ fn clicking_the_input_area_takes_the_keyboard_back_from_the_files_page() {
     let mut state = idle();
     install_files(&mut state, &["a.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     // 点文件行：键盘交给这一页，同时开出内容弹窗 —— 先按 `Esc` 把弹窗关掉（一次手势一层），
     // 键盘仍在文件页上。
     click_in_row(&mut state, 120, 24, page as u16, "a.rs");
@@ -2075,28 +2069,32 @@ fn the_arrows_open_and_collapse_a_directory_and_enter_inserts_the_path() {
     let mut state = idle();
     install_files(&mut state, &["src/", "src/a.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
 
     state.key(Key::Right);
     assert!(
-        screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("a.rs"),
         "→ 摊开目录"
     );
     state.key(Key::Left);
     assert!(
-        !screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        !screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("a.rs"),
         "← 收起目录"
     );
 
     // `Enter` 把这一行的路径作为 `@路径` 插进草稿（目录带尾斜杠），
     // 并把键盘还给输入区 —— 插完接着就要打字（用户故事 17、18）。
     state.key(Key::Enter);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("@src/"), "路径进了草稿：{text}");
 
     state.key(Key::Char('x'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("@src/x"),
         "接着打的字落在同一个草稿里：{text}"
@@ -2113,19 +2111,19 @@ fn the_tree_keys_do_not_reach_the_draft() {
     for ch in "hi".chars() {
         state.key(Key::Char(ch));
     }
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
 
     for key in [Key::Down, Key::Up, Key::Right, Key::Left] {
         state.key(key);
     }
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("hi"), "草稿还在：{text}");
     assert!(!text.contains("@src/"), "那几个键一个都没落进草稿：{text}");
 
     // 打字也不落进草稿 —— 键盘确实在左栏，而不是「那几个键恰好被吃掉了」。
     state.key(Key::Char('z'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains("hiz"), "打字没有落到草稿里：{text}");
 }
 
@@ -2136,7 +2134,7 @@ fn escape_hands_the_keyboard_back_without_cancelling_the_turn() {
     let mut state = idle();
     install_files(&mut state, &["src/"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
     state.request(ConsoleRequest::Facts(
         heng::session::HostFacts::foreground_only(
@@ -2149,7 +2147,7 @@ fn escape_hands_the_keyboard_back_without_cancelling_the_turn() {
     state.key(Key::Esc);
     assert!(state.take_events().is_empty(), "第一下只还键盘，不取消回合");
     state.key(Key::Down);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("src/"),
         "键盘回去了，走树的键也不再被吃：{text}"
@@ -2206,12 +2204,16 @@ fn a_workspace_file_opens_in_the_detail_overlay() {
     open_files_page(&mut state, 120, 24);
     // 先把目录摊开：关掉弹窗之后这一页要停在原处，摊开的状态也是其中一部分
     // （用户故事 12）。
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
-    assert!(screen(120, 24, &mut state).join("\n").contains("hello.rs"));
+    assert!(
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("hello.rs")
+    );
 
     click_row(&mut state, 120, 24, "hello.rs");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("fn main() {}"), "文件内容画出来了：{text}");
     assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
     assert!(
@@ -2221,7 +2223,7 @@ fn a_workspace_file_opens_in_the_detail_overlay() {
 
     // 关掉之后这一页停在原处：树还摊开着。
     state.key(Key::Esc);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("hello.rs"),
         "回到那棵树，而且它还摊着：{text}"
@@ -2237,11 +2239,11 @@ fn the_file_key_opens_the_same_overlay() {
     std::fs::write(dir.join("hello.rs"), "fn main() {}\n").expect("写一个文件");
     let mut state = files_in(&dir, &["hello.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "hello.rs");
 
     state.key(Key::Right);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("fn main() {}"), "→ 也打开它：{text}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -2255,7 +2257,7 @@ fn a_binary_file_only_gets_one_line() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "blob.bin");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains(wording::file_binary()), "只报一句：{text}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -2269,7 +2271,7 @@ fn a_file_that_cannot_be_read_says_so() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "missing.rs");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains(wording::file_unreadable()), "读不了：{text}");
     assert!(
         text.contains("esc 关闭"),
@@ -2287,7 +2289,7 @@ fn a_file_that_is_not_utf8_says_so() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "latin.txt");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains(wording::file_not_text()), "不是文本：{text}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -2302,14 +2304,14 @@ fn a_long_file_is_truncated_and_says_so() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "long.txt");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("line 0"), "从头开始画：{text}");
 
     // 翻到底：这个高度下一屏十三行，两千行要一百多下。
     for _ in 0..250 {
         state.key(Key::PageDown);
     }
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains(wording::detail_truncated()),
         "说明截断了：{text}"
@@ -2328,7 +2330,7 @@ fn a_wide_line_wraps_to_the_text_area() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "wide.txt");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("TAIL"),
         "长行折到文本区宽，尾巴看得见：{text}"
@@ -2366,7 +2368,7 @@ fn a_language_it_does_not_know_is_still_drawn_as_text() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "notes.weird");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("just some words"), "照旧画出来：{text}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -2382,7 +2384,7 @@ fn line_numbers_sit_on_the_first_display_line_of_a_logical_line() {
     open_files_page(&mut state, 120, 24);
 
     click_row(&mut state, 120, 24, "wide.rs");
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let first = rows
         .iter()
         .position(|row| row.contains("1 xxx"))
@@ -2406,7 +2408,7 @@ fn a_workspace_change_asks_for_a_rescan_and_never_draws_a_line() {
     let mut state = state();
     assert!(state.take_file_scan(), "进 TUI 先预热一次");
     state.files_loaded(vec!["a.rs".into()]);
-    let before = screen(120, 24, &mut state).join("\n");
+    let before = screen_lines(120, 24, &mut state).join("\n");
 
     // 连着三次改动：一个位，因此是一次遍历。屏幕上一个字都不变。
     for _ in 0..3 {
@@ -2414,7 +2416,7 @@ fn a_workspace_change_asks_for_a_rescan_and_never_draws_a_line() {
             session: heng::events::SessionId::new("01J8ZQ4K7M"),
         });
     }
-    let after = screen(120, 24, &mut state).join("\n");
+    let after = screen_lines(120, 24, &mut state).join("\n");
     assert_eq!(before, after, "这条信号不画任何东西");
     assert!(state.take_file_scan(), "它请了一次重扫");
     assert!(!state.take_file_scan(), "一次遍历还在飞，不并发");
@@ -2441,7 +2443,7 @@ fn the_keyboard_goes_back_when_the_sidebar_is_not_the_files_page() {
     click(&mut state, column, row);
     state.key(Key::Char('x'));
     let input_y = input_row(120, 24);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows[input_y].contains('x'),
         "输入区收得到字：{}",
@@ -2452,7 +2454,7 @@ fn the_keyboard_goes_back_when_the_sidebar_is_not_the_files_page() {
     open_files_page(&mut state, 120, 24);
     state.key(Key::CtrlO);
     state.key(Key::Char('y'));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows[input_y].contains("xy"),
         "收起左栏之后打字也落得进去：{}",
@@ -2473,7 +2475,7 @@ fn the_files_page_can_still_be_dragged_and_copied() {
     state.mouse(press(column, row));
     state.mouse(drag_to(column + 3, row));
     state.mouse(release(column + 3, row));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("已复制"), "拖选出文本、提示行给回执：{text}");
     let expected = heng::render::selection::osc52("src/");
     assert_eq!(
@@ -2482,7 +2484,9 @@ fn the_files_page_can_still_be_dragged_and_copied() {
         "取到的是那一行文字"
     );
     assert!(
-        screen(120, 24, &mut state).join("\n").contains("src/"),
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("src/"),
         "而这一次拖选没有顺手把目录展开或收起"
     );
 }
@@ -2494,13 +2498,17 @@ fn a_rescan_drops_the_expansion_of_a_directory_that_left_the_index() {
     let mut state = state();
     install_files(&mut state, &["src/", "src/a.rs"]);
     open_files_page(&mut state, 120, 24);
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     click_in_row(&mut state, 120, 24, page as u16, "src/");
-    assert!(screen(120, 24, &mut state).join("\n").contains("a.rs"));
+    assert!(
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("a.rs")
+    );
 
     install_files(&mut state, &["other.rs"]);
     install_files(&mut state, &["src/", "src/a.rs"]);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         !rows.join("\n").contains("a.rs"),
         "展开状态跟着那一次索引一起走了：{rows:#?}"
@@ -2527,7 +2535,7 @@ fn only_the_tab_labels_answer_a_click() {
 
     for column in [separator, fill] {
         click(&mut state, column, row);
-        let text = screen(120, 24, &mut state).join("\n");
+        let text = screen_lines(120, 24, &mut state).join("\n");
         assert!(
             text.contains("token"),
             "点在第 {column} 列不是一个页签，页没有动：{text}"
@@ -2553,7 +2561,7 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     }
     // 那一栏整个没画出来，所以「切页」在这块屏幕上没有别的可观察结果：能断言的是那几行
     // 点击什么都没打开。
-    let text = screen(60, 24, &mut state).join("\n");
+    let text = screen_lines(60, 24, &mut state).join("\n");
     assert!(
         !text.contains(wording::files_loading()),
         "而没有东西被切到：{text}"
@@ -2562,7 +2570,7 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
 
 /// 120x24 下回合条那一列：每个转录行一个字符，自上而下。
 fn turn_rail_cells(state: &mut TuiState) -> Vec<char> {
-    let rows = screen(120, 24, state);
+    let rows = screen_lines(120, 24, state);
     let transcript = transcript_rows(&rows);
     let frame = buffer(120, 24, state);
     (TRANSCRIPT_TOP..TRANSCRIPT_TOP + transcript)
@@ -2664,7 +2672,7 @@ fn turns(state: &mut TuiState, count: u64) {
 
 /// 转录第一行的文本，回合条跳转就落在这儿。
 fn top_transcript_row(state: &mut TuiState) -> String {
-    let rows = screen(120, 24, state);
+    let rows = screen_lines(120, 24, state);
     rows[TRANSCRIPT_TOP].clone()
 }
 
@@ -2727,7 +2735,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     );
 
     // 把视口停在最顶上：这时被裁的是**下面**那些单元。
-    let _ = screen(120, 24, &mut scrolled);
+    let _ = screen_lines(120, 24, &mut scrolled);
     for _ in 0..40 {
         scrolled.key(heng::render::Key::PageUp);
     }
@@ -2753,7 +2761,7 @@ fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
     // 焦点走，所以永远恰好有一个 —— 这就是那条回归。
     let mut state = state();
     turns(&mut state, 30);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     let visible = transcript_rows_at_120x24();
     // 一次往上一页，每一停都验一遍不变量，
@@ -2777,7 +2785,7 @@ fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
 fn the_focus_is_the_unit_the_top_row_belongs_to() {
     let mut state = state();
     turns(&mut state, 30);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     // 在底部时焦点是最新的单元，不管顶行落到哪儿 ——
     // 视口在跟对话，这就是「最新」的意思。
@@ -2811,7 +2819,7 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
     // 点焦点格通常看起来什么都没发生的原因（spec §4）。
     let mut state = state();
     turns(&mut state, 30);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     let before = top_transcript_row(&mut state);
     click(
@@ -2887,7 +2895,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 消息，记在第一个轮次开始之前……
     let first = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 3) as u16;
     click(&mut state, RAIL_AT_120, first);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows[TRANSCRIPT_TOP].contains("[用户]") && rows[TRANSCRIPT_TOP + 1].contains("讨论题目"),
         "会话的问题就是第一个格子落的地方：{:?}",
@@ -2946,7 +2954,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     click(&mut later, RAIL_AT_120, second);
     // 轮次开始那一行现在只住在轨迹页（2026-10-05 维护者收紧），所以兜底落点是那一轮
     // **第一条留在对话里的行** —— 它的第一条发言。
-    let rows = screen(120, 24, &mut later);
+    let rows = screen_lines(120, 24, &mut later);
     // 名字只画在**一段连续发言的第一段**上（2026-10-06 的优化），而这三轮都是 kimi 一个人说
     // 的，所以兜底落点就是正文那一行 —— 上面那条空行是分段用的，回合条会跳过它。
     assert!(
@@ -2969,7 +2977,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     }
 
     // 静止时视口跟着最新的那一行。
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("第 39 行"), "最新的那一行在屏幕上");
     assert!(!text.contains("第 0 行"), "最老的那一行已经滚出去了");
 
@@ -2979,7 +2987,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     // 下次阶梯一挪还得再改。
     let visible = transcript_rows_at_120x24();
     state.key(Key::PageUp);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains("第 39 行"), "最新的那一行让位了：{text}");
     assert!(
         text.contains(&format!("第 {} 行", 40 - visible)),
@@ -2988,7 +2996,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
 
     // Ctrl-G 回来，视口又跟上了。
     state.key(Key::CtrlG);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("第 39 行"), "回到最底下：{text}");
     assert!(!text.contains("第 20 行"), "那些老行不见了：{text}");
 }
@@ -2999,7 +3007,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
 /// 要这个数而不是记住它 —— 外壳让过的
 /// 东西已经不止一次挪动过它。
 fn transcript_rows_at_120x24() -> usize {
-    transcript_rows(&screen(120, 24, &mut state()))
+    transcript_rows(&screen_lines(120, 24, &mut state()))
 }
 
 /// 120x24 的主列，按列算：宽档左栏（40）加它的分隔线占
@@ -3044,7 +3052,7 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
         ));
     }
     // 先来一帧：一次翻页是按读者能看见的行来量的。
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     // 最老的源代码行是没了，不只是滚出去了：一路翻到顶
     // 也不该把它带回来，而顶上那行就是紧跟在它后面的那一行。
@@ -3061,14 +3069,14 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
         for _ in 0..100 {
             state.key(Key::PageUp);
         }
-        let rows = screen(120, 24, &mut state);
+        let rows = screen_lines(120, 24, &mut state);
         let first = first_notice(&rows);
         if first == previous {
             break;
         }
         previous = first;
     }
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(!rows.join("\n").contains("第 0 行"), "最老的被丢掉了");
     assert_eq!(
         first_notice(&rows),
@@ -3088,18 +3096,18 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
             format!("第 {index} 行"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     // 没什么新东西可读时往上滚：指示器只是回去的路。
     state.key(Key::PageUp);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("点此到底"), "给出了回去的路：{text}");
     assert!(!text.contains("行新内容"), "还没有东西到来：{text}");
     // 从底部往上一页，会留下一页的重叠：步长是
     // 窗格自己的高度减去读者保住的那两行，所以视口落在
     // 哪里是从窗格显示什么推出来的，不是记住的。
     let visible = transcript_rows_at_120x24();
-    let after_page_up = first_notice(&screen(120, 24, &mut state));
+    let after_page_up = first_notice(&screen_lines(120, 24, &mut state));
     assert_eq!(
         after_page_up,
         Some(40 - visible - (visible - 2)),
@@ -3112,7 +3120,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         heng::events::SessionId::new("01J8ZQ4K7M"),
         "新的一行".to_owned(),
     ));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("↓ 1 行新内容 · 点此到底"), "到了一行：{text}");
 
     // 滚轮一格挪三行，上下都是。指针落在**转录**上 —— 左栏页矩形里的滚轮归轨迹页
@@ -3128,14 +3136,14 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     // 而不是拿一个记住的行号比 —— 这就是「一格三行、
     // 再回来」在任何终端尺寸下的意思。
     state.mouse(mouse(ratatui::crossterm::event::MouseEventKind::ScrollUp));
-    let after_wheel_up = first_notice(&screen(120, 24, &mut state));
+    let after_wheel_up = first_notice(&screen_lines(120, 24, &mut state));
     assert!(
         after_wheel_up < after_page_up,
         "滚轮把视口往上挪：{after_page_up:?} -> {after_wheel_up:?}"
     );
     state.mouse(mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     assert_eq!(
-        first_notice(&screen(120, 24, &mut state)),
+        first_notice(&screen_lines(120, 24, &mut state)),
         after_page_up,
         "往下一格又回到原处"
     );
@@ -3153,12 +3161,12 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     );
     click(&mut state, 10, 10);
     assert_eq!(
-        first_notice(&screen(120, 24, &mut state)),
+        first_notice(&screen_lines(120, 24, &mut state)),
         after_page_up,
         "点在转录正文上什么都不改"
     );
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("新的一行"), "回到最底下：{text}");
     assert!(!text.contains("点此到底"), "指示器不见了：{text}");
 }
@@ -3179,15 +3187,15 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
     }
 
     // 跟着底部：窄一些的终端照样跟着底部。
-    let narrowed = screen(80, 24, &mut state).join("\n");
+    let narrowed = screen_lines(80, 24, &mut state).join("\n");
     assert!(narrowed.contains("第 79 行"), "仍在最底下：{narrowed}");
 
     // 滚开时，顶上那行源代码行才是重折行后活下来的东西。
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::PageUp);
-    let one_page_up = first_notice(&screen(120, 24, &mut state));
+    let one_page_up = first_notice(&screen_lines(120, 24, &mut state));
     state.key(Key::PageUp);
-    let before = first_notice(&screen(120, 24, &mut state));
+    let before = first_notice(&screen_lines(120, 24, &mut state));
     // 这个测试要的是同一条源代码行在改尺寸前后
     // 一直钉住 —— 所以前提是「离开底部」，而不是
     // 某一套翻页算术。
@@ -3199,7 +3207,7 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
         before.is_some_and(|row| row > 0),
         "而且离开了最老的那一行：{before:?}"
     );
-    let after = first_notice(&screen(80, 24, &mut state));
+    let after = first_notice(&screen_lines(80, 24, &mut state));
     assert_eq!(after, before, "改尺寸后顶上还是同一行");
 }
 
@@ -3242,10 +3250,10 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
             format!("第 {index} 行"),
         ));
     }
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     // 滚动条只在滚动时出现（`.scratch/wheel-routing/spec.md` §5）：先滚一格再画。
     state.mouse(wheel_at(60, 10, true));
-    let rows_after = screen(120, 24, &mut state);
+    let rows_after = screen_lines(120, 24, &mut state);
     assert_eq!(rows_after.len(), rows.len(), "帧的形状不变");
     let transcript = transcript_rows(&rows_after) as u16;
     let frame = buffer(120, 24, &mut state);
@@ -3261,7 +3269,7 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     );
 
     // 贴底那一格：滑块最后一格落在轨道最后一格（旧公式到不了这里）。
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlG);
     state.mouse(wheel_at(60, 10, false));
     let frame = buffer(120, 24, &mut state);
@@ -3277,7 +3285,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     // 完全一样 —— 地板就是为这个准备的
     // （`.scratch/tui-input-pulse/spec.md` §1）。
     let mut state = state();
-    let empty = screen(80, 24, &mut state);
+    let empty = screen_lines(80, 24, &mut state);
     let rows = transcript_rows(&empty);
     assert_eq!(rows, 15, "输入区三行给转录留下十五行：{empty:#?}");
     // 转录下面依次是状态行与输入区上方那条横线，所以输入区
@@ -3299,7 +3307,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     // 三行草稿什么都不挪：这个框本来就这么高，所以
     // 转录保住它原有的每一行。
     state.paste("第一行\n第二行\n第三行");
-    let three = screen(80, 24, &mut state);
+    let three = screen_lines(80, 24, &mut state);
     let rows = transcript_rows(&three);
     assert_eq!(rows, 15, "三行草稿在地板之内，所以几何不动：{three:#?}");
     let input = TRANSCRIPT_TOP + rows + 2;
@@ -3323,7 +3331,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     // 从第四行起它又长起来，草稿一行换转录一行，
     // 十行的上限仍然按着它（spec §1）。
     state.paste("\n第四行\n第五行");
-    let five = screen(80, 24, &mut state);
+    let five = screen_lines(80, 24, &mut state);
     assert_eq!(
         transcript_rows(&five),
         13,
@@ -3416,7 +3424,7 @@ fn panel_field(rows: &[String], offset: usize) -> String {
 
 #[test]
 fn the_sidebar_shows_a_zero_and_a_dash_before_any_call() {
-    let rows = screen(120, 24, &mut state());
+    let rows = screen_lines(120, 24, &mut state());
     // 模型现在归状态行 —— 不管左栏显示哪一页、
     // 多宽，它都看得见（spec §3）。
     assert!(
@@ -3468,7 +3476,7 @@ fn the_panel_reads_its_numbers_off_the_stream() {
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
     state.apply(turn_ended(2));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         panel_field(&rows, 0).contains("9,000 / 20万（4%）"),
         "窗口是最后一次调用的分子：{:?}",
@@ -3509,7 +3517,7 @@ fn the_context_and_spend_rows_carry_a_share_bar() {
     let mut state = state();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
     let top = sidebar_page(&rows) as u16;
 
@@ -3534,7 +3542,7 @@ fn a_row_without_a_denominator_carries_no_share_bar() {
     let mut state = state_without_budget();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
 
     // 没设额度就没有分母：花销那一行一个块字符都没有。
     assert!(
@@ -3556,7 +3564,7 @@ fn the_share_bar_survives_the_narrow_sidebar() {
     let mut state = state();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
 
-    let rows = screen(80, 14, &mut state);
+    let rows = screen_lines(80, 14, &mut state);
     let frame = buffer(80, 14, &mut state);
     let top = sidebar_page(&rows) as u16;
 
@@ -3590,7 +3598,7 @@ fn the_narrow_sidebar_keeps_six_fields_and_their_percentage() {
     // 需要的五位数，这才让百分比也过宽。
     state.apply(usage(1, 12_345, 0, 5_000, 7_345));
     state.apply(turn_ended(2));
-    let rows = screen(80, 14, &mut state);
+    let rows = screen_lines(80, 14, &mut state);
     let text = rows.join("\n");
 
     // 月相是 Emoji：一格占 **2 列**，所以状态行比 `◐` 那套宽一格 —— 80 列的窄档（主列 51 列）
@@ -3631,7 +3639,7 @@ fn the_narrow_sidebar_keeps_six_fields_and_their_percentage() {
 fn a_session_with_no_allowance_shows_its_spend_alone() {
     let mut state = state_without_budget();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("1.2万"), "花了多少：{text}");
     assert!(
         !text.contains("1.2万 / "),
@@ -3647,7 +3655,7 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     let mut state = state();
     let draft: String = (0..10).map(|line| format!("第 {line} 行\n")).collect();
     state.paste(&draft);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
     assert_eq!(transcript_rows(&rows), 8, "草稿吃掉的是转录的行：{rows:#?}");
@@ -3669,7 +3677,7 @@ fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
     // 累计花销那一行是两回事。
     state.apply(usage(2, 15_000, 2_000, 20_000, 10_000));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         panel_field(&rows, 0).contains("1.5万 / 20万（7%）"),
         "窗口是*最后一次*调用携带的那个值：{:?}",
@@ -3698,7 +3706,7 @@ fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
 /// 为止 —— 页面矩形只和它的字段一样高，所以第一行空行
 /// 就是它结束的地方。
 fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
-    let rows = screen(width, height, state);
+    let rows = screen_lines(width, height, state);
     let mut out: Vec<String> = Vec::new();
     for row in rows.iter().skip(sidebar_page(&rows)) {
         // 主列的横线会在它经过的那一行把分隔列盖成 `┄`，所以两者都算
@@ -3842,7 +3850,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
     let (ask, _rx) = ask_permission();
     state.request(ask);
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("权限询问："), "{text}");
     assert!(text.contains("[y] 允许"), "键位跟着它一起来：{text}");
@@ -3925,7 +3933,7 @@ fn every_overlay_shares_one_chrome_frame_with_empty_corners() {
     let mut menu = state();
     install_catalog(&mut menu);
     menu.key(Key::Char('/'));
-    let _ = screen(120, 24, &mut menu);
+    let _ = screen_lines(120, 24, &mut menu);
     let frame = buffer(120, 24, &mut menu);
     let (left, top, width, _) = menu_frame(&frame, 120, 24, "/undo").expect("菜单的虚线");
     assert_eq!(
@@ -3947,7 +3955,7 @@ fn a_question_splits_into_a_title_a_description_a_call_and_a_row_of_buttons() {
     let (ask, _rx) = ask_permission();
     state.request(ask);
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     let row_of = |needle: &str| {
         rows.iter()
@@ -4001,7 +4009,7 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
     ));
     let (ask, _answer) = ask_permission();
     state.request(ask);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows.iter().any(|row| row.contains("权限询问")),
         "它的运行还在时覆盖层也在：\n{}",
@@ -4015,7 +4023,7 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
             heng::session::host::SessionState::Idle,
         ),
     ));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         !rows.iter().any(|row| row.contains("权限询问")),
         "运行走了，覆盖层也跟着走了：\n{}",
@@ -4048,7 +4056,7 @@ fn a_long_command_still_says_what_it_would_do() {
         reply: tx,
     })));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     let description = rows
         .iter()
@@ -4077,12 +4085,12 @@ fn shift_tab_cycles_the_status_row_through_the_four_modes_and_back() {
     // 随模式本身一起没了 —— 所以这一帧就是整个用户故事
     // 「干活的时候看得见自己在哪一档」。
     let mut state = idle();
-    let first = screen(120, 24, &mut state).join("\n");
+    let first = screen_lines(120, 24, &mut state).join("\n");
     assert!(first.contains("┆ 询问 ┆"), "组装时给的那一档：{first}");
 
     for expected in ["┆ 工作区 ┆", "┆ 自动 ┆", "┆ 只读 ┆", "┆ 询问 ┆"] {
         state.key(Key::BackTab);
-        let text = screen(120, 24, &mut state).join("\n");
+        let text = screen_lines(120, 24, &mut state).join("\n");
         assert!(text.contains(expected), "这一行显示 {expected}：{text}");
     }
     assert_eq!(
@@ -4111,7 +4119,7 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
         std::path::PathBuf::from("/x/heng"),
         None,
     );
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("┆ 只读 ┆"), "{text}");
 }
 
@@ -4122,7 +4130,7 @@ fn no_key_opens_a_plan_mode_any_more() {
     // （`.scratch/todo-and-modes/spec.md` §1）。
     let mut state = idle();
     state.key(Key::BackTab);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     for gone in ["计划", "PLAN.md", "硬计划"] {
         assert!(!text.contains(gone), "`{gone}` 不见了：{text}");
     }
@@ -4194,7 +4202,7 @@ fn apply_todo(
 /// 页签条自己那一行，从帧上读出来。终端太窄
 /// 放不下左栏时是空的，那时根本就没有条。
 fn tab_bar(state: &mut TuiState, width: u16, height: u16) -> String {
-    let rows = screen(width, height, state);
+    let rows = screen_lines(width, height, state);
     rows.iter()
         .find(|row| row.contains(wording::TAB_USAGE))
         .cloned()
@@ -4217,7 +4225,7 @@ const SIDEBAR_COLUMNS: u16 = 40;
 
 /// 页签条那些标签所在的行号。
 fn tab_bar_row(state: &mut TuiState, width: u16, height: u16) -> u16 {
-    screen(width, height, state)
+    screen_lines(width, height, state)
         .iter()
         .position(|row| row.contains(wording::TAB_USAGE))
         .expect("页签条在屏幕上") as u16
@@ -4297,7 +4305,7 @@ fn an_executors_list_stays_out_of_the_sidebar() {
     // 执行者的调用是一条 Tool 行，只住在轨迹页里（票 10）—— 而左栏的 `todo` 页显示的
     // 是主会话那一份，所以这次调用不会让它长出一个页签。
     open_trace_tab(&mut state, 120, 24);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("派出去的活") || text.contains("todo"),
         "调用本身还在轨迹页里：{text}"
@@ -4380,7 +4388,7 @@ fn the_todo_page_scrolls_instead_of_saying_how_many_more_there_are() {
     );
 
     // 指针落在 todo 页区里滚两格：视口下移两行 —— 进度行与第一条滚出去，新的两条进来。
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     state.mouse(wheel_at(2, page as u16 + 2, false));
     state.mouse(wheel_at(2, page as u16 + 2, false));
     let rows = sidebar_rows(&mut state, 120, 24);
@@ -4409,7 +4417,7 @@ fn the_sessions_page_scrolls_and_keeps_the_focus_visible() {
     host_sessions(&mut state, &entries);
     let row = tab_bar_row(&mut state, 120, 24);
     click_in_row(&mut state, 120, 24, row, wording::TAB_SESSIONS);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     let rows = sidebar_rows(&mut state, 120, 24);
     // 页顶那一行是读数与 `新建`（票 05 起页顶没有 `关闭` 了）—— 列表断言只看内容行。
@@ -4429,7 +4437,7 @@ fn the_sessions_page_scrolls_and_keeps_the_focus_visible() {
     );
 
     // 滚轮：只动视口。组头也占一行，所以滚两格之后第一条才滚出去。
-    let page = sidebar_page(&screen(120, 24, &mut state));
+    let page = sidebar_page(&screen_lines(120, 24, &mut state));
     state.mouse(wheel_at(2, page as u16 + 2, false));
     state.mouse(wheel_at(2, page as u16 + 2, false));
     let rows = sidebar_rows(&mut state, 120, 24);
@@ -4539,7 +4547,7 @@ fn the_three_tab_labels_fit_at_the_narrow_width() {
         .expect("标签之间有分隔");
     for column in [separator, fill] {
         click(&mut state, column, row);
-        let text = screen(80, 24, &mut state).join("\n");
+        let text = screen_lines(80, 24, &mut state).join("\n");
         assert!(
             !text.contains("☐ 一件事"),
             "点在第 {column} 列不是一个页签：{text}"
@@ -4662,7 +4670,7 @@ fn clicking_the_todo_page_opens_the_whole_list() {
     }
     state.apply(message(1, "被点开的消息", None));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let page_top = sidebar_page(&rows);
     let beside = rows
         .iter()
@@ -4679,7 +4687,7 @@ fn clicking_the_todo_page_opens_the_whole_list() {
     let (column, row) = cell_of(&frame, 120, 24, "第 2 项").expect("todo 页上那一项");
     click(&mut state, column, row);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains(&wording::detail_todo_title(None)),
         "弹窗的标题是这一份：{text}"
@@ -4746,7 +4754,7 @@ fn the_todo_detail_holds_the_list_of_that_moment() {
         kimi(),
         todo_args(&[("后来才立的那一条", "pending")]),
     );
-    let open = screen(120, 40, &mut state).join("\n");
+    let open = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         open.contains("刚开工时的那一条") && !open.contains("后来才立的那一条"),
         "开着的那个是快照，不跟着模型重写：{open}"
@@ -4756,7 +4764,7 @@ fn the_todo_detail_holds_the_list_of_that_moment() {
     let frame = buffer(120, 40, &mut state);
     let (column, row) = cell_of(&frame, 120, 40, "后来才立的那一条").expect("页上已经是新的那份");
     click(&mut state, column, row);
-    let reopened = screen(120, 40, &mut state).join("\n");
+    let reopened = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         reopened.contains("后来才立的那一条") && !reopened.contains("刚开工时的那一条"),
         "重开看到的是新的那份：{reopened}"
@@ -4795,7 +4803,9 @@ fn a_folded_item_is_copied_back_as_one_line() {
         "折行的续行接在上一行后面，而不是自成一行：{clip:?}"
     );
     assert!(
-        !screen(120, 24, &mut state).join("\n").contains("esc 关闭"),
+        !screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("esc 关闭"),
         "拖选不是点开"
     );
 }
@@ -4858,10 +4868,10 @@ fn an_empty_list_gives_no_button_and_opens_nothing() {
     );
 
     let row = tab_bar_row(&mut state, 120, 24) + 4;
-    let before = screen(120, 24, &mut state);
+    let before = screen_lines(120, 24, &mut state);
     click(&mut state, 30, row);
     assert_eq!(
-        screen(120, 24, &mut state),
+        screen_lines(120, 24, &mut state),
         before,
         "而点那一块开不出一个空弹窗"
     );
@@ -4915,7 +4925,7 @@ fn the_todo_detail_names_who_submitted_that_list() {
         cell_of(&frame, 120, 24, "claude 那一轮的那一条").expect("页上是最后落地的那一份");
     click(&mut state, column, row);
 
-    let text = screen(120, 40, &mut state).join(
+    let text = screen_lines(120, 40, &mut state).join(
         "
 ",
     );
@@ -4962,7 +4972,7 @@ fn dragging_across_the_todo_page_selects_instead_of_opening() {
     state.mouse(drag_to(column + 4, row));
     state.mouse(release(column + 4, row));
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("已复制"), "拖选出文本、提示行给回执：{text}");
     assert!(
         !text.contains("esc 关闭"),
@@ -5084,7 +5094,7 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     install_catalog(&mut state);
     state.key(Key::Char('/'));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     // 内建命令那一组排在前面，所以先露出来的是它们。
     for name in ["/undo", "/discuss", "/goal-new"] {
@@ -5106,7 +5116,7 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     for ch in "/goal-".chars() {
         family.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut family).join("\n");
+    let text = screen_lines(120, 24, &mut family).join("\n");
     assert!(text.contains("/goal-new"), "命令族按前缀列出来：\n{text}");
     assert!(
         !text.contains("/undo") && !text.contains("/loop"),
@@ -5116,10 +5126,10 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     // 而这正是改名的理由：`Tab` 把整条命令补进草稿 —— 后面还跟一个**分隔的空格**，
     // 于是接着打的就是这一段任务的第一个字。
     family.key(Key::Tab);
-    let text = screen(120, 24, &mut family).join("\n");
+    let text = screen_lines(120, 24, &mut family).join("\n");
     assert!(text.contains("┆/goal-new"), "Tab 补出整条命令：\n{text}");
     family.key(Key::Char('x'));
-    let text = screen(120, 24, &mut family).join("\n");
+    let text = screen_lines(120, 24, &mut family).join("\n");
     assert!(
         text.contains("┆/goal-new x"),
         "补全自带一个分隔空格：\n{text}"
@@ -5132,7 +5142,7 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     for ch in "/rev".chars() {
         narrowed.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut narrowed).join("\n");
+    let text = screen_lines(120, 24, &mut narrowed).join("\n");
     assert!(text.contains("/review"), "技能仍然在目录里：\n{text}");
 
     // 它是浮着的 —— 框、边框全都浮着 —— 在它所属的输入区上面。
@@ -5297,7 +5307,7 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
     for ch in "/ask".chars() {
         state.key(Key::Char(ch));
     }
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("/ask-matt"), "{text}");
     assert!(!text.contains("/undo"), "别的都被滤掉了：\n{text}");
 
@@ -5487,7 +5497,7 @@ fn esc_keeps_its_word_per_token_not_per_query() {
     }
     state.key(Key::Esc);
     state.key(Key::Tab);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("┆@a @a"),
         "`Esc` 关掉的那一个记号里 `Tab` 什么都补不了：\n{text}"
@@ -5497,7 +5507,7 @@ fn esc_keeps_its_word_per_token_not_per_query() {
     state.key(Key::Left);
     state.key(Key::Left);
     state.key(Key::Tab);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("┆@ab @a"),
         "另一个记号重新开菜单，`Tab` 于是补全了它：\n{text}"
@@ -5538,7 +5548,7 @@ fn the_menu_keeps_its_dashed_edges_over_text_that_is_not_ascii() {
         ));
     }
     state.key(Key::Char('/'));
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
     let (x, top, width, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     for y in [top, top + height - 1] {
@@ -5570,7 +5580,7 @@ fn the_menu_draws_no_vertical_border_anywhere() {
     let mut state = state();
     install_catalog(&mut state);
     state.key(Key::Char('/'));
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
     let (x, top, width, height) = menu_frame(&frame, 120, 24, "/undo").expect("菜单在屏幕上");
     for y in top..top + height {
@@ -5703,7 +5713,7 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
 
     // 补完之后自带一个**分隔的空格**：接着打就是下一样东西，不会粘在路径上。
     file.key(Key::Char('x'));
-    let text = screen(120, 24, &mut file).join("\n");
+    let text = screen_lines(120, 24, &mut file).join("\n");
     assert!(
         text.contains("┆@src/main.rs x"),
         "补全自带一个分隔空格：\n{text}"
@@ -5720,7 +5730,7 @@ fn enter_in_the_at_menu_accepts_without_sending() {
     }
     state.key(Key::Enter);
     assert!(line.try_recv().is_err(), "`@` 菜单里回车只接受，不发送");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("┆@src/main.rs"), "路径落进草稿：\n{text}");
 
     // 再按一次才是发送 —— 插进去的路径只是句子的一部分（spec §2 那处刻意分叉）。
@@ -5815,7 +5825,7 @@ fn a_pasted_token_is_a_chip_like_a_typed_one() {
     state.key(Key::Left);
     state.key(Key::Left);
     state.key(Key::Backspace);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("┆改  它"),
         "一下退格带走整块，且不吞旁边的空白：\n{text}"
@@ -5830,14 +5840,14 @@ fn every_question_kind_takes_the_overlay() {
     let mut asking = state();
     let (ask, _answer) = ask_permission();
     asking.request(ask);
-    let text = screen(120, 24, &mut asking).join("\n");
+    let text = screen_lines(120, 24, &mut asking).join("\n");
     assert!(text.contains("权限询问："), "标题：{text}");
     assert!(text.contains("[y] 允许"), "带着它的键位：{text}");
 
     // 一次过大的粘贴。
     let mut paste = state();
     paste.paste(&"x".repeat(100_001));
-    let text = screen(120, 24, &mut paste).join("\n");
+    let text = screen_lines(120, 24, &mut paste).join("\n");
     assert!(text.contains("粘贴确认"), "标题：{text}");
     assert!(text.contains("粘贴 100001 字符"), "{text}");
     assert!(text.contains("[y] 粘贴"), "带着它的键位：{text}");
@@ -5846,7 +5856,7 @@ fn every_question_kind_takes_the_overlay() {
     let mut draft = idle();
     draft.paste("第一行\n第二行");
     draft.key(Key::Esc);
-    let text = screen(120, 24, &mut draft).join("\n");
+    let text = screen_lines(120, 24, &mut draft).join("\n");
     assert!(text.contains("清空输入"), "{text}");
     assert!(text.contains("草稿有多行"), "它会扔掉什么：{text}");
     assert!(text.contains("[y] 清空"), "带着它的键位：{text}");
@@ -5893,13 +5903,13 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
             format!("第 {index} 行"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::PageUp);
-    let before = first_notice(&screen(120, 24, &mut state));
+    let before = first_notice(&screen_lines(120, 24, &mut state));
 
     let (ask, _rx) = ask_permission();
     state.request(ask);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     // 指针落在覆盖层**之外**、且还在转录上：这张 120x24 的屏上覆盖层横跨第 44 到 115 列、
     // 第 8 到 14 行，所以主列靠左那一小条（第 41 到 43 列）是覆盖层外的转录。左栏页矩形里
@@ -5910,7 +5920,7 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
         row: 10,
         modifiers: KeyModifiers::empty(),
     });
-    let outside = first_notice(&screen(120, 24, &mut state));
+    let outside = first_notice(&screen_lines(120, 24, &mut state));
     assert_ne!(outside, before, "覆盖层外的滚轮滚的是转录");
 
     // 落在覆盖层**里面**：模态自己没有可滚的内容，所以视口恰好停在原地。
@@ -5921,7 +5931,7 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
         modifiers: KeyModifiers::empty(),
     });
     assert_eq!(
-        first_notice(&screen(120, 24, &mut state)),
+        first_notice(&screen_lines(120, 24, &mut state)),
         outside,
         "覆盖层里的滚轮不碰它背后的转录"
     );
@@ -5936,7 +5946,7 @@ fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
     let mut state = idle();
     state.paste("第一行\n第二行");
     state.key(Key::Esc);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let title = rows
         .iter()
         .position(|row| row.contains("清空输入"))
@@ -6337,7 +6347,7 @@ fn click(state: &mut TuiState, column: u16, row: u16) {
 fn a_turn_with_no_reasoning_adds_no_thinking_line() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "直接作答。", None));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("思考") && !text.contains("正在思考"),
         "没有推理就没有思考行：{text}"
@@ -6415,19 +6425,19 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
     // 一个很高的终端，好让整段正文都放得下：最短的那个覆盖层会滚动，
     // 那是下一个测试的主题。
     click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "顶上那句标签列着这几面：{text}");
     assert!(text.contains("\"command\""), "打开时落在参数那一面：{text}");
 
     // 输出那一面要按一下 `Tab`：它就是这次调用产出了什么（票 13 第 3 条）。
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("alpha"), "整段输出：{text}");
     assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
 
     // Esc 关上它，转录回来了。
     state.key(Key::Esc);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains(TOOL_FACES), "Esc 关上覆盖层：{text}");
     assert!(
         text.contains("调用 bash"),
@@ -6453,7 +6463,7 @@ fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
     // 打开落在参数面（票 13 第 5 条），参数 → 输出 → Schema 是三下 `Tab` 里的第三面。
     next_face(&mut state);
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "标签条列着这几面：{text}");
     assert!(
         text.contains("\"type\": \"object\""),
@@ -6485,7 +6495,7 @@ fn the_schema_face_says_so_when_the_tool_is_not_in_the_table() {
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state);
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains(&wording::detail_schema_missing("bash")),
         "一句话说明查不到：{text}"
@@ -6513,7 +6523,7 @@ fn the_detail_body_is_wrapped_to_the_real_text_width() {
     // 那一段长正文在「输出」那一面上（打开时落在「参数」）。
     next_face(&mut state);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains("TAIL"),
         "正文的尾巴没有被框边裁掉，而是折到了下一行：{text}"
@@ -6542,7 +6552,7 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
     click_row(&mut state, 120, 40, "调用 bash");
     // 那 40 行输出在「输出」那一面上，而它从顶部开始。
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("输出第 0 行"), "正文从顶部开始：{text}");
 
     // 用翻页键一路走到最底下，然后单个箭头往回挪一行：
@@ -6550,17 +6560,17 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
     for _ in 0..8 {
         state.key(Key::PageDown);
     }
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("esc 关闭"), "正文走到了末尾：{text}");
     state.key(Key::Down);
     state.key(Key::Up);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("esc 关闭"), "而箭头仍然在它里面挪动：{text}");
 
     // 滚轮把同一段正文一格挪一行。
     let before = text.clone();
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
-    let after = screen(120, 40, &mut state).join("\n");
+    let after = screen_lines(120, 40, &mut state).join("\n");
     assert_ne!(before, after, "滚轮挪动了详情正文");
 }
 
@@ -6617,7 +6627,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
     click_row(&mut state, 120, 40, "调用 bash");
     // 落盘全文在「输出」那一面上。
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains("with a second line the preview never carried"),
         "显示的是落盘全文，不是预览：{text}"
@@ -6649,7 +6659,7 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
     assert!(text.contains("全文不可用"), "降级被说出来了：{text}");
 }
@@ -6672,7 +6682,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
     let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行画出来了");
     state.request(ask_permission().0);
     click(&mut state, 20, row);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains(TOOL_FACES), "详情没有在问句上面打开：{text}");
     assert!(text.contains("权限询问"), "而屏幕上还是那个问句：{text}");
 }
@@ -6706,7 +6716,7 @@ fn wheel(kind: ratatui::crossterm::event::MouseEventKind) -> ratatui::crossterm:
 
 /// 某句话画在哪一行，重新渲染一次。
 fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option<u16> {
-    let rows = screen(width, height, state);
+    let rows = screen_lines(width, height, state);
     rows.iter()
         .position(|row| row.contains(needle))
         .map(|row| row as u16)
@@ -6804,7 +6814,7 @@ fn a_permission_question_is_answered_by_clicking_a_button() {
             "点 {label} 与按它对应的键一样作答"
         );
         // 覆盖层没了，键盘回到草稿上。
-        let text = screen(120, 24, &mut state).join("\n");
+        let text = screen_lines(120, 24, &mut state).join("\n");
         assert!(!text.contains("权限询问"), "问句关上了：{text}");
     }
 }
@@ -6820,7 +6830,7 @@ fn clicking_a_question_body_or_border_does_nothing() {
         click(&mut state, column, row);
     }
     assert!(answer.try_recv().is_err(), "点在按钮之外不作答");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("权限询问"), "而问句还在：{text}");
 }
 
@@ -6901,14 +6911,14 @@ fn a_sidebar_tab_click_while_a_questionnaire_is_up_switches_but_keeps_the_keyboa
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_FILES);
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains(wording::files_loading()),
         "左栏切到文件页了：{text}"
     );
 
     state.key(Key::Char('j'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("> ○ 2. 乙"), "键盘还在问卷里：{text}");
 }
 
@@ -6935,7 +6945,7 @@ fn a_multi_select_option_only_toggles_when_clicked() {
     click_text(&mut state, 120, 24, "1. 甲");
     assert!(answers.try_recv().is_err(), "多选上点一下不提交");
     // 勾落在点击落到的那一行上。
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("[x] 1. 甲"), "选中被显示出来了：{text}");
 
     // 处理过东西之后页脚的提交按钮才出现，而且能提交。
@@ -6975,17 +6985,17 @@ fn the_questionnaire_footer_pages_with_a_click() {
     };
 
     // 第一个问题没有 `← 上一题`；它确实有 `下一题 →`。
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains("← 上一题"), "第一个问题上没有上一题：{text}");
     assert!(text.contains("下一题 →"), "但有下一题：{text}");
 
     // 点一下往前走，第二个问题提供回去的路。
     click_in_row(&mut state, 120, 24, 23, "下一题 →");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "这次点击翻到下一页：{text}");
     assert!(text.contains("← 上一题"), "回去的路出现了：{text}");
     click_in_row(&mut state, 120, 24, 23, "← 上一题");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击翻回上一页：{text}");
     assert!(answers.try_recv().is_err(), "翻页从不提交");
 }
@@ -7019,7 +7029,7 @@ fn clicking_next_marks_the_question_skipped_like_the_arrow_key() {
     click_in_row(&mut state, 120, 24, 23, "下一题 →");
     // 翻回来：页脚该说这一题交回去的是什么。
     click_in_row(&mut state, 120, 24, 23, "← 上一题");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("1 / 2 已跳过"),
         "点击与 `→` 记的是同一笔：{text}"
@@ -7081,7 +7091,7 @@ fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
         }],
     });
 
-    let text = screen(130, 24, &mut state).join("\n");
+    let text = screen_lines(130, 24, &mut state).join("\n");
     assert!(
         text.contains("j/k 移动"),
         "键位提示跟在进度与按钮后面：{text}"
@@ -7090,7 +7100,7 @@ fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
 
     // 举 `Esc` 的手：那一段换成回执。
     state.key(Key::Esc);
-    let text = screen(130, 24, &mut state).join("\n");
+    let text = screen_lines(130, 24, &mut state).join("\n");
     assert!(text.contains("再按一次 esc 退出询问"), "{text}");
     assert!(!text.contains("j/k 移动"), "回执替换了键位提示：{text}");
 
@@ -7115,7 +7125,7 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
         }],
     });
 
-    let wide = screen(130, 24, &mut state).join("\n");
+    let wide = screen_lines(130, 24, &mut state).join("\n");
     assert!(
         wide.contains("ctrl-n/ctrl-p"),
         "宽终端里有 Emacs 别名：{wide}"
@@ -7124,7 +7134,7 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
     // 让这一题有着落，页脚才画得出那个「提交」按钮。
     state.key(Key::Char(' '));
 
-    let narrow = screen(40, 24, &mut state).join("\n");
+    let narrow = screen_lines(40, 24, &mut state).join("\n");
     assert!(narrow.contains("1 / 1"), "进度永远保：{narrow}");
     assert!(narrow.contains("提交"), "能点的按钮永远保：{narrow}");
     assert!(
@@ -7164,7 +7174,7 @@ fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
         }),
     ));
 
-    let text = screen(130, 24, &mut state).join("\n");
+    let text = screen_lines(130, 24, &mut state).join("\n");
     assert!(
         text.contains("回车 下一题"),
         "后面还有题，回车是往前走：{text}"
@@ -7173,16 +7183,16 @@ fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
 
     // 回车把第一题记成跳过、走到第二题；第二题成了末题，回车于是变成「提交」。
     state.key(Key::Enter);
-    let text = screen(130, 24, &mut state).join("\n");
+    let text = screen_lines(130, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "{text}");
     assert!(text.contains("回车 提交"), "每题都有着落了：{text}");
 
     // 翻回去看得见那一笔 —— 它属于进度段，不参与提示的降级。
     state.key(Key::Left);
-    let text = screen(130, 24, &mut state).join("\n");
+    let text = screen_lines(130, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2 已跳过"), "进度后面跟着那一笔：{text}");
 
-    let narrow = screen(40, 24, &mut state).join("\n");
+    let narrow = screen_lines(40, 24, &mut state).join("\n");
     assert!(
         narrow.contains("1 / 2 已跳过"),
         "窄到只剩出口，那一笔也还在：{narrow}"
@@ -7212,7 +7222,7 @@ fn every_row_of_a_wrapped_option_answers_that_option() {
         ],
     });
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let wrapped: Vec<u16> = rows
         .iter()
         .enumerate()
@@ -7314,7 +7324,7 @@ fn a_questionnaire_frame_has_exactly_one_reversed_row() {
             },
         ],
     });
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     assert_eq!(reversed_rows(&mut state), 1, "选项区聚焦时只有一行反显");
 
     // 越过末项进输入区：反显整块挪过去，而不是多出第二处。
@@ -7342,11 +7352,11 @@ fn the_wheel_moves_the_questionnaire_highlight() {
             },
         ],
     });
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("> ○ 1. 甲"), "高亮从 1 开始：{text}");
 
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("> ○ 2. 乙"), "滚轮挪动了高亮：{text}");
 }
 
@@ -7379,8 +7389,8 @@ fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
             format!("第 {index} 行"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
-    let before = first_notice(&screen(120, 24, &mut state));
+    let _ = screen_lines(120, 24, &mut state);
+    let before = first_notice(&screen_lines(120, 24, &mut state));
 
     // 指针落在转录上（第 5 行），而问卷在下半屏。
     state.mouse(MouseEvent {
@@ -7389,9 +7399,9 @@ fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
         row: 5,
         modifiers: KeyModifiers::empty(),
     });
-    let after = first_notice(&screen(120, 24, &mut state));
+    let after = first_notice(&screen_lines(120, 24, &mut state));
     assert_ne!(after, before, "指针在转录上就滚转录");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("> ○ 1. 甲"), "而高亮留在原处：{text}");
 }
 
@@ -7407,7 +7417,7 @@ fn one_message_never_gets_two_thinking_lines() {
     state.apply(text_delta("答案。"));
     state.apply(message(1, "答案。", Some("先看依赖。")));
     open_trace_tab(&mut state, 120, 40);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert_eq!(
         text.matches("思考完成").count(),
         1,
@@ -7423,7 +7433,7 @@ fn reasoning_never_joins_the_message_body() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("这是不该出现的思考正文。"));
     open_trace_tab(&mut state, 120, 40);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("… 正在思考"), "思考行在那儿：{text}");
     assert!(
         !text.contains("这是不该出现的思考正文"),
@@ -7446,11 +7456,11 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
     // 工具行只住在轨迹页里（票 10），所以先把左栏切过去。
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     state.request(ask_permission().0);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains(TOOL_FACES), "覆盖层为问句让了位：{text}");
     assert!(text.contains("权限询问"), "而问句起来了：{text}");
 }
@@ -7487,13 +7497,13 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
 
     // 第一个问题上只画了 `下一题 →`。点它的字形就前进。
     click_in_row(&mut state, 120, 24, 23, "下一题 →");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "这次点击前进了：{text}");
 
     // 第二个问题先画的是 `← 上一题`：点它就回去，别让
     // 它落在别的任何东西上。
     click_in_row(&mut state, 120, 24, 23, "← 上一题");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击回去了：{text}");
     assert!(answers.try_recv().is_err(), "翻页从不提交");
 }
@@ -7508,7 +7518,7 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
     state.apply(text_delta("第一段正文。"));
     state.apply(reasoning_delta("第二段思考。"));
     open_trace_tab(&mut state, 120, 40);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("… 正在思考"), "第二段还开着：{text}");
     assert_eq!(
         text.matches("思考完成").count(),
@@ -7517,7 +7527,7 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
     );
 
     state.apply(message(1, "第一段正文。", Some("第一段思考。第二段思考。")));
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("正在思考"),
         "完成事件把开着的那一段落定：{text}"
@@ -7538,12 +7548,12 @@ fn ctrl_d_closes_the_detail_overlay() {
     state.apply(tool_completed(2, "call-22", true, Some("body"), None));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     state.key(Key::CtrlD);
     assert!(!state.should_quit(), "关上不是退出");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains(TOOL_FACES), "覆盖层关上了：{text}");
 }
 
@@ -7604,7 +7614,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
     for _ in 0..4000 {
         state.key(Key::PageDown);
     }
-    let rows = screen(120, 40, &mut state);
+    let rows = screen_lines(120, 40, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("已截断"), "裁剪被说出来了：{text}");
 
@@ -7630,7 +7640,7 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     state.key(Key::CtrlC);
     assert!(!state.should_quit(), "Ctrl-C 不会从覆盖层里退出");
     assert!(state.take_events().is_empty(), "也不会取消任何东西");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "覆盖层还开着：{text}");
 
     // `Ctrl-Z` 是那个「别的全部忽略」的唯一例外：挂起是终端层手势，不属于任何一个视图的
@@ -7649,7 +7659,7 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     // 120x40 下它横跨第 2 到 117 列，把输入区也压在下面 ——
     // 所以草稿要等覆盖层关掉之后才看得见。
     state.key(Key::Esc);
-    let rows = screen(120, 40, &mut state);
+    let rows = screen_lines(120, 40, &mut state);
     let input = input_corner(120, 40).1 as usize;
     assert!(
         !rows[input].contains('x'),
@@ -7675,7 +7685,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     state.apply(tool_completed(2, "call-30", true, Some("total 0"), None));
     open_trace_tab(&mut state, 120, 24);
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("调用 bash 查看"),
         "结果一落地调用行就起来了：{text}"
@@ -7694,14 +7704,14 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     asked.apply(permission_asked(2, "call-31"));
     asked.apply(permission_decided(3));
     open_trace_tab(&mut asked, 120, 24);
-    let text = screen(120, 24, &mut asked).join("\n");
+    let text = screen_lines(120, 24, &mut asked).join("\n");
     assert!(text.contains("权限询问"), "问句先被叙述出来：{text}");
     assert!(
         !text.contains("调用 bash"),
         "而调用不会在它的结果之前画出来：{text}"
     );
     asked.apply(tool_completed(4, "call-31", true, Some("out"), None));
-    let text = screen(120, 24, &mut asked).join("\n");
+    let text = screen_lines(120, 24, &mut asked).join("\n");
     assert!(
         text.contains("调用 bash 查看"),
         "结果一落地调用行就起来了：{text}"
@@ -7816,13 +7826,13 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     state.apply(tool_completed(2, "call-40", true, Some("body"), None));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     // 外面：覆盖层在屏幕上留出的上边距（第 0 行）——整圈框都是关闭目标，
     // 而这里的覆盖层压住了它下面几乎每一行（120×40 下它占 2..38）。
     click(&mut state, MAIN_LEFT_AT_120, 0);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains(TOOL_FACES), "点在转录上把它关上了：{text}");
 
     // 里面：什么都不发生，因为覆盖层自己没有按钮 —— 而且
@@ -7830,10 +7840,10 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     // 「再点同一行」**不是**关上被盖住的行的办法；可靠的
     // 出口是 `Esc`、`Ctrl-D`，以及在别处点一下（票 02 §4，2026-09-23 修正）。
     click_row(&mut state, 120, 40, "调用 bash");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "重新打开了：{text}");
     click(&mut state, 60, 12);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "在里面点一下它照样开着：{text}");
     // 决定的是**屏幕位置**，不是它底下压着哪一条转录行：
     // 点在覆盖层矩形里面什么都不发生。所以当覆盖层是从某一行
@@ -7874,10 +7884,10 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
     // （票 10），而转录那一半的窗口不受它影响。
     open_trace_tab(&mut state, 120, 24);
     state.apply(reasoning_delta("先想一下。"));
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.apply(text_delta("答案。"));
 
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("▸ ✓ 思考完成"), "思考行落定了：{text}");
     assert!(text.contains("答案。"), "而落定它的那段正文也在：{text}");
@@ -7887,7 +7897,7 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
         "它之前的历史还在屏幕上（{notices} 行）：{text}"
     );
     state.key(Key::PageUp);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         rows.iter().any(|row| row.contains("第 2")),
         "而 PgUp 还能翻到更早：{}",
@@ -7920,7 +7930,7 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains("--- 标准错误 ---"),
         "工具自己的那些小节原样显示：{text}"
@@ -7953,7 +7963,7 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains("全文不可用"),
         "被裁过的正文没有可读文件时照实说：{text}"
@@ -7993,7 +8003,7 @@ fn the_permission_modals_buttons_are_centred() {
 }
 
 #[test]
-fn the_detail_footer_counts_the_last_row_on_screen() {
+fn the_detail_footer_counts_the_last_row_on_screen_lines() {
     // 已经滚到最底下的读者就在最底下：页脚数的是
     // 屏幕上最后一行，不是窗口恰好起始的那一行。最后一行可见时
     // 它却读成 `94/154`（2026-09-23，用户报告）。
@@ -8020,7 +8030,7 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
 
     // 页脚那两个数，不管它们在屏幕上的哪儿。
     let counts = |state: &mut TuiState| -> (usize, usize) {
-        let rows = screen(120, 40, state);
+        let rows = screen_lines(120, 40, state);
         let row = rows
             .iter()
             .find(|row| row.contains('↕'))
@@ -8043,7 +8053,7 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     }
     let (seen, total) = counts(&mut state);
     assert_eq!(seen, total, "到底时页脚读的是最后一行：{seen}/{total}");
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("第 200 行"), "而最后一行真的在屏幕上：{text}");
 }
 
@@ -8078,7 +8088,7 @@ fn narrowing_the_terminal_relays_a_table_out_by_the_new_width() {
     ));
 
     for width in [120, 70] {
-        let rows = screen(width, 24, &mut state);
+        let rows = screen_lines(width, 24, &mut state);
         let head = rows
             .iter()
             .position(|row| row.contains("name") && row.contains('│'))
@@ -8117,7 +8127,7 @@ fn a_table_at_the_head_of_an_answer_lines_up_with_its_header() {
         "| name | value |\n|---|---|\n| alpha | 1 |",
         None,
     ));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let head = rows
         .iter()
         .position(|row| row.contains("name") && row.contains('│'))
@@ -8143,7 +8153,7 @@ fn a_code_block_is_highlighted_within_the_transcript() {
     // 代码块的语法高亮铺在转录里的样子：`fn` 是关键字那一档，而不是整片代码一个颜色。
     let mut state = state();
     state.apply(message(1, "```rust\nfn main() {}\n```", None));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let code = rows
         .iter()
         .position(|row| row.contains("fn main()"))
@@ -8250,9 +8260,9 @@ fn divide_column(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
 /// （票 04 §1 的那条纪律）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
     // 票 16 之后轨迹只在右栏里：`Ctrl-V` 一次按下 = 开栏 + 把键盘交给它（票 14）。
-    let _ = screen(width, height, state);
+    let _ = screen_lines(width, height, state);
     state.key(Key::CtrlV);
-    let _ = screen(width, height, state);
+    let _ = screen_lines(width, height, state);
 }
 
 /// 轨迹页是一条真视图：它画着转录里的东西，而且贴底跟随。
@@ -8297,7 +8307,7 @@ fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
     let Some((column, row)) = cell_of(&frame, 120, 24, "点此到底") else {
         panic!(
             "轨迹页上该出现回去的指示器：{:?}",
-            screen(120, 24, &mut state)
+            screen_lines(120, 24, &mut state)
         );
     };
     click(&mut state, column, row);
@@ -8325,7 +8335,7 @@ fn a_row_in_the_trace_page_opens_its_detail() {
         panic!("轨迹页上该有那次调用");
     };
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("参数"), "详情覆盖层开着：{text}");
     assert!(text.contains("ls -la"), "里面是这次调用的参数：{text}");
 }
@@ -8350,7 +8360,7 @@ fn a_message_in_the_trace_page_is_one_line_that_opens_its_full_text() {
     let frame = buffer(120, 24, &mut state);
     let (column, row) = cell_of(&frame, 120, 24, "第一行在这里").expect("轨迹页上那行消息");
     click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("第二行在那里"), "详情里有全文：{text}");
 }
 
@@ -8716,10 +8726,10 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
         ));
     }
     open_trace_tab(&mut state, 120, 24);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     state.key(Key::CtrlO);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         !rows.iter().any(|row| row.contains("行新内容")),
         "收起不把任何视图踢出底部：{}",
@@ -8727,7 +8737,7 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
     );
 
     state.key(Key::CtrlO);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(
         !rows.iter().any(|row| row.contains("行新内容")),
         "叫回来也一样：{}",
@@ -8841,7 +8851,7 @@ fn the_wheel_stays_in_the_rail_the_pointer_is_over() {
             format!("第 {index} 句话"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
     // 主列那一块（转录）的行 —— 右栏打开时 `conversation_rows` 会把右栏也读进来，
     // 所以这里按排版给的矩形取。
@@ -8895,9 +8905,9 @@ fn the_wheel_falls_through_to_the_conversation_when_the_sidebar_is_put_away() {
             format!("第 {index} 句话"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlO);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let before = conversation_rows(&mut state, 120, 24);
     state.mouse(wheel_at(2, 12, true));
     assert_ne!(
@@ -8914,7 +8924,7 @@ fn the_wheel_over_a_tile_scrolls_that_tile_only() {
 
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     for index in 0..40 {
         state.apply(RenderEvent::notice(
@@ -8922,7 +8932,7 @@ fn the_wheel_over_a_tile_scrolls_that_tile_only() {
             format!("第 {index} 句话"),
         ));
     }
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     let tiles = heng::render::layout::tile_cells(tile_pool(120, 40), 2).expect("两格");
     fn tile_rows(state: &mut TuiState, rect: Rect) -> Vec<String> {
         let frame = buffer(120, 40, state);
@@ -9391,7 +9401,9 @@ fn the_receipt_of_an_open_lands_in_the_hint_row() {
     let mut state = state_at_repo();
     state.apply(message(1, "见 https://example.com/x 那一页", None));
     assert!(
-        !screen(120, 24, &mut state).join("\n").contains("已打开"),
+        !screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("已打开"),
         "还没点，什么都不该有"
     );
 
@@ -9400,7 +9412,7 @@ fn the_receipt_of_an_open_lands_in_the_hint_row() {
         wording::open_failed("No such file or directory"),
     ] {
         state.note_open_receipt(receipt.clone());
-        let rows = screen(120, 24, &mut state).join("\n");
+        let rows = screen_lines(120, 24, &mut state).join("\n");
         assert!(rows.contains(&receipt), "提示行该说 {receipt:?}：{rows}");
     }
 }
@@ -9516,7 +9528,7 @@ fn the_wheel_over_the_picker_moves_its_highlight() {
 #[test]
 fn the_status_row_shows_the_effort_and_re_rewrites_it_when_the_session_moves() {
     let mut state = idle();
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
         "状态行报出模型：{text}"
@@ -9529,7 +9541,7 @@ fn the_status_row_shows_the_effort_and_re_rewrites_it_when_the_session_moves() {
         1_000_000,
         &["minimax-cn"],
     ));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(
         text.contains("模型 MiniMax-M3.1-Flash-Preview · xhigh"),
@@ -9600,7 +9612,7 @@ fn clicking_a_status_cell_does_not_take_the_keyboard_away_from_the_input() {
         vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Model)]
     );
     state.key(Key::Char('x'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains('x'), "键盘还在输入区：{text}");
 }
 
@@ -9623,7 +9635,7 @@ fn a_discussion_session_only_says_it_cannot_switch() {
     click_text(&mut state, 120, 24, "kimi-k3 + deepseek-v4-pro");
     assert!(events.is_empty(), "占位");
     assert!(state.take_events().is_empty(), "讨论会话不上行切换手势");
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         text.contains(&wording::heng(wording::switch_not_switchable())),
         "它给的是一句说明：{text}"
@@ -9645,7 +9657,7 @@ fn the_picker_starts_on_the_current_row_and_answers_with_the_highlighted_one() {
     let mut state = idle();
     let (request, mut answer) = picker("模型", &[("kimi-k3", true), ("deepseek-v4-pro", true)], 1);
     state.request(request);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("模型"), "浮层有标题：{text}");
     assert!(
         text.contains("kimi-k3") && text.contains("deepseek-v4-pro"),
@@ -9661,7 +9673,7 @@ fn the_picker_starts_on_the_current_row_and_answers_with_the_highlighted_one() {
         Some(1),
         "回的是高亮那一行的下标"
     );
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains("deepseek-v4-pro"), "浮层关上了：{text}");
 }
 
@@ -9681,7 +9693,7 @@ fn a_disabled_picker_row_does_not_answer_and_esc_cancels() {
 
     // 键盘回到输入区。
     state.key(Key::Char('y'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains('y'), "浮层关掉后打字照旧落进草稿：{text}");
 }
 
@@ -9692,7 +9704,7 @@ fn the_picker_takes_the_keyboard_while_it_is_up() {
     state.request(request);
     // 立着的时候可打印字符不进文本（这一格被它占着）。
     state.key(Key::Char('z'));
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(!text.contains('z'), "打字落不到草稿上：{text}");
     // `ctrl-t` 在它立着时不再上行。
     assert!(state.take_events().is_empty());
@@ -9711,7 +9723,7 @@ fn clicking_outside_the_picker_cancels_it() {
     // 点框外（第一行是页签条，那儿不属于浮层）。
     click(&mut state, 2, 0);
     assert_eq!(answer.try_recv().expect("取消送出去了"), None);
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     // 候选名只出现在浮层上（状态行那一格还是 `claude-sonnet-4-5`），所以它是「浮层还在不在」
     // 的判据。
     assert!(!text.contains("kimi-k3"), "浮层关上了：{text}");
@@ -9731,7 +9743,7 @@ fn only_the_current_picker_row_carries_the_current_marker() {
         2,
     );
     state.request(request);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let current = rows
         .iter()
         .find(|row| row.contains('▸'))
@@ -9772,7 +9784,7 @@ fn the_picker_lays_one_model_per_row_in_three_columns() {
     let mut state = idle();
     let (request, _answer) = picker("模型", &labels, 0);
     state.request(request);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let body: Vec<&String> = rows
         .iter()
         // 左栏的分隔列也是 `┆`，所以还要看第三列的状态词 —— 那才是浮层的行。
@@ -9810,7 +9822,7 @@ fn the_picker_lays_one_model_per_row_in_three_columns() {
         },
     );
     state.request(request);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let body: Vec<&String> = rows
         .iter()
         .filter(|row| row.contains('`') && row.contains(wording::PICKER_COLUMN))
@@ -9919,7 +9931,7 @@ fn a_fixed_effort_model_says_instead_of_opening_an_empty_picker() {
     let _ = state.take_events();
     click_text(&mut state, 120, 24, "固定");
     assert!(state.take_events().is_empty(), "没有可开的清单");
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let hint = rows.last().expect("有一行");
     assert!(
         hint.contains("没有档位旋钮，思考常开"),
@@ -9957,7 +9969,7 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
         state
     };
     state.apply(message(8, "kimi 答的", None));
-    let before = screen(120, 24, &mut state);
+    let before = screen_lines(120, 24, &mut state);
     let frame_before = buffer(120, 24, &mut state);
 
     state.request(session_update(
@@ -9966,7 +9978,7 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
         1_048_576,
         &["minimax-cn"],
     ));
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
 
     // 换名之后新发言者的第一行拿到**另一个**颜色，而转录里已经画过的行不改名。
     state.apply(RenderEvent::Logged {
@@ -9983,7 +9995,7 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
             },
         ),
     });
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let frame = buffer(120, 24, &mut state);
     let colour_at = |frame: &ratatui::buffer::Buffer, needle: &str| {
         (0..24)
@@ -10040,7 +10052,7 @@ fn a_file_row_in_the_sidebar_opens_its_content_while_a_questionnaire_is_up() {
     open_files_page(&mut state, 120, 24);
     click_row(&mut state, 120, 24, "hello.rs");
 
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(text.contains("fn main() {}"), "文件内容画出来了：{text}");
     assert!(text.contains("选一个"), "题面还在底部：{text}");
 
@@ -10136,7 +10148,7 @@ fn a_tool_timing_face_only_shows_the_section_it_can_prove() {
     next_face(&mut state); // 输出 → Schema
     next_face(&mut state); // Schema → 计时
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("开始时刻"), "{text}");
     assert!(text.contains("0.4 s"), "总时长是那笔墙钟：{text}");
     assert!(text.contains("其中等审批"), "{text}");
@@ -10180,11 +10192,11 @@ fn each_face_keeps_its_own_scroll_position() {
     // 一帧 —— 真实的按键本来就发生在两帧之间。120×40 下覆盖层 36 行、带标签条时主体 29 行，
     // 于是 `PageDown` 一次滚 28 行（一页减一行重叠），5 次落在 140；200 行还没到底
     // （底是 200 − 29 = 171）。
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     for _ in 0..5 {
         state.key(Key::PageDown);
     }
-    let scrolled = screen(120, 40, &mut state).join("\n");
+    let scrolled = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         scrolled.contains("第 141 行"),
         "输出那一面滚下去了，顶上就是第 141 行：{scrolled}"
@@ -10196,12 +10208,12 @@ fn each_face_keeps_its_own_scroll_position() {
 
     next_face(&mut state); // 输出 → Schema
     next_face(&mut state); // Schema → 计时
-    let timing = screen(120, 40, &mut state).join("\n");
+    let timing = screen_lines(120, 40, &mut state).join("\n");
     assert!(timing.contains("开始时刻"), "而计时面从头开始：{timing}");
 
     state.key(Key::BackTab); // 计时 → Schema
     state.key(Key::BackTab); // Schema → 输出
-    let back = screen(120, 40, &mut state).join("\n");
+    let back = screen_lines(120, 40, &mut state).join("\n");
     assert_eq!(back, scrolled, "切回来还在原处");
 }
 
@@ -10222,7 +10234,7 @@ fn clicking_a_label_switches_the_face() {
     let frame = buffer(120, 40, &mut state);
     let (column, row) = cell_of(&frame, 120, 40, "概述").expect("标签条上那个标签");
     click(&mut state, column, row);
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains("一次 bash 调用"),
         "点「概述」就落在概述面上：{text}"
@@ -10261,7 +10273,7 @@ fn the_label_bar_borrows_a_body_row_without_touching_the_box() {
         "下边框在框顶上第 25 行处：框高与今天一致（26）"
     );
 
-    let rows = screen(100, 30, &mut state);
+    let rows = screen_lines(100, 30, &mut state);
     // 框内自上而下：一行内边距、一行标题（标题在框内第一行，票 03 §Answer）、然后是标签条。
     let title = &rows[usize::from(top) + 2];
     assert!(title.contains("调用 bash"), "标题还在它那一行上：{rows:?}");
@@ -10295,7 +10307,7 @@ fn a_detail_with_one_face_draws_no_bar_at_all() {
     let (column, row) = cell_of(&frame, 120, 24, "一件事").expect("那一项在页上");
     click(&mut state, column, row);
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         !text.contains(wording::detail_summary_face())
             && !text.contains(wording::detail_source_face()),
@@ -10327,7 +10339,7 @@ fn a_chain_that_breaks_ends_there_instead_of_a_placeholder() {
     next_face(&mut state); // Schema → 计时
     next_face(&mut state); // 计时 → 来源
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(wording::chain_here()), "链上仍有本行：{text}");
     assert!(
         !text.contains(wording::chain_arrow()),
@@ -10372,7 +10384,7 @@ fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "上下文注入");
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         text.contains(&format!(
             "{}┆{}",
@@ -10409,7 +10421,7 @@ fn a_tool_detail_has_no_usage_face() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains(TOOL_FACES), "工具那一行还是那几面：{text}");
     assert!(
         !text.contains(wording::detail_usage_face()),
@@ -10582,7 +10594,7 @@ fn an_empty_hit_set_still_says_the_same_sentence() {
     open_trace_tab(&mut state, 120, 40);
     search_for(&mut state, "一个字都不沾边的词");
 
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(text.contains("0 个命中"), "同一句话写到底：\n{text}");
     let page = trace_page(&mut state, 120, 40).join("\n");
     assert!(
@@ -10753,7 +10765,7 @@ fn the_band_gives_up_its_rows_before_the_ledger_does() {
         heng::events::SessionId::new("01J8ZQ4K7M"),
         "只此一行",
     ));
-    let rows = screen(40, 10, &mut state);
+    let rows = screen_lines(40, 10, &mut state);
     assert!(
         !rows
             .iter()
@@ -10774,9 +10786,9 @@ fn the_band_takes_neither_the_keyboard_nor_a_click() {
     // 点横带：它落在账本那一块矩形之外，于是什么都不发生 —— 不开详情、不清选中、
     // 不产生过滤（票 22 第 11 条）。
     state.key(Key::Up);
-    let before = screen(120, 24, &mut state);
+    let before = screen_lines(120, 24, &mut state);
     click(&mut state, 60, band_row(1));
-    let after = screen(120, 24, &mut state);
+    let after = screen_lines(120, 24, &mut state);
     assert_eq!(before, after, "点横带没有反应");
     assert!(
         !after.iter().any(|row| row.contains("个命中")),
@@ -10797,7 +10809,7 @@ fn the_band_takes_neither_the_keyboard_nor_a_click() {
 fn the_main_column_has_no_tab_bar_anymore() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "一句话", None));
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(
         !text.contains(wording::TAB_TRACE),
@@ -10820,8 +10832,8 @@ fn the_hint_row_switches_suites_with_the_keyboard() {
     let mut state = idle();
     a_session_with_process_rows(&mut state);
     // 宽到整份表都放得下：240 列 → 左栏 40 + 主列 139 + 右栏 60。
-    let _ = screen(240, 24, &mut state);
-    let conversation = screen(240, 24, &mut state).join("\n");
+    let _ = screen_lines(240, 24, &mut state);
+    let conversation = screen_lines(240, 24, &mut state).join("\n");
     assert!(
         conversation.contains("enter 发送") && conversation.contains("esc 取消"),
         "键盘在输入区时是对话那一套：{conversation}"
@@ -10829,8 +10841,8 @@ fn the_hint_row_switches_suites_with_the_keyboard() {
     assert!(!conversation.contains("enter 详情"), "没有右栏那一套");
 
     state.key(Key::CtrlV);
-    let _ = screen(240, 24, &mut state);
-    let rail = screen(240, 24, &mut state).join("\n");
+    let _ = screen_lines(240, 24, &mut state);
+    let rail = screen_lines(240, 24, &mut state).join("\n");
     assert!(
         rail.contains("enter 详情") && rail.contains("ctrl-v 交还"),
         "键盘在右栏时换成右栏那一套：{rail}"
@@ -10842,8 +10854,8 @@ fn the_hint_row_switches_suites_with_the_keyboard() {
     let panes =
         heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 240, 24), 1, true, true);
     click(&mut state, panes.input.x + 2, panes.input.y + 1);
-    let _ = screen(240, 24, &mut state);
-    let back = screen(240, 24, &mut state).join("\n");
+    let _ = screen_lines(240, 24, &mut state);
+    let back = screen_lines(240, 24, &mut state).join("\n");
     assert!(
         back.contains("enter 发送") && !back.contains("enter 详情"),
         "交还键盘之后换回对话那一套：{back}"
@@ -10861,11 +10873,11 @@ fn the_page_keys_still_walk_the_only_main_page() {
             None,
         ));
     }
-    let _ = screen(120, 24, &mut state);
-    let bottom = screen(120, 24, &mut state).join("\n");
+    let _ = screen_lines(120, 24, &mut state);
+    let bottom = screen_lines(120, 24, &mut state).join("\n");
     assert!(bottom.contains("第 29 句"), "贴底在最新那句：{bottom}");
     state.key(Key::PageUp);
-    let page = screen(120, 24, &mut state).join("\n");
+    let page = screen_lines(120, 24, &mut state).join("\n");
     assert_ne!(page, bottom, "PageUp 翻动对话视图");
     assert!(
         !page.contains("第 29 句") || !bottom.contains("第 29 句"),
@@ -10878,7 +10890,7 @@ fn the_page_keys_still_walk_the_only_main_page() {
 fn a_hidden_starting_sidebar_leaves_the_frame_without_it() {
     let mut state = state();
     state.set_sidebar_wanted(false);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(!text.contains("调用量"), "左栏整条不在：{text}");
     let frame = buffer(120, 24, &mut state);
@@ -11022,7 +11034,7 @@ fn ctrl_r_tiles_every_hosted_session() {
             ("s-c", "丙会话"),
         ],
     );
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
@@ -11036,7 +11048,7 @@ fn ctrl_r_tiles_every_hosted_session() {
         !tile_heading(&frame, tiles[0], 120).contains('◆'),
         "焦点那个字形退场了"
     );
-    let text = screen(120, 40, &mut state).join("\n");
+    let text = screen_lines(120, 40, &mut state).join("\n");
     assert!(!text.contains("[+ 加入]"), "没有加号格：{text}");
     assert!(!text.contains("▤ 平铺"), "平铺态不画顶部条：{text}");
     // 格与格之间一条竖线、一条横线。
@@ -11049,7 +11061,7 @@ fn ctrl_r_tiles_every_hosted_session() {
 fn two_tiles_split_left_right() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let pool = tile_pool(120, 40);
     let tiles = heng::render::layout::tile_cells(pool, 2).expect("两格");
@@ -11065,7 +11077,7 @@ fn three_tiles_make_an_l() {
         &mut state,
         &[("01J8ZQ4K7M", "甲"), ("s-b", "乙"), ("s-c", "丙")],
     );
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let pool = tile_pool(120, 40);
     let tiles = heng::render::layout::tile_cells(pool, 3).expect("三格");
@@ -11086,7 +11098,7 @@ fn four_tiles_divide_the_left_column_too() {
             ("s-d", "丁"),
         ],
     );
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
@@ -11103,21 +11115,21 @@ fn four_tiles_divide_the_left_column_too() {
 fn ctrl_o_opens_the_sidebar_in_the_tiled_state() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     assert!(state.tiled());
-    let closed = screen(120, 40, &mut state).join("\n");
+    let closed = screen_lines(120, 40, &mut state).join("\n");
     assert!(!closed.contains("调用量"), "平铺开始时左栏收起：{closed}");
 
     state.key(Key::CtrlO);
-    let opened = screen(120, 40, &mut state).join("\n");
+    let opened = screen_lines(120, 40, &mut state).join("\n");
     assert!(
         occurrences(&opened, "调用量") >= 1,
         "Ctrl-O 把左栏叫回来：{opened}"
     );
 
     state.key(Key::CtrlO);
-    let again = screen(120, 40, &mut state).join("\n");
+    let again = screen_lines(120, 40, &mut state).join("\n");
     assert!(!again.contains("调用量"), "再按一次收起：{again}");
 }
 
@@ -11127,12 +11139,12 @@ fn ctrl_digits_move_the_focus_in_the_tiled_state() {
     use heng::render::FrontEndEvent;
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlDigit(2));
     assert!(state.take_events().is_empty(), "标签态没有跳格");
 
     state.key(Key::CtrlR);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlDigit(2));
     assert!(
         state.take_events().iter().any(
@@ -11147,7 +11159,7 @@ fn ctrl_digits_move_the_focus_in_the_tiled_state() {
 fn a_newly_loaded_session_joins_the_tiles() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     assert_eq!(state.tiles().len(), 2);
     host_sessions(
@@ -11167,7 +11179,7 @@ fn the_tile_limit_caps_the_tiles() {
         &[("01J8ZQ4K7M", "甲"), ("s-b", "乙"), ("s-c", "丙")],
     );
     assert_eq!(state.tiles().len(), 2);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
@@ -11181,7 +11193,7 @@ fn the_tile_limit_caps_the_tiles() {
 fn a_closed_session_leaves_the_tiles() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
     let foreground = state.front().clone();
     state.request(ConsoleRequest::Facts(heng::session::HostFacts {
@@ -11194,7 +11206,7 @@ fn a_closed_session_leaves_the_tiles() {
         waiting: 0,
         finished: 0,
     }));
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     assert_eq!(state.tiles().len(), 1);
     assert!(!state.tiled(), "只剩一格就回标签态");
 }
@@ -11209,9 +11221,9 @@ fn the_tiles_draw_each_sessions_own_transcript() {
     switch_session(&mut state, "s-b");
     state.apply(message(2, "乙说的话", None));
     switch_session(&mut state, "01J8ZQ4K7M");
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
     let tiles = heng::render::layout::tile_cells(pool, 2).expect("两格");
@@ -11232,9 +11244,9 @@ fn dragging_in_the_focused_tile_copies_its_text() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
     state.apply(message(1, "甲说的话", None));
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
     let cell = heng::render::layout::tile_cells(pool, 2).expect("两格")[0];
@@ -11265,9 +11277,9 @@ fn short_or_narrow_screens_fall_back_with_a_receipt() {
             ("s-d", "丁"),
         ],
     );
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlR);
-    let rows = screen(120, 24, &mut state);
+    let rows = screen_lines(120, 24, &mut state);
     assert!(!state.tiled(), "24 行撑不住四格");
     assert!(rows.iter().any(|row| row.contains("放不下平铺")));
 }
@@ -11307,9 +11319,9 @@ fn the_tab_strip_lives_inside_the_main_column() {
 fn the_tab_strip_hides_in_the_tiled_state() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "甲"), ("s-b", "乙")]);
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     state.key(Key::CtrlR);
-    let rows = screen(120, 40, &mut state);
+    let rows = screen_lines(120, 40, &mut state);
     assert!(
         !rows[0].contains("▤ 平铺") && !rows[0].contains('['),
         "平铺态第 0 行是格标题：{:?}",
@@ -11337,9 +11349,13 @@ fn the_tab_strip_folds_the_overflow_into_a_plus_n() {
     assert!(top.contains("会话零号"), "排在前面的留着：{top}");
     let at = top.find('+').expect("+N 在行里");
     let x = text_columns(&top[..at]) as u16;
-    let before = screen(120, 40, &mut state);
+    let before = screen_lines(120, 40, &mut state);
     click(&mut state, x, 0);
-    assert_eq!(screen(120, 40, &mut state), before, "+N 点了什么都不发生");
+    assert_eq!(
+        screen_lines(120, 40, &mut state),
+        before,
+        "+N 点了什么都不发生"
+    );
 }
 
 /// 状态类不上标签。
@@ -11375,7 +11391,7 @@ fn the_tab_strip_never_shows_a_sessions_state() {
 fn the_tab_strip_shrinks_to_one_row() {
     let mut state = state_with_roster(&["kimi"]);
     host_sessions(&mut state, &[("01J8ZQ4K7M", "会话 A")]);
-    let short = screen(120, 19, &mut state);
+    let short = screen_lines(120, 19, &mut state);
     let panes =
         heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 19), 1, true, true);
     assert!(short[0].contains("会话 A"));
@@ -11512,12 +11528,12 @@ fn ctrl_v_toggles_the_right_rail_and_its_keyboard() {
 fn clicking_the_input_hands_the_keyboard_back_and_keeps_the_rail() {
     let mut state = state_with_roster(&["kimi"]);
     a_session_with_process_rows(&mut state);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlV);
     let divide = right_divide(120, 24);
     let panes =
         heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, true);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     click(&mut state, panes.input.x + 2, panes.input.y + 1);
     let (frame, cursor) = frame_and_cursor(120, 24, &mut state);
     assert!(cursor.is_some(), "键盘回到输入区");
@@ -11528,10 +11544,10 @@ fn clicking_the_input_hands_the_keyboard_back_and_keeps_the_rail() {
 #[test]
 fn ctrl_v_on_a_narrow_screen_only_leaves_a_receipt() {
     let mut state = state_with_roster(&["kimi"]);
-    let _ = screen(80, 24, &mut state);
-    let before = screen(80, 24, &mut state);
+    let _ = screen_lines(80, 24, &mut state);
+    let before = screen_lines(80, 24, &mut state);
     state.key(Key::CtrlV);
-    let after = screen(80, 24, &mut state);
+    let after = screen_lines(80, 24, &mut state);
     assert!(after.iter().any(|row| row.contains("右栏放不下")));
     let last = after.len() - 1;
     assert_eq!(after[..last], before[..last]);
@@ -11542,10 +11558,10 @@ fn ctrl_v_on_a_narrow_screen_only_leaves_a_receipt() {
 fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
     let mut state = state_with_roster(&["kimi"]);
     a_session_with_process_rows(&mut state);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::CtrlV);
     let divide = right_divide(120, 24);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     state.key(Key::Down);
     let (_, cursor) = frame_and_cursor(120, 24, &mut state);
     assert_eq!(cursor, None, "选中一块时键盘仍在右栏");
@@ -11558,7 +11574,7 @@ fn the_right_rail_hands_the_keyboard_back_after_esc_layers() {
 
 /// 详情覆盖层按整屏量宽（120 列：框 115–116、左缘 2），与格宽无关。
 #[test]
-fn the_detail_overlay_is_sized_to_the_screen() {
+fn the_detail_overlay_is_sized_to_the_screen_lines() {
     let mut state = state_with_roster(&["kimi"]);
     state.set_right_rail(true);
     state.apply(tool_started(
@@ -11568,7 +11584,7 @@ fn the_detail_overlay_is_sized_to_the_screen() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "c1", true, Some("body"), None));
-    let _ = screen(120, 40, &mut state);
+    let _ = screen_lines(120, 40, &mut state);
     click_text(&mut state, 120, 40, "调用 bash");
     let frame = buffer(120, 40, &mut state);
     let (left, _top, width) = overlay_frame(&frame, 120, 40).expect("详情框在");
@@ -11663,7 +11679,7 @@ fn the_rail_tab_bar_disappears_with_the_rail() {
     let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true, false);
     assert!(panes.right_rail.is_none());
     assert!(panes.right_tabs.is_none() && panes.right_page.is_none());
-    let text = screen(120, 24, &mut state).join("\n");
+    let text = screen_lines(120, 24, &mut state).join("\n");
     assert!(
         !text.contains(wording::TAB_FLOW),
         "右栏关着就没有页签条：{text}"
@@ -11856,7 +11872,7 @@ fn the_flow_page_degrades_on_a_short_terminal() {
     let (column, row) = cell_of(&frame, 112, 10, wording::TAB_FLOW).expect("流程签在屏幕上");
     click(&mut state, column, row);
 
-    let rows = screen(112, 10, &mut state);
+    let rows = screen_lines(112, 10, &mut state);
     let text = rows.join("\n");
     assert!(
         text.contains(wording::FLOW_NODE_WAITING),
@@ -11890,7 +11906,7 @@ fn a_medium_terminal_windows_the_track_around_the_current_node() {
     let (column, row) = cell_of(&frame, 120, 16, wording::TAB_FLOW).expect("流程签在屏幕上");
     click(&mut state, column, row);
 
-    let text = screen(120, 16, &mut state).join("\n");
+    let text = screen_lines(120, 16, &mut state).join("\n");
     assert!(
         text.contains(wording::FLOW_NODE_RECEIVED),
         "窗口上一站：{text}"
@@ -11919,7 +11935,7 @@ fn the_wheel_over_the_top_tabs_or_the_status_row_does_nothing() {
             format!("第 {index} 句话"),
         ));
     }
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
     let before = conversation_rows(&mut state, 120, 24);
 
@@ -11956,7 +11972,7 @@ fn the_wheel_over_the_flow_page_does_not_reach_the_conversation() {
     let frame = buffer(120, 24, &mut state);
     let (column, row) = cell_of(&frame, 120, 24, wording::TAB_FLOW).expect("流程签在屏幕上");
     click(&mut state, column, row);
-    let _ = screen(120, 24, &mut state);
+    let _ = screen_lines(120, 24, &mut state);
     let panes = heng::render::layout::plan(Rect::new(0, 0, 120, 24), 1, true, true);
     let rail = panes.right_rail.expect("右栏打开着");
     let before = conversation_rows(&mut state, 120, 24);

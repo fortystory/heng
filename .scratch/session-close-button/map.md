@@ -1,7 +1,7 @@
 # 会话标题上的关闭按钮（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；实现票 `04`–`11` done、`12` 待认领
+Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；**实现票 `04`–`12` 全部落地**
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-20，四轮 grilling 共十七问：三处落点 / 关闭语义 / 关后重排与前台落点 /
 hover 判定范围 / 焦点标记去留 / 忙时能不能关 / 平铺态 ✖ 显隐 / 红色语义 / 未装载的行怎么办 /
@@ -110,7 +110,7 @@ frontier）：
 - [x] [09 两条键位：全局 Ctrl-X 与会话页内 x](issues/09-keyboard-close-shortcuts.md)
 - [x] [10 黏住的标记会消失](issues/10-stale-cross-clearing.md)
 - [x] [11 词条、文档与被推翻条款的改写](issues/11-terms-docs-and-overturned-clauses.md)
-- [ ] [12 测试辅助收拢进 `tests/common/`](issues/12-test-helpers-into-common.md)
+- [x] [12 测试辅助收拢进 `tests/common/`](issues/12-test-helpers-into-common.md)
 
 共 **11** 张票：3 张决策票（1 research + 1 prototype + 1 grilling）**全部收口**，另 8 张实现票
 （`04`–`11`）待实现批次认领；spec 在 [`spec.md`](spec.md)。

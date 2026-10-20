@@ -1,7 +1,7 @@
 # 会话标题上的关闭按钮
 
 Status: 8/8 done（2026-10-20 由 [`map.md`](map.md) 折成 —— 三张决策票全部 `resolved`；票 `04`–`11`
-已落地）
+已落地，票 `12` 是收尾整理）
 
 - **来源**：wayfinder 图 [`map.md`](map.md)（2026-10-20 走完：charting 四轮 grilling 十七问 + 三张票 ——
   事实 [终端鼠标移动事件的真实行为](issues/01-research-mouse-move-events.md)、

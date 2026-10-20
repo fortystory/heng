@@ -158,11 +158,16 @@ pub fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
 }
 
 pub fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
+    screen_lines(width, height, state).join("\n")
+}
+
+/// 屏幕上的几行（每一行一行）。
+///
+/// 与 [`screen`] 同一份画法，区别只在一处：有的测试要**逐行**读（行数、行与行之间的空白），
+/// 另一些要一整段文本。
+pub fn screen_lines(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let frame = buffer(width, height, state);
-    (0..height)
-        .map(|y| row_text(&frame, y, width))
-        .collect::<Vec<_>>()
-        .join("\n")
+    (0..height).map(|y| row_text(&frame, y, width)).collect()
 }
 
 /// 某一**屏幕行**里那段文字的起始列（列按显示宽度算）。
