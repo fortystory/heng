@@ -6,7 +6,10 @@
 
 mod common;
 
-use common::{buffer, click, fresh, host, hover, in_row, load, row, row_text, switch_front};
+use common::{
+    buffer, click, find_leftmost_cell, fresh, host, hover, in_row, load, open_sessions, row,
+    row_text, switch_front,
+};
 use heng::render::{FrontEndEvent, Key};
 use heng::session::listing::SessionMark;
 use ratatui::style::{Color, Modifier};
@@ -264,5 +267,42 @@ fn the_focus_tile_lands_on_the_neighbour() {
         frame[(column, 0)].fg,
         Color::LightMagenta,
         "焦点格落到相邻格（新的前台那一个）"
+    );
+}
+
+/// 落点不同就是不同的地方：指针停在左栏会话页的某一行上时，页签条上**同名**的那一个标签
+/// **不该**也亮出关闭标记（spec A.2：落在那一行 / 那一条标签上就出现）。
+#[test]
+fn the_other_sites_stay_dark_when_the_pointer_is_elsewhere() {
+    let mut state = three_hosted();
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    hover(&mut state, column, row);
+    let frame = buffer(120, 24, &mut state);
+
+    let (tab_at, _) = in_row(&frame, 0, 120, "改一下左栏");
+    assert_eq!(
+        frame[(tab_at - 2, 0)].symbol(),
+        " ",
+        "页签条那一个标签不该亮标记"
+    );
+}
+
+/// 反过来：指针停在页签条上时，左栏会话页里**同名**的那一行也不该亮标记。
+#[test]
+fn the_sidebar_row_stays_dark_when_the_pointer_is_on_the_tab_strip() {
+    let mut state = three_hosted();
+    let frame = buffer(120, 24, &mut state);
+    let (tab_at, _) = in_row(&frame, 0, 120, "改一下左栏");
+    hover(&mut state, tab_at, 0);
+    open_sessions(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+
+    let (row_at, row) = find_leftmost_cell(&frame, 120, 24, "改一下左栏");
+    assert_eq!(
+        frame[(row_at.saturating_sub(2), row)].symbol(),
+        " ",
+        "左栏那一行不该亮标记"
     );
 }

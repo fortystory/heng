@@ -33,6 +33,12 @@ Blocked by: 11
   换成通用的会改掉详情覆盖层那一面的行为）、`tool_schemas` / `state` / `facts_with_roster` / `idle` /
   `framed` / `screen_text` / `menu_is_open` / `cells` / `transcript_rows` / `next_face` —— 它们是那个
   文件专有的探针，不是「造状态、画一帧、读屏」这条主线。
+- **审查后补收的两个**：`click`（两边一模一样：按下 + 抬起）与 `find_cell` —— 后者**语义不同**：
+  `common` 那份找的是**子串**（`needle` 多长都行），这一份找的是**一个字符**。于是 `common` 里另起
+  一个 `find_cell_char`（单字符那一档），这一份改用它 —— 两份都在，不再同名不同义。
+- **还留在原地的三个**：`press` / `release` / `drag_to` —— 这一份是**造事件**（返回
+  `MouseEvent`），`common` 那三个是**直接操作 state**（`press(state, …)`）：不是一份东西。
+  `common` 那三个是票 10 为了「焦点变化 / 拖选不选中标记」加的。
 - **用例数不变**：`tests/render_layout.rs` 收拢前后都是 308 条，全量 1897 条一条不少。
 - **`row_text` 两边等价**：`common` 那份按**显示列宽**推进（宽字符跳过一格），这一份原来经 `cells`
   逐格读（宽字符的第二格是空串）—— 结果相同（那一格只是不 push 而已）。

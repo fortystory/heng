@@ -34,4 +34,5 @@ __pycache__/
 #.idea/
 
 # 插件生成的后端选择文件（不是仓库的一部分）
-/workspace.yaml
+/docs/agents/workspace.yaml
+/docs/agents/label-colors.yaml

@@ -21,10 +21,10 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event as CtEvent, EventStream, KeyCode, KeyEvent,
+    KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::style::Print;
@@ -791,7 +791,8 @@ fn enable_terminal_modes(title: &str) {
     // 焦点变化报告（`?1004h`，票 10）：终端在窗口**失焦/聚焦**时各报一次。没有它，指针移出
     // 窗口这件事我们不知道 —— 屏幕上那个关闭标记会一直挂着，直到下一次指针移动。
     // 不支持这一条的终端把它当没看见（那一串是 private mode，终端自己会忽略）。
-    let _ = execute!(std::io::stdout(), Print("\x1b[?1004h"));
+    // 与鼠标捕获、括号粘贴走同一条 `execute!` —— 三个模式一起开、一起关（ADR 0002）。
+    let _ = execute!(std::io::stdout(), EnableFocusChange);
     // 键盘增强协议（Kitty keyboard protocol）：请终端把 `Shift+Enter` 这类带修饰的键报成
     // `CSI 13;2u`，而不是一个与裸 `Enter` 分不开的字节 —— 没有它，「Shift+Enter 换行」在
     // 协议层就是一句空话（`.scratch/tui-feedback/spec.md` §9）。不支持的终端把这一串当没
@@ -815,7 +816,7 @@ fn disable_terminal_modes() {
         DisableMouseCapture,
         DisableBracketedPaste,
         // 焦点变化报告的**成对**撤销（票 10）—— 与开启它的那一行配成一对（ADR 0002）。
-        Print("\x1b[?1004l"),
+        DisableFocusChange,
         // 还原进入时保存的那条标题。
         Print("\x1b[23;0t")
     );
@@ -2900,6 +2901,12 @@ mod keyboard_layers {
             state.sidebar_keyboard
         }
         fn handle_key(&mut self, state: &mut TuiState, key: Key) -> KeyOutcome {
+            // 问卷立着时键盘归它（`.scratch/questionnaire-keys/spec.md` §9：「问题占着键盘：它
+            // 自己的键回答它，别的什么都进不来」）。左栏排在输入区**之前**，所以这一下要
+            // 主动让 —— 不然 `x` 会去关会话，问卷的选项里若有 x 字母就选不中。
+            if state.pending.is_some() {
+                return KeyOutcome::NotMine;
+            }
             if state.sidebar_key(key) {
                 KeyOutcome::Handled
             } else {
@@ -3251,6 +3258,21 @@ mod keyboard_layers {
     }
 }
 
+/// 指针悬在**哪一种落点**上。
+///
+/// 三处落点各有各的名字：会话页的一行、顶部页签条的一个标签、平铺的一格。悬浮目标带着它 ——
+/// 指针停在左栏某一行上时，页签条上**同名**的那一个标签**不该**也亮出关闭标记（spec A.2：
+/// 「落在那一行 / 那一条标签上就出现，移开就没有」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoverSite {
+    /// 会话页的一行（含它行首那个关闭标记）。
+    SessionRow,
+    /// 顶部页签条的一个标签（含标签上那个关闭标记）。
+    TopTab,
+    /// 平铺的一格标题行。
+    Tile,
+}
+
 pub struct TuiState {
     /// **焦点会话**的投影。切换会话是把这一个换成目标会话那一份 —— 而其余会话的投影
     /// 常驻在 [`TuiState::views`] 里，切回来时原样取回（票 23：不再 `View::new` + 整条重放）。
@@ -3446,12 +3468,15 @@ pub struct TuiState {
     /// 落在会话页的一行、顶部页签条的一个标签或平铺的一格标题行上，就是那一条；落在
     /// 别处（输入区、状态行、空白）就是 `None`。
     ///
+    /// 那个身份**连着落点是哪一种**：三处落点各有各的名字，指针停在左栏某一行上时，页签条上
+    /// **同名**的那一个标签不该也亮出关闭标记 —— 落点不同就是不同的地方（spec A.2）。
+    ///
     /// 命中表是「这一帧画出来的那一张」：指针移动时读到的是**上一帧**画的那张（指针是在
     /// 两帧之间被回应的），而每画完一帧又按**新的一张**重算一遍（`refresh_hover`）。
     ///
     /// 纯渲染器状态，不进事件流。它**变了**才请求重画（票 04）：终端按格去重之后，一次
     /// 横扫仍然是上百个移动事件，逐个重画会把界面刷成一片。
-    hover: Option<crate::events::SessionId>,
+    hover: Option<(crate::events::SessionId, HoverSite)>,
     /// 指针上一次被报到的位置（终端列行）。悬浮目标由它与命中表算出；绘制时还要读它
     /// 判「指针是不是在标题行上」那一类更细的问题（票 08）。
     pointer: Option<(u16, u16)>,
@@ -4894,7 +4919,7 @@ impl TuiState {
             let title = self.hosted_title(id);
             let focused = id == &self.front;
             // 指针悬着的那一个标签，标记位换成**关闭标记**（票 07）—— 标签宽度不变。
-            let closing = self.hover.as_ref() == Some(id);
+            let closing = self.hovered_at(HoverSite::TopTab, id);
             let text = wording::top_tab(closing, &fit_title(&title, TOP_TAB_TITLE_MAX));
             let width = text_columns(&text);
             if used + width + 1 > room as usize {
@@ -5581,7 +5606,7 @@ impl TuiState {
     ///
     /// 翻译不了的（输入区、状态行、空白、别的部件）就是 `None` —— 那里没有会话名，
     /// 也就没有可关的那一条。
-    fn hover_target(&self, column: u16, row: u16) -> Option<crate::events::SessionId> {
+    fn hover_target(&self, column: u16, row: u16) -> Option<(crate::events::SessionId, HoverSite)> {
         let action = self.regions.action_at(column, row)?;
         // 平铺：**只有格标题行算** —— 非焦点格整格都可点，而悬浮的落点是会话名（格标题行），
         // 不是格里的正文（map 冻结项 9）。
@@ -5594,15 +5619,27 @@ impl TuiState {
                 return None;
             }
         }
-        self.session_of_action(action)
+        let id = self.session_of_action(action)?;
+        // 落点是哪一种：会话页的一行、页签条的一个标签、平铺的一格 —— 三处各有各的名字。
+        let site = match action {
+            HitAction::SessionRow(_) | HitAction::SessionCloseRow(_) => HoverSite::SessionRow,
+            HitAction::TopSession(_) | HitAction::TopSessionClose(_) => HoverSite::TopTab,
+            _ => HoverSite::Tile,
+        };
+        Some((id, site))
     }
 
     /// 指针是不是正悬在**这一行**上、而这一行**关得掉**（票 05）。
     ///
     /// 关得掉 = 在宿主表里（只在盘上的那几行关不掉 —— 按钮不给）。画关闭标记与注册它的
     /// 命中矩形问的是同一件事，所以只答一次。
-    fn hovered_closeable_row(&self, id: &crate::events::SessionId) -> bool {
-        self.hover.as_ref() == Some(id) && self.sessions.hosted.contains(id)
+    fn hovered_closeable_row(&self, site: HoverSite, id: &crate::events::SessionId) -> bool {
+        self.hovered_at(site, id) && self.sessions.hosted.contains(id)
+    }
+
+    /// 指针是不是正悬在**这一个落点**上（同一个会话在别处落着不算）。
+    fn hovered_at(&self, site: HoverSite, id: &crate::events::SessionId) -> bool {
+        matches!(self.hover.as_ref(), Some((hovered, at)) if hovered == id && *at == site)
     }
 
     /// 这个命中动作指向哪一个会话。
@@ -5635,7 +5672,7 @@ impl TuiState {
     ///
     /// 指针不在任何会话上时是 `None`。
     pub fn hovered_session(&self) -> Option<&crate::events::SessionId> {
-        self.hover.as_ref()
+        self.hover.as_ref().map(|(id, _)| id)
     }
 
     /// 滚轮一格：整条链交给层表，由各层按落点认领（详情覆盖层直接占着它；问卷 / 中间
@@ -7333,7 +7370,11 @@ impl TuiState {
             // `x`：关掉**焦点行**那一个会话（票 09）—— 键盘路径作用于焦点行，不是「被点的
             // 那一行」。焦点行没有就什么都不做、也不提示。
             Key::Char('x') => {
-                if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) {
+                // 键盘路径也用**关得掉**那个判据（与鼠标那条同一句）：只在盘上、没装载的那一行
+                // 关不掉 —— 不发请求，免得库层拒了之后提示落在**前台**那一会话上。
+                if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone())
+                    && self.sessions.hosted.contains(&id)
+                {
                     self.close_session(id);
                 }
             }
@@ -8496,7 +8537,8 @@ impl TuiState {
         // 记号区间先于这一下按键同步：吸附与整块删读的就是它，而它得反映此刻的草稿
         // （`.scratch/input-tokens/spec.md` §4）。
         self.sync_tokens();
-        // 挂起排在**一切**之前：它是终端层手势，重放、详情覆盖层、问卷、举手都拦不住它
+        // 挂起与 `Ctrl-X` 排在**一切**之前：它们是终端层手势，重放、详情覆盖层、问卷、举手
+        // 都拦不住它们
         // （`.scratch/suspend-gesture/spec.md` §2）。真正的终端动作由 [`Tui::run`] 做。
         if key == Key::CtrlZ {
             self.suspend = true;
@@ -10162,7 +10204,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
             // 按钮不给，票 05）。
             let hosted = state.sessions.hosted.contains(&row.id);
             // 指针悬着、且这一行关得掉 → 标记位画关闭标记（票 05）。
-            let close_mark = state.hovered_closeable_row(&row.id);
+            let close_mark = state.hovered_closeable_row(HoverSite::SessionRow, &row.id);
             lines.push(session_line(
                 row,
                 focus.as_ref(),
@@ -10207,7 +10249,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
         state.sessions.hits.push((screen, id.clone()));
         // 关闭标记的命中矩形**先于**整行注册：命中表取第一个命中的区域，注册顺序即优先级 ——
         // 不先注册，点标记就变成「落焦点」（票 05）。
-        if state.hovered_closeable_row(id) {
+        if state.hovered_closeable_row(HoverSite::SessionRow, id) {
             state.regions.cells.push(Region {
                 rect: Rect::new(page.x, page.y + screen as u16, 1, 1),
                 action: HitAction::SessionCloseRow(screen),
@@ -11691,7 +11733,7 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         state.tile_rects.push((rect, id.clone()));
         let focused = id == focus;
         // 指针悬着的那一格，标记位换成**关闭标记**（票 08）—— 标题的截断宽不变。
-        let closing = state.hover.as_ref() == Some(&id);
+        let closing = state.hovered_at(HoverSite::Tile, &id);
         let title = state.hosted_title(&id);
         let title = fit_title(&title, rect.width.saturating_sub(4) as usize);
         let style = if focused {

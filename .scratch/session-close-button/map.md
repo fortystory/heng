@@ -112,8 +112,8 @@ frontier）：
 - [x] [11 词条、文档与被推翻条款的改写](issues/11-terms-docs-and-overturned-clauses.md)
 - [x] [12 测试辅助收拢进 `tests/common/`](issues/12-test-helpers-into-common.md)
 
-共 **11** 张票：3 张决策票（1 research + 1 prototype + 1 grilling）**全部收口**，另 8 张实现票
-（`04`–`11`）待实现批次认领；spec 在 [`spec.md`](spec.md)。
+共 **12** 张票：3 张决策票（1 research + 1 prototype + 1 grilling）**全部收口**，另 9 张实现票
+（`04`–`12`）**全部落地**；spec 在 [`spec.md`](spec.md)。
 
 ## 已定的决定
 

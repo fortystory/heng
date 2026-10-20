@@ -35,7 +35,10 @@ fn the_session_tab_comes_first_and_lists_the_history() {
     // 页顶读数与右端那个入口（票 05：`关闭` 退场，关闭改成每行一个标记）。
     assert!(text.contains("已装载 2 个"), "页顶左端是读数：{text}");
     assert!(text.contains(wording::SESSION_NEW), "右端有新建：{text}");
-    assert!(!text.contains("关闭「"), "页顶没有关闭入口了：{text}");
+    // 判据是**页顶那一行**里没有「关闭」—— 整屏找会被键位提示里的「ctrl-x 关闭」撞上。
+    let frame = buffer(120, 24, &mut state);
+    let head = common::sessions_head_line(&frame, 40, 24);
+    assert!(!head.contains("关闭"), "页顶没有关闭入口了：{head}");
 }
 
 #[test]
@@ -321,6 +324,7 @@ fn slash_filters_the_list_live_and_the_head_line_becomes_the_filter_line() {
         !text.contains(wording::SESSION_NEW),
         "过滤行整行占掉页顶，`新建` 让位：{text}"
     );
+    // 过滤行占掉页顶整行 —— 那里本来就没有「关闭」可让（它已退场，票 05）。
     assert!(
         !text.contains("关闭「"),
         "`关闭` 让位（它已经退场）：{text}"
@@ -577,9 +581,11 @@ fn the_head_line_keeps_both_entries_in_the_narrow_sidebar() {
         text.contains(wording::SESSION_NEW),
         "窄档下 `新建` 仍在：{text}"
     );
+    let frame = buffer(80, 24, &mut state);
+    let head = common::sessions_head_line(&frame, 28, 24);
     assert!(
-        !text.contains("关闭「"),
-        "窄档下页顶也没有 `关闭`（票 05）：{text}"
+        !head.contains("关闭"),
+        "窄档下页顶也没有 `关闭`（票 05）：{head}"
     );
     assert!(
         !text.contains("已装载"),
@@ -668,7 +674,9 @@ fn the_narrow_head_line_keeps_the_new_entry() {
         text.contains(wording::SESSION_NEW),
         "窄档下 `新建` 仍在：{text}"
     );
-    assert!(!text.contains("关闭「"), "窄档下页顶也没有 `关闭`：{text}");
+    let frame = buffer(80, 24, &mut state);
+    let head = common::sessions_head_line(&frame, 28, 24);
+    assert!(!head.contains("关闭"), "窄档下页顶也没有 `关闭`：{head}");
 }
 
 /// 某一格的前景色。

@@ -23,6 +23,8 @@
 //! - **`CtrlZ` 把整个进程挂起**（`.scratch/suspend-gesture/spec.md` §2）：在任何 layer
 //!   之前生效 —— 它是终端层手势，覆盖层都拦不住它。dispatch 在 `key()` 里跑在 seam 外
 //!   早返回之后。
+//! - **`Ctrl-X` 关掉前台那一个会话**（票 09）：与挂起同一档的终端层手势 —— 任何界面都
+//!   拦不住它。
 //! - **拖选中的 `Esc` 撤选**（`.scratch/tui-feedback/spec.md` §5）：同样在 dispatch 之
 //!   前；它是一次还没落地的指针手势，不与任何持有键盘的视图冲突。
 //!

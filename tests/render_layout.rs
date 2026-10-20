@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{buffer, row_text, screen_lines};
+use common::{buffer, click, find_cell_char, row_text, screen_lines};
 use std::collections::BTreeMap;
 
 use heng::events::SessionId;
@@ -1718,7 +1718,7 @@ fn the_todo_page_fits_more_items_now_that_the_page_fills_the_height() {
 /// 就是找到了页签 —— 而且找法跟人一样：在屏幕上找。
 fn tab_cell(frame: &Buffer, width: u16, height: u16, label: &str) -> (u16, u16) {
     let first: String = label.chars().take(1).collect();
-    find_cell(frame, width, height, &first).unwrap_or_else(|| panic!("{label} 页签在屏幕上"))
+    find_cell_char(frame, width, height, &first).unwrap_or_else(|| panic!("{label} 页签在屏幕上"))
 }
 
 #[test]
@@ -2553,7 +2553,7 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     let mut state = state();
     let frame = buffer(60, 24, &mut state);
     assert!(
-        find_cell(&frame, 60, 24, "调").is_none(),
+        find_cell_char(&frame, 60, 24, "调").is_none(),
         "60 列下没有页签条"
     );
     for (column, row) in [(2u16, 1u16), (4, 3), (2, 8)] {
@@ -3029,14 +3029,6 @@ fn first_notice(rows: &[String]) -> Option<usize> {
 }
 
 /// 第一个装着 `needle` 的格子，写成 `(column, row)`。
-fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
-    (0..height).find_map(|y| {
-        (0..width)
-            .find(|x| frame[(*x, y)].symbol() == needle)
-            .map(|x| (x, y))
-    })
-}
-
 #[test]
 fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
     use heng::render::{Key, RenderEvent};
@@ -3151,7 +3143,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     // 点指示器回到最底下；点别的地方都
     // 不管，因为转录归终端选中。
     let frame = buffer(120, 24, &mut state);
-    let (column, row) = find_cell(&frame, 120, 24, "点").expect("指示器在屏幕上");
+    let (column, row) = find_cell_char(&frame, 120, 24, "点").expect("指示器在屏幕上");
     // 它停在滚动条前面一列：`点此到底` 宽八列，
     // 而转录的最后两列归滚动条与回合条，所以
     // 它最后一个字形绝不能跨在滚动条那一列上。
@@ -6337,12 +6329,6 @@ fn drag_to(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
     }
 }
 
-/// 点屏幕上一个格子：按下 + 抬起。
-fn click(state: &mut TuiState, column: u16, row: u16) {
-    state.mouse(press(column, row));
-    state.mouse(release(column, row));
-}
-
 #[test]
 fn a_turn_with_no_reasoning_adds_no_thinking_line() {
     let mut state = state_with_roster(&["kimi"]);
@@ -7268,7 +7254,7 @@ fn only_the_zone_that_holds_the_keyboard_is_lit() {
     });
 
     let frame = buffer(120, 24, &mut state);
-    let (option, row) = find_cell(&frame, 120, 24, "甲").expect("选项在屏幕上");
+    let (option, row) = find_cell_char(&frame, 120, 24, "甲").expect("选项在屏幕上");
     assert!(
         frame[(option, row)].modifier.contains(Modifier::REVERSED),
         "选项区拿着键盘时高亮反显"
@@ -7279,7 +7265,7 @@ fn only_the_zone_that_holds_the_keyboard_is_lit() {
     state.key(Key::Char('j'));
     state.key(Key::Char('j'));
     let frame = buffer(120, 24, &mut state);
-    let (option, row) = find_cell(&frame, 120, 24, "乙").expect("第二个选项在屏幕上");
+    let (option, row) = find_cell_char(&frame, 120, 24, "乙").expect("第二个选项在屏幕上");
     assert!(
         !frame[(option, row)].modifier.contains(Modifier::REVERSED),
         "输入区拿着键盘时高亮不再反显"
@@ -7288,7 +7274,7 @@ fn only_the_zone_that_holds_the_keyboard_is_lit() {
         !frame[(option, row)].modifier.contains(Modifier::DIM),
         "`DIM` 不参与层级"
     );
-    let (label, row) = find_cell(&frame, 120, 24, "自").expect("自由文本那一行在屏幕上");
+    let (label, row) = find_cell_char(&frame, 120, 24, "自").expect("自由文本那一行在屏幕上");
     assert!(
         frame[(label, row)].modifier.contains(Modifier::REVERSED),
         "键盘在输入区，所以反显在自定义那一行"

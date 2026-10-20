@@ -182,6 +182,28 @@ pub fn in_row(frame: &Buffer, row: u16, width: u16, needle: &str) -> (u16, u16) 
     (text_columns(&line[..byte]) as u16, row)
 }
 
+/// 会话页**页顶**那一行（左端读数 + 右端 `新建`）。
+///
+/// 找它靠右端那个 `新建` —— 宽档的读数是「已装载 N 个」、窄档是「N 个」，字样不一样。
+pub fn sessions_head_line(frame: &Buffer, width: u16, height: u16) -> String {
+    (0..height)
+        .map(|y| row_text(frame, y, width))
+        .find(|line| line.contains("新建"))
+        .unwrap_or_default()
+}
+
+/// 屏幕上**那个字符**所在的格（列, 行）。
+///
+/// 与 [`find_cell`] 不是一回事：那一处找的是**子串**（`needle` 多长都行），这一处找的是
+/// **一个字符**（`needle` 就是一个字符）。两处都有用例，所以两份都在。
+pub fn find_cell_char(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
+    (0..height).find_map(|y| {
+        (0..width)
+            .find(|x| frame[(*x, y)].symbol() == needle)
+            .map(|x| (x, y))
+    })
+}
+
 /// 屏幕上那段文字的左端列与它所在的那一行。
 pub fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16) {
     find_cell_below(frame, width, height, needle, 0)
