@@ -218,7 +218,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 它的条目根本不出现（spec §8）。
     let prompts = mcp_prompt_entries(&mcp).await;
 
-    // 工具表在**渲染器之前**建出来：详情覆盖层的 Schema 面要读它那份声明，而它随会话事实在组装时
+    // 工具表在**渲染器之前**建出来：详情覆盖层的**声明面**要读它那份声明，而它随会话事实在组装时
     // 注入一次（`SessionFacts::tool_declarations`）。表仍然只建一份 —— 往下照旧交给脚手架，没有第二张。
     let tools = tools::with_mcp(
         tools::with_web(
@@ -253,8 +253,8 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             number_style: config.number_style,
             file_viewer: config.file_viewer,
             diff_viewer: config.diff_viewer.clone(),
-            // 工具表里每一份声明 —— 详情覆盖层的 Schema 面读的就是它（票 24 收口补的那一面）。
-            // 表在上面的渲染器之前建好，这里只是把它的声明抄成一份按名字查的账。
+            // 工具表里每一份声明 —— 详情覆盖层的**声明面**读的就是它（票 24 收口补的那一面）。
+            // 表在上面的渲染器之前建好，这里只是把它的声明抄成一份**有序的清单**（票 07）。
             //
             // 抄一份：下面那条**会话级**记录（轨迹页上点得开的那条）读的是同一张表。
             tool_declarations: facts_tool_declarations.clone(),

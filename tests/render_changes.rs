@@ -32,7 +32,7 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
-        // 这个会话的工具声明：Schema 面按名字查它（票 24 收口补的那一面）。这些测试
+        // 这个会话的工具声明：声明面按名字找它（票 24 收口补的那一面）。这些测试
         // 不打开工具详情，于是给一份空的。
         tool_declarations: Default::default(),
         speaker_order: Vec::new(),
