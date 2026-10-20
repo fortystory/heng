@@ -2404,16 +2404,15 @@ pub fn read_only_session() -> String {
     "这个会话是只读预览：它的事件流中间有坏行，写下去会把洞留在那里".to_owned()
 }
 
-/// 页顶右端的两个入口，以及一行的「流损坏」尾标。
+/// 页顶右端的那个入口，以及一行的「流损坏」尾标。
 pub const SESSION_NEW: &str = "新建";
-pub const SESSION_CLOSE: &str = "关闭";
 
-/// 页顶那个入口点名要关的**哪一个会话**（票 32）：`关闭「<标题>」`。
+/// 会话标题上的**关闭标记**（票 05）：`✖`。
 ///
-/// 标题由焦点行给，超宽时调用方先截断（与标题列同一套 `fit_title`）。
-pub fn session_close(title: &str) -> String {
-    format!("关闭「{title}」")
-}
+/// 字形是 U+2716，按 East Asian Width 是 **Neutral → 恒 1 列**（CJK 字体下也不变）—— 别
+/// 换成 `×`（U+00D7），那是 Ambiguous，在「ambiguous = wide」的终端里会变 2 列，三处的列账
+/// 各差 1 列（`.scratch/session-close-button/prototype/README.md` 的宽度自检）。
+pub const CLOSE_CROSS: &str = "✖";
 
 /// 关闭被拒时提示行的前半（票 32）：`MUTED`，说明为什么被拒。
 pub fn close_blocked_lead() -> &'static str {

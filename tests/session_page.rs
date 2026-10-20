@@ -3,142 +3,16 @@
 //!
 //! 帧级断言照 `tests/render_layout.rs` 的写法：`TestBackend` 上画一帧，把屏幕文本读回来。
 
-use std::time::{Duration, SystemTime};
+mod common;
 
-use heng::config::{DiffViewerSettings, FileViewerSettings};
-use heng::events::SessionId;
-use heng::render::{
-    ConsoleRequest, FrontEndEvent, Key, RenderEvent, SessionFacts, TuiState, draw_frame, wording,
+use common::{
+    buffer, click, facts, find_cell, find_leftmost_cell, fresh, load, open_sessions, row, row_text,
+    screen,
 };
-use heng::session::listing::{SessionListing, SessionMark, SessionRow};
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+use heng::events::SessionId;
+use heng::render::{ConsoleRequest, FrontEndEvent, Key, RenderEvent, TuiState, wording};
+use heng::session::listing::{SessionListing, SessionMark};
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-fn facts() -> SessionFacts {
-    SessionFacts {
-        switchable: true,
-        session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/heng".to_owned(),
-        model: "claude-sonnet-4-5".to_owned(),
-        context_window: 200_000,
-        mode: heng::permissions::Mode::Ask,
-        budget_limit: None,
-        number_style: heng::render::wording::NumberStyle::Cn,
-        file_viewer: FileViewerSettings::default(),
-        diff_viewer: DiffViewerSettings::default(),
-        tool_schemas: Default::default(),
-        speaker_order: Vec::new(),
-    }
-}
-
-/// 每个用例都从干净的一份开始。
-fn fresh() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
-}
-
-fn row(id: &str, title: &str, group: &str, mark: SessionMark, minutes: u64) -> SessionRow {
-    SessionRow {
-        id: SessionId::new(id),
-        cwd: Some(format!("/x/{group}")),
-        title: title.to_owned(),
-        group_key: group.to_owned(),
-        group: group.to_owned(),
-        written: Some(SystemTime::now() - Duration::from_secs(minutes * 60)),
-        broken: false,
-        missing_cwd: false,
-        foreground: false,
-        mark,
-    }
-}
-
-/// 把一份列表推进去，就像组装方做的那样。
-fn load(state: &mut TuiState, rows: Vec<SessionRow>, total: usize) {
-    state.request(ConsoleRequest::Notify(
-        heng::render::ConsoleNotify::Sessions {
-            listing: SessionListing {
-                rows,
-                total,
-                unreadable: false,
-            },
-        },
-    ));
-}
-
-fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
-    terminal
-        .draw(|frame| draw_frame(frame, state))
-        .expect("画一帧");
-    terminal.backend().buffer().clone()
-}
-
-/// 一行的文本，按**显示列宽**前进（一个宽字素盖住两格）。
-fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
-    let mut out = String::new();
-    let mut x = 0u16;
-    while x < width {
-        let symbol = buffer[(x, y)].symbol();
-        out.push_str(symbol);
-        x += heng::render::width::text_columns(symbol).max(1) as u16;
-    }
-    out
-}
-
-fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
-    let frame = buffer(width, height, state);
-    (0..height)
-        .map(|y| row_text(&frame, y, width))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16) {
-    for y in 0..height {
-        let text = row_text(frame, y, width);
-        if let Some(byte) = text.find(needle) {
-            let column = heng::render::width::text_columns(&text[..byte]) as u16;
-            return (column, y);
-        }
-    }
-    panic!("屏幕上找不到 {needle}");
-}
-
-fn click(state: &mut TuiState, column: u16, row: u16) {
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
-        state.mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        });
-    }
-}
-
-/// 点左栏页签条上的 `会话`，把这一页叫出来。
-fn open_sessions(state: &mut TuiState, width: u16, height: u16) {
-    let frame = buffer(width, height, state);
-    // 顶部页签条（票 15）的标签也会写标题里的「会话」二字，所以从它下面那一行起找左栏的
-    // 页签条。
-    let (column, row) = find_cell_below(&frame, width, height, wording::TAB_SESSIONS, 2);
-    click(state, column, row);
-}
-
-/// 与 [`find_cell`] 同一条路，只是从屏幕第 `from` 行起找 —— 顶部页签条会占用第 0、1 行。
-fn find_cell_below(frame: &Buffer, width: u16, height: u16, needle: &str, from: u16) -> (u16, u16) {
-    for y in from..height {
-        let text = row_text(frame, y, width);
-        if let Some(byte) = text.find(needle) {
-            let column = heng::render::width::text_columns(&text[..byte]) as u16;
-            return (column, y);
-        }
-    }
-    panic!("屏幕上找不到 {needle}");
-}
 
 #[test]
 fn the_session_tab_comes_first_and_lists_the_history() {
@@ -158,10 +32,10 @@ fn the_session_tab_comes_first_and_lists_the_history() {
     // 相对时间：宽档是 `N 分钟前` / `N 小时前`。
     assert!(text.contains("2 分钟前"), "宽档的时间措辞：{text}");
     assert!(text.contains("1 小时前"), "90 分钟就是 1 小时前：{text}");
-    // 页顶读数与右端两个入口。
+    // 页顶读数与右端那个入口（票 05：`关闭` 退场，关闭改成每行一个标记）。
     assert!(text.contains("已装载 2 个"), "页顶左端是读数：{text}");
     assert!(text.contains(wording::SESSION_NEW), "右端有新建：{text}");
-    assert!(text.contains(wording::SESSION_CLOSE), "右端有关闭：{text}");
+    assert!(!text.contains("关闭"), "页顶没有关闭入口了：{text}");
 }
 
 #[test]
@@ -196,7 +70,7 @@ fn the_rows_carry_their_marks() {
     open_sessions(&mut state, 120, 24);
     let text = screen(120, 24, &mut state);
 
-    assert!(text.contains('▍'), "前台那一行带 `▍`：{text}");
+    assert!(!text.contains('▍'), "前台那个字形退场了（票 05）：{text}");
     assert!(text.contains('?'), "待答那一行带 `?`：{text}");
     assert!(text.contains('●'), "活跃那一行带 `●`：{text}");
     // 页顶读数的 `M` 只数在跑的。
@@ -240,10 +114,19 @@ fn the_foreground_marker_follows_the_switch_not_the_listing_snapshot() {
 
     open_sessions(&mut state, 120, 24);
     let frame = buffer(120, 24, &mut state);
-    let (_, marked) = find_cell(&frame, 120, 24, "▍");
-    assert!(
-        row_text(&frame, marked, 120).contains("刚切过去的一个会话"),
-        "`▍` 跟着切换走，不停在启动那一份 listing 上"
+    // `▍` 已退场（票 05）—— 前台由**标题色**说：切换后的那一个是 `LIVE`（绿），启动
+    // 快照那一行只是「已装载」（`HOSTED`，蓝）。跟的是切换，不停在启动那一份 listing 上。
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "刚切过去的一个会话");
+    assert_eq!(
+        fg_of(&frame, column, row),
+        ratatui::style::Color::LightGreen,
+        "切过去的那个会话是前台的"
+    );
+    let (column, row) = find_leftmost_cell(&frame, 120, 24, "启动那个会话");
+    assert_eq!(
+        fg_of(&frame, column, row),
+        ratatui::style::Color::DarkGray,
+        "启动快照那一行不是前台了（它只在盘上，是 `MUTED`）"
     );
     for y in 0..24 {
         let line = row_text(&frame, y, 120);
@@ -438,10 +321,7 @@ fn slash_filters_the_list_live_and_the_head_line_becomes_the_filter_line() {
         !text.contains(wording::SESSION_NEW),
         "过滤行整行占掉页顶，`新建` 让位：{text}"
     );
-    assert!(
-        !text.contains(wording::SESSION_CLOSE),
-        "`关闭` 也让位：{text}"
-    );
+    assert!(!text.contains("关闭"), "`关闭` 让位（它已经退场）：{text}");
     // 过滤行左端是 `会话` + 查询串。
     assert!(text.contains(wording::TAB_SESSIONS), "{text}");
 }
@@ -596,8 +476,8 @@ fn title_colour(state: &mut TuiState, title: &str) -> ratatui::style::Color {
     // 顶部页签条（票 15）也写标题，但那是另一种颜色语义；要找的是左栏列表行。
     for y in 2..24u16 {
         let text = row_text(&frame, y, 120);
-        // 页顶那一行也会点名标题（`关闭「…」`，票 32）—— 要读的是**列表行**那一档色。
-        if !text.contains(title) || text.contains("关闭「") {
+        // 页顶那一行是读数（票 05 起页顶没有 `关闭` 了）—— 要读的是**列表行**那一档色。
+        if !text.contains(title) || text.contains("已装载") {
             continue;
         }
         for x in 0..120u16 {
@@ -694,8 +574,8 @@ fn the_head_line_keeps_both_entries_in_the_narrow_sidebar() {
         "窄档下 `新建` 仍在：{text}"
     );
     assert!(
-        text.contains(wording::SESSION_CLOSE),
-        "窄档下 `关闭` 仍在：{text}"
+        !text.contains("关闭"),
+        "窄档下页顶也没有 `关闭`（票 05）：{text}"
     );
     assert!(
         !text.contains("已装载"),
@@ -760,32 +640,9 @@ fn a_double_click_on_the_same_row_switches() {
     );
 }
 
-/// 票 32：页顶那个入口点名要关的是哪一个。
+/// 票 05：窄档页顶只剩 `新建` —— 那个 `关闭` 入口退场了。
 #[test]
-fn the_close_button_names_the_focused_session() {
-    let mut state = fresh();
-    let mut front = row("01J8ZQ4K7M", "前台这一个", "heng", SessionMark::Idle, 1);
-    front.foreground = true;
-    load(
-        &mut state,
-        vec![
-            front,
-            row("s-b", "另一个会话", "heng", SessionMark::Idle, 2),
-        ],
-        2,
-    );
-    open_sessions(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let (column, line) = find_cell(&frame, 120, 24, "另一个会话");
-    click(&mut state, column, line);
-
-    let text = screen(120, 24, &mut state);
-    assert!(text.contains("关闭「另一个会话」"), "点名焦点行：{text}");
-}
-
-/// 票 32：窄档也点名（标题按可用宽度截断），两个入口都还在。
-#[test]
-fn the_narrow_head_line_still_names_and_keeps_both_entries() {
+fn the_narrow_head_line_keeps_the_new_entry() {
     let mut state = fresh();
     let mut front = row("01J8ZQ4K7M", "前台这一个", "heng", SessionMark::Idle, 1);
     front.foreground = true;
@@ -807,7 +664,12 @@ fn the_narrow_head_line_still_names_and_keeps_both_entries() {
         text.contains(wording::SESSION_NEW),
         "窄档下 `新建` 仍在：{text}"
     );
-    assert!(text.contains("关闭「"), "窄档也点名：{text}");
+    assert!(!text.contains("关闭"), "窄档下页顶也没有 `关闭`：{text}");
+}
+
+/// 某一格的前景色。
+fn fg_of(frame: &Buffer, column: u16, row: u16) -> ratatui::style::Color {
+    frame[(column, row)].fg
 }
 
 /// 票 32：前台被拒时提示行给一段可点的，点它把前台切到相邻的那一个。

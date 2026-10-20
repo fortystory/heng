@@ -5,157 +5,12 @@
 //! 帧级断言照 `tests/render_layout.rs` 与 `tests/session_page.rs` 的写法：`TestBackend` 上画一帧，
 //! 把屏幕文本读回来。
 
-use std::time::{Duration, SystemTime};
+mod common;
 
-use heng::config::{DiffViewerSettings, FileViewerSettings};
-use heng::events::SessionId;
-use heng::render::{ConsoleRequest, Key, SessionFacts, TuiState, draw_frame, width::text_columns};
-use heng::session::listing::{SessionListing, SessionMark, SessionRow};
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
+use common::{buffer, find_cell, fresh, host, hover, load, open_sessions, row};
+use heng::render::Key;
+use heng::session::listing::SessionMark;
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-fn facts() -> SessionFacts {
-    SessionFacts {
-        switchable: true,
-        session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/heng".to_owned(),
-        model: "claude-sonnet-4-5".to_owned(),
-        context_window: 200_000,
-        mode: heng::permissions::Mode::Ask,
-        budget_limit: None,
-        number_style: heng::render::wording::NumberStyle::Cn,
-        file_viewer: FileViewerSettings::default(),
-        diff_viewer: DiffViewerSettings::default(),
-        tool_schemas: Default::default(),
-        speaker_order: Vec::new(),
-    }
-}
-
-/// 每个用例都从干净的一份开始。
-fn fresh() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
-}
-
-fn row(id: &str, title: &str, group: &str, mark: SessionMark, minutes: u64) -> SessionRow {
-    SessionRow {
-        id: SessionId::new(id),
-        cwd: Some(format!("/x/{group}")),
-        title: title.to_owned(),
-        group_key: group.to_owned(),
-        group: group.to_owned(),
-        written: Some(SystemTime::now() - Duration::from_secs(minutes * 60)),
-        broken: false,
-        missing_cwd: false,
-        foreground: false,
-        mark,
-    }
-}
-
-/// 把一份列表推进去，就像组装方做的那样。
-fn load(state: &mut TuiState, rows: Vec<SessionRow>, total: usize) {
-    state.request(ConsoleRequest::Notify(
-        heng::render::ConsoleNotify::Sessions {
-            listing: SessionListing {
-                rows,
-                total,
-                unreadable: false,
-            },
-        },
-    ));
-}
-
-fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
-    terminal
-        .draw(|frame| draw_frame(frame, state))
-        .expect("画一帧");
-    terminal.backend().buffer().clone()
-}
-
-/// 一行的文本，按**显示列宽**前进（一个宽字素盖住两格）。
-fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
-    let mut out = String::new();
-    let mut x = 0u16;
-    while x < width {
-        let symbol = buffer[(x, y)].symbol();
-        out.push_str(symbol);
-        x += text_columns(symbol).max(1) as u16;
-    }
-    out
-}
-
-/// 屏幕上那段文字的左端列与它所在的那一行。
-fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16) {
-    find_cell_below(frame, width, height, needle, 0)
-}
-
-/// 与 [`find_cell`] 同一条路，只是从屏幕第 `from` 行起找 —— 顶部页签条也会写标题里的字。
-fn find_cell_below(frame: &Buffer, width: u16, height: u16, needle: &str, from: u16) -> (u16, u16) {
-    for y in from..height {
-        let text = row_text(frame, y, width);
-        if let Some(byte) = text.find(needle) {
-            let column = text_columns(&text[..byte]) as u16;
-            return (column, y);
-        }
-    }
-    panic!("屏幕上找不到 {needle}");
-}
-
-fn click(state: &mut TuiState, column: u16, row: u16) {
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
-        state.mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        });
-    }
-}
-
-/// 把指针挪到某处 —— 终端报的是「移动」，不是按下。
-fn hover(state: &mut TuiState, column: u16, row: u16) {
-    state.mouse(MouseEvent {
-        kind: MouseEventKind::Moved,
-        column,
-        row,
-        modifiers: KeyModifiers::NONE,
-    });
-}
-
-/// 推一份宿主表事实：那几个会话装载着、谁是前台。
-fn host(state: &mut TuiState, foreground: &str, sessions: &[&str]) {
-    state.request(ConsoleRequest::Facts(heng::session::HostFacts {
-        foreground: SessionId::new(foreground),
-        sessions: sessions
-            .iter()
-            .map(|id| heng::session::HostedSession {
-                id: SessionId::new(*id),
-                state: heng::session::SessionState::Idle,
-                read_only: false,
-            })
-            .collect(),
-        waiting: 0,
-        finished: 0,
-    }));
-}
-
-/// 点左栏页签条上的 `会话`，把这一页叫出来。
-fn open_sessions(state: &mut TuiState, width: u16, height: u16) {
-    let frame = buffer(width, height, state);
-    let (column, row) = find_cell_below(
-        &frame,
-        width,
-        height,
-        heng::render::wording::TAB_SESSIONS,
-        2,
-    );
-    click(state, column, row);
-}
 
 /// 指针落在会话页的某一行上时，悬浮目标就是那一行的会话。
 #[test]
@@ -265,7 +120,7 @@ fn the_body_of_a_tile_is_not_a_session_name() {
 #[test]
 fn the_hovered_session_follows_the_frame_it_was_drawn_in() {
     let mut state = fresh();
-    let rows: Vec<SessionRow> = (0..30)
+    let rows: Vec<heng::session::listing::SessionRow> = (0..30)
         .map(|index| {
             row(
                 &format!("s-{index:02}"),

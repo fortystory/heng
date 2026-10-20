@@ -37,6 +37,12 @@ pub const WARN: Color = Color::Yellow;
 /// 不把字重烤进颜色。
 pub const BAD: Color = Color::Red;
 
+/// **关闭**：那个会毁掉东西的按钮（会话标题上的关闭标记）。
+///
+/// 它回答的是「这一下会关掉东西」，与 [`BAD`]（工具失败、会话错误）**不是一件事** —— 撞值
+/// 可以，**名字不能混**：混了以后「关不掉」与「工具挂了」在日志和截图里读不出区别。
+pub const CLOSE: Color = Color::Red;
+
 /// 上下文注入行的专色 —— 本 effort 里**唯一为某个表面保留的颜色**：轨迹页的三类前缀
 /// （注入 / 用户 / 助手）要分得开（§2、用户故事 8）。
 pub const INJECTED: Color = Color::LightBlue;

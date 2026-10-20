@@ -3971,8 +3971,12 @@ enum HitAction {
     SessionRow(usize),
     /// 点会话页页顶的 `新建`（动作由票 21 接）。
     SessionNew,
-    /// 点会话页页顶的 `关闭`（作用于焦点行，动作由票 21 接）。
-    SessionClose,
+    /// 点会话页某一行的**关闭标记**（那一行在页区里的行号）：关掉**那一行**的会话 ——
+    /// 不落焦点、不切前台（票 05）。
+    ///
+    /// 存**行号**而不是会话身份，与 [`HitAction::SessionRow`] 同一条理由：`HitAction` 要保持
+    /// `Copy`，而命中表只在画出来的那一帧里有效。
+    SessionCloseRow(usize),
     /// 点提示行上那段「切到「…」」（票 32）：关闭被前台规则拒了之后，把前台切到相邻的那一个，
     /// 焦点仍留在要关的那一行上。
     CloseBlockedSwitch,
@@ -4835,6 +4839,15 @@ impl TuiState {
         &self.front
     }
 
+    /// 会话页里**键盘焦点**所在的那一行（会话 id）。
+    ///
+    /// 它与 [`TuiState::front`]（前台）是**正交**的两件事：键盘可以在会话页的任意一行上，
+    /// 而前台是屏幕上的那一个会话（票 29）。焦点行不在当前画出来的列表里时是 `None`
+    /// （过滤态下焦点可能落在被滤掉的那一行）。
+    pub fn focused_session(&self) -> Option<&crate::events::SessionId> {
+        self.sessions.focused_row().map(|row| &row.id)
+    }
+
     /// 这个渲染器新建过多少份投影。切换会话**不**该让它长一 —— 票 23 的验收判据。
     pub fn view_replays(&self) -> u64 {
         self.view_replays
@@ -5559,13 +5572,23 @@ impl TuiState {
         self.session_of_action(action)
     }
 
+    /// 指针是不是正悬在**这一行**上、而这一行**关得掉**（票 05）。
+    ///
+    /// 关得掉 = 在宿主表里（只在盘上的那几行关不掉 —— 按钮不给）。画关闭标记与注册它的
+    /// 命中矩形问的是同一件事，所以只答一次。
+    fn hovered_closeable_row(&self, id: &crate::events::SessionId) -> bool {
+        self.hover.as_ref() == Some(id) && self.sessions.hosted.contains(id)
+    }
+
     /// 这个命中动作指向哪一个会话。
     ///
     /// 命中表里存的是**下标**（`HitAction` 要保持 `Copy`），会话身份在各自那一张表里 ——
     /// 会话页的行、页签条的标签、平铺的格各有一张。点击与悬浮走的是**同一份**翻译。
     fn session_of_action(&self, action: HitAction) -> Option<crate::events::SessionId> {
         match action {
-            HitAction::SessionRow(screen) => self
+            // 整行与行首那个关闭标记指的是**同一行** —— 指针落在标记那一格上时，悬浮目标
+            // 还得是那一行（否则标记一点就消失，票 05）。
+            HitAction::SessionRow(screen) | HitAction::SessionCloseRow(screen) => self
                 .sessions
                 .hits
                 .iter()
@@ -5839,13 +5862,14 @@ impl TuiState {
                     });
                 }
             }
-            // 页顶那两个入口的动作由票 21 接：这一片只把位置与命中立起来。
-            // 页顶那两个入口（票 21）：渲染层只上报，能不能关、怎么新建由循环判。
+            // 页顶那个入口的动作由票 21 接：这一片只把位置与命中立起来。
+            // 页顶现在**只有** `新建`（票 05：那个 `关闭` 入口退场，关闭改成每行一个标记）。
             Some(HitAction::SessionNew) => {
                 self.events.push(FrontEndEvent::NewSession);
             }
-            Some(HitAction::SessionClose) => {
-                if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) {
+            Some(HitAction::SessionCloseRow(line)) => {
+                // 点那一行的关闭标记：关掉**那一行**的会话 —— 不落焦点、不切前台（票 05）。
+                if let Some(id) = self.session_of_action(HitAction::SessionRow(line)) {
                     self.events.push(FrontEndEvent::CloseSession { id });
                 }
             }
@@ -9968,10 +9992,10 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
     let show_head = height >= 6;
     let show_groups = height >= 8;
 
-    // 页顶那一条（读数与两个入口）**不滚**，画在页区第一行；列表在它下面滚（票 04）。
+    // 页顶那一条（读数与 `新建`）**不滚**，画在页区第一行；列表在它下面滚（票 04）。
     let head_rows = usize::from(show_head);
     if show_head {
-        let head = session_head_line(state, &page, wide, title_w);
+        let head = session_head_line(state, &page, wide);
         // 页顶那一行虽然不滚，照样进屏幕文本层：读数和两个入口都该拖得动、复制得走。
         note_rows(
             state,
@@ -10012,14 +10036,22 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
                 line_ids.push(None);
                 last_group = Some(row.group.as_str());
             }
+            // 这一行关得掉吗：只有在**宿主表**里才关得掉（只在盘上的那几行关不掉 ——
+            // 按钮不给，票 05）。
+            let hosted = state.sessions.hosted.contains(&row.id);
+            // 指针悬着、且这一行关得掉 → 标记位画关闭标记（票 05）。
+            let close_mark = state.hovered_closeable_row(&row.id);
             lines.push(session_line(
                 row,
                 focus.as_ref(),
                 title_w,
                 time_w,
                 now,
-                state.projections.get(&row.id).and_then(|p| p.state),
-                state.sessions.hosted.contains(&row.id),
+                RowState {
+                    live: state.projections.get(&row.id).and_then(|p| p.state),
+                    hosted,
+                    close_mark,
+                },
             ));
             line_ids.push(Some(row.id.clone()));
         }
@@ -10051,6 +10083,14 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
         // 行命中：一整行都是落点（点击 = 交键盘 + 落焦点，票 17）。
         let screen = head_rows + offset;
         state.sessions.hits.push((screen, id.clone()));
+        // 关闭标记的命中矩形**先于**整行注册：命中表取第一个命中的区域，注册顺序即优先级 ——
+        // 不先注册，点标记就变成「落焦点」（票 05）。
+        if state.hovered_closeable_row(id) {
+            state.regions.cells.push(Region {
+                rect: Rect::new(page.x, page.y + screen as u16, 1, 1),
+                action: HitAction::SessionCloseRow(screen),
+            });
+        }
         state.regions.cells.push(Region {
             rect: Rect::new(page.x, page.y + screen as u16, page.width, 1),
             action: HitAction::SessionRow(screen),
@@ -10063,7 +10103,7 @@ fn draw_sessions_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiSta
 }
 
 /// 会话页页顶那一行：左端读数、右端两个入口（都 `ACCENT`、都可点）。
-fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool, title_w: u16) -> Line<'static> {
+fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool) -> Line<'static> {
     if state.sessions.filter.is_some() {
         return session_filter_line(state, page);
     }
@@ -10082,42 +10122,20 @@ fn session_head_line(state: &mut TuiState, page: &Rect, wide: bool, title_w: u16
     );
     let left_w = text_columns(&left) as u16;
     let new_w = text_columns(wording::SESSION_NEW) as u16;
-    // 那个入口**点名**要关的是哪一个（票 32）：`关闭「<标题>」`，标题超宽尾省略。宽窄两档都写
-    // —— 「关的是谁」比按钮本身更值钱，放得下多少由标题的截断宽度定。
-    let close_label = match state.sessions.focused_row() {
-        Some(row) => wording::session_close(&fit_title(&row.title, (title_w / 2) as usize)),
-        None => wording::SESSION_CLOSE.to_owned(),
-    };
-    let close_w = text_columns(&close_label) as u16;
-    // 右端两个入口；空宿主时只剩 `新建`（票 21 填 `host_empty`）。
-    let close_at = page.width.saturating_sub(close_w);
-    let new_at = if state.sessions.host_empty {
-        page.width.saturating_sub(new_w)
-    } else {
-        close_at.saturating_sub(2 + new_w)
-    };
+    // 页顶**只剩读数与 `新建`**（票 05）：那个 `关闭` 入口退场 —— 关闭改成每行一个标记，
+    // 目标就是**被点的那一行**，不必再绕到页顶去作用焦点行（连同 `关闭「<标题>」` 那两档
+    // 文案一起退场）。
+    let new_at = page.width.saturating_sub(new_w);
     state.regions.cells.push(Region {
         rect: Rect::new(page.x + new_at, page.y, new_w, 1),
         action: HitAction::SessionNew,
     });
-    if !state.sessions.host_empty {
-        state.regions.cells.push(Region {
-            rect: Rect::new(page.x + close_at, page.y, close_w, 1),
-            action: HitAction::SessionClose,
-        });
-    }
     let accent = Style::default().fg(palette::ACCENT);
     let mut spans = vec![Span::styled(left, Style::default().fg(palette::MUTED))];
     spans.push(Span::raw(
         " ".repeat(new_at.saturating_sub(left_w) as usize),
     ));
     spans.push(Span::styled(wording::SESSION_NEW, accent));
-    if !state.sessions.host_empty {
-        spans.push(Span::raw(
-            " ".repeat(close_at.saturating_sub(new_at + new_w) as usize),
-        ));
-        spans.push(Span::styled(close_label, accent));
-    }
     let _ = wide;
     Line::from(spans)
 }
@@ -10150,6 +10168,18 @@ fn session_filter_line(state: &TuiState, page: &Rect) -> Line<'static> {
     ])
 }
 
+/// 一行会话的**内存状态**：三态、是否装载，以及指针是不是正悬在它上面。
+///
+/// 标题色、标记列与关闭标记三处都读它，所以打包传（参数太多会让 clippy 喊）。
+struct RowState {
+    /// 内存里的三态（票 22：比 store 扫出来的那一份准，也更新）。
+    live: Option<crate::session::host::SessionState>,
+    /// 在宿主表里（已装载）：关得掉、标题色是 `HOSTED`。
+    hosted: bool,
+    /// 指针悬着、且这一行关得掉 → 标记位画关闭标记（票 05）。
+    close_mark: bool,
+}
+
 /// 会话页的一行：标记列 1 + 标题 T + 间隔 1 + 时间 Tw（spec §3）。
 fn session_line(
     row: &crate::session::listing::SessionRow,
@@ -10157,15 +10187,14 @@ fn session_line(
     title_w: u16,
     time_w: u16,
     now: std::time::SystemTime,
-    live: Option<crate::session::host::SessionState>,
-    hosted: bool,
+    row_state: RowState,
 ) -> Line<'static> {
     use crate::session::host::SessionState;
     use crate::session::listing::SessionMark;
     let focused = focus == Some(&row.id);
     // **内存里的三态优先**（票 22）：它比 store 扫描出来的那一份准，也更新 —— 后台那个会话刚
     // 开始跑、或者正等着人答，只有它知道。
-    let live = match live {
+    let live = match row_state.live {
         Some(SessionState::AwaitingHuman) => Some(SessionMark::Awaiting),
         Some(SessionState::RunningTurn) => Some(SessionMark::Running),
         Some(SessionState::Idle) => Some(SessionMark::Idle),
@@ -10180,7 +10209,7 @@ fn session_line(
     // 焦点另有两条独立信号：时间列用 `ACCENT`，以及粗体。
     let title_colour = if row.foreground {
         palette::LIVE
-    } else if hosted {
+    } else if row_state.hosted {
         palette::HOSTED
     } else {
         palette::MUTED
@@ -10195,15 +10224,28 @@ fn session_line(
             Modifier::empty()
         })
     };
-    // 标记列：四态互斥，前台压过一切。
-    let (mark, mark_style) = if row.foreground {
-        ("▍", Style::default().fg(palette::ACCENT))
+    // 标记列：四态互斥。**前台那一档的字形已退场**（票 05）：`▍` 说的是「这一行是当前前台」，
+    // 而三档标题色已经说了同一件事（`LIVE` / `HOSTED` / `MUTED`，票 29）；焦点是**另一件**
+    // 正交的事，由时间列的 `ACCENT` 与粗体说（票 29 的注释）。
+    //
+    // 指针悬着且这一行关得掉时，关闭标记**顶替**标记位（形态票的甲版）—— 代价是那一行的
+    // 状态标记（`●` 在跑 / `?` 等人类）此刻看不见，那正是决定「能不能点」的时刻。
+    let (mark, mark_style) = if row_state.close_mark {
+        (wording::CLOSE_CROSS, Style::default().fg(palette::CLOSE))
+    } else if row.foreground {
+        (" ", row_style)
     } else {
         match live.unwrap_or(row.mark) {
             SessionMark::Awaiting => ("?", Style::default().fg(palette::WARN)),
             SessionMark::Running => ("●", Style::default().fg(palette::PLAIN)),
             SessionMark::Idle => (" ", row_style),
         }
+    };
+    // 悬浮那一行让一列给关闭标记：标题从第 3 列起，预算少一列（形态票的列账）。
+    let title_w = if row_state.close_mark {
+        title_w.saturating_sub(1)
+    } else {
+        title_w
     };
     let title = fit_title(&row.title, title_w as usize);
     let title_pad = title_w.saturating_sub(text_columns(&title) as u16);
@@ -10224,13 +10266,16 @@ fn session_line(
         )
     };
     let time_pad = time_w.saturating_sub(text_columns(&time) as u16);
-    Line::from(vec![
-        Span::styled(mark.to_owned(), mark_style),
-        Span::styled(title, row_style),
-        Span::raw(" ".repeat(title_pad as usize + 1)),
-        Span::raw(" ".repeat(time_pad as usize)),
-        Span::styled(time, time_style),
-    ])
+    let mut spans = vec![Span::styled(mark.to_owned(), mark_style)];
+    if row_state.close_mark {
+        // 关闭标记之后留一列，标题从第 3 列起（形态票的列账）。
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(title, row_style));
+    spans.push(Span::raw(" ".repeat(title_pad as usize + 1)));
+    spans.push(Span::raw(" ".repeat(time_pad as usize)));
+    spans.push(Span::styled(time, time_style));
+    Line::from(spans)
 }
 
 /// 标题按**显示列宽**截断，尾一个 `…`（spec §3）。

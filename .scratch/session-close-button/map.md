@@ -1,7 +1,7 @@
 # 会话标题上的关闭按钮（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；实现票 `04` done、`05`–`11` 待认领
+Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；实现票 `04`–`05` done、`06`–`12` 待认领
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-20，四轮 grilling 共十七问：三处落点 / 关闭语义 / 关后重排与前台落点 /
 hover 判定范围 / 焦点标记去留 / 忙时能不能关 / 平铺态 ✖ 显隐 / 红色语义 / 未装载的行怎么办 /
@@ -103,13 +103,14 @@ hover 判定范围 / 焦点标记去留 / 忙时能不能关 / 平铺态 ✖ 显
 frontier）：
 
 - [x] [04 指针的移动事件不再被丢掉](issues/04-pointer-move-events.md)
-- [ ] [05 左栏「会话」页的关闭标记](issues/05-close-button-in-sessions-page.md)
+- [x] [05 左栏「会话」页的关闭标记](issues/05-close-button-in-sessions-page.md)
 - [ ] [06 关掉前台那一会话后，前台落到相邻](issues/06-close-foreground-and-land-on-neighbor.md)
 - [ ] [07 顶部页签条的关闭标记](issues/07-close-button-in-tab-strip.md)
 - [ ] [08 平铺态格标题行的关闭标记](issues/08-close-button-in-tile-header.md)
 - [ ] [09 两条键位：全局 Ctrl-X 与会话页内 x](issues/09-keyboard-close-shortcuts.md)
 - [ ] [10 黏住的标记会消失](issues/10-stale-cross-clearing.md)
 - [ ] [11 词条、文档与被推翻条款的改写](issues/11-terms-docs-and-overturned-clauses.md)
+- [ ] [12 测试辅助收拢进 `tests/common/`](issues/12-test-helpers-into-common.md)
 
 共 **11** 张票：3 张决策票（1 research + 1 prototype + 1 grilling）**全部收口**，另 8 张实现票
 （`04`–`11`）待实现批次认领；spec 在 [`spec.md`](spec.md)。
@@ -215,6 +216,7 @@ frontier）：
 **本图只做规划，不产代码改动。**
 实现阶段要照三张票的答案做，别凭印象重推：列账在形态票、终端行为在事实票、关闭契约在决策票。
 
-**实现批次开始（2026-10-20）**：票 `04`（指针的移动事件不再被丢掉）已落地 —— 移动事件进渲染器、
-渲染器知道指针停在哪一条会话上、**只在悬浮目标变化时**才请求重画（一次横扫从上百帧降到 1～2 帧）。
-下一个可认领的票是 `05`（左栏「会话」页的关闭标记）。
+**实现批次进行中（2026-10-20）**：票 `04`（指针的移动事件不再被丢掉）与 `05`（左栏「会话」页的
+关闭标记）已落地 —— 移动事件进渲染器、渲染器知道指针停在哪一条会话上、**只在悬浮目标变化时**才请求
+重画；会话页的行首在悬浮时出现红色 `✖`、点它关掉**那一行**，页顶那个 `关闭` 入口退场。
+下一个可认领的票是 `06`（关掉前台那一会话后，前台落到相邻）。

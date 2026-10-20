@@ -68,7 +68,8 @@ pub struct SessionListing {
 
 /// 扫 store，给会话页排出一份列表。
 ///
-/// `foreground` 是当前前台那个会话：它所在的**检出组**被钉在组顶，它自己带 `▍`。
+/// `foreground` 是当前前台那个会话：它所在的**检出组**被钉在组顶，它自己在会话页里由标题色
+/// `LIVE` 认（那个 `▍` 字形已退场 —— 票 05，标记位让给关闭标记）。
 /// `marks` 是宿主表给的状态（票 22 填），票 17 这一层只负责把它贴到行上。
 pub fn sessions(
     store: &SessionStore,
