@@ -1,4 +1,4 @@
-# issue tracker：本地 Markdown
+# Issue tracker: Local Markdown
 
 本仓库的 issue 与 spec，都是放在 `.scratch/` 下的 markdown 文件。
 
