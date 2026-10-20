@@ -1,7 +1,7 @@
 # 10: 文档、词表与真机走查收口
 
 Type: implement
-Status: ready-for-agent
+Status: ready-for-walkthrough
 Blocked by: 04, 08, 09
 Part of: ../map.md
 
@@ -49,3 +49,23 @@ Part of: ../map.md
 ## 评论
 
 （空 —— 开工时补：落地与实测）
+
+## 评论
+
+- **改了五处**（Lead 亲手落）：
+  - `docs/render.md` 的「检视器的面」一节：分派表工具那一行 `Schema` → **声明**；那条 bullet
+    改写成「**先画用法说明、再画参数 schema**，两节各带一个小标题」，并把**声明**与**参数
+    schema**两个说法分清。
+  - `docs/render.md` 新增一节「**工具声明**」：转录上那条可点开的记录、点开是全表（每条是
+    「名字 + 用法说明」，**参数 schema 不在里头**）、与系统提示词那条同一纪律（不进事件流、
+    不进模型上下文、不落盘）、老会话看到的是**今天**那张表。
+  - `CONTEXT.md`：新增**工具声明**与**工具表**两条词条（[06](06-grilling-boundaries.md) 定的
+    「立一条」）；「工具表」那条补一句它**在界面上看得见**、而它不是注入。
+  - `docs/tui-manual-checklist.md` ㊼：五步（声明面先读用法说明、标签条第三格、那条记录只占
+    一行且点开是全表、它不进模型上下文、老会话查不到时仍是那一句）。
+  - `.scratch/README.md`：那一行的**票数**跟着改（见下）。
+- **护栏实测**：`scripts/check-doc-size.py` OK（54 份文档、单元 ≤500、入口三份在预算内）；
+  `scripts/check-language.py` OK；`cargo test` 1944 passed / 0 failed。
+- **还差的一条**：㊼ 那五步要在**真终端**里走一遍（这正是本票收在 `ready-for-walkthrough` 而
+  不是 `done` 的原因）。走查时最值得盯的两条是第 3 步（那条记录只占一行、点开能滚到底）与第 4 步
+  （它不进模型上下文 —— `sessions show` 与请求里的 `messages` 里都没有那张表）。
