@@ -12,9 +12,10 @@
 use std::ops::Range;
 use std::path::Path;
 
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::palette::LINK;
 use super::width::{char_columns, text_columns};
 
 /// 一个候选指向什么。
@@ -144,7 +145,10 @@ pub fn mark(rows: &mut [Line<'static>], folded: &[bool]) -> Vec<Vec<Hotspot>> {
                 }
                 let row = head + index;
                 let columns = (lo - offset)..(hi - offset);
-                underline(&mut rows[row], &columns);
+                // 只有**工作区路径**那种候选上链接色；URL 走浏览器那一路，不是文件链接
+                // （`.scratch/link-emphasis/spec.md` §1）。
+                let link = matches!(&hot.target, Target::Path(_));
+                underline(&mut rows[row], &columns, link);
                 found[row].push(Hotspot {
                     columns,
                     target: hot.target.clone(),
@@ -298,7 +302,7 @@ fn classify(token: &str) -> Option<Target> {
     if is_url(token) {
         return Some(Target::Url(token.to_owned()));
     }
-    if looks_like_path(token) {
+    if is_file_path(token) {
         return Some(Target::Path(token.to_owned()));
     }
     None
@@ -312,12 +316,18 @@ fn is_url(token: &str) -> bool {
     })
 }
 
-/// 看起来像一条路径吗。
+/// 这段文字**看起来像**一条工作区路径吗。
 ///
 /// 三条判据按顺序：带 scheme 的（`mailto:`）不是；`path:line` 不是；剩下的要含 `/`，或者末段
 /// 带一个像扩展名的东西。最后那条是 `README.md` 与 `x.html` 得以成立的原因，也是 `1.0.0`
 /// 与 `e.g.` 被挡在外面的原因（扩展名必须**以字母开头**）。
-fn looks_like_path(token: &str) -> bool {
+///
+/// 它只判**形状**，不判存在性：真不真在盘上、有没有落在工作区里，是点击那一刻的事
+/// （[`Target::resolve`]）。
+///
+/// **公开**出来是为了让 Markdown 渲染层复用同一份规则 —— 「这是不是一个文件链接」不该有两套
+/// 路径形状的判据（`.scratch/link-emphasis/spec.md` §1）。
+pub fn is_file_path(token: &str) -> bool {
     if token.is_empty() || token.chars().any(char::is_whitespace) {
         return false;
     }
@@ -363,19 +373,28 @@ fn has_extension(token: &str) -> bool {
 
 // ------------------------------------------------------------------ 画
 
-/// 给一条行里的某几列加上下划线。
+/// 给一条行里的某几列加上下划线；候选是**工作区路径**时还顺手上链接色。
 ///
 /// 按**字符**重建 span 列表，而不是去切 span 的字节：列与字符不是一一对应（一个宽字符两列），
 /// 逐字符走是唯一能保证不切开一个宽字符的做法。一个候选的列区间总是落在字符边界上，所以
 /// 「取字符的起始列」就是它要的那几格。
-fn underline(line: &mut Line<'static>, columns: &Range<usize>) {
+///
+/// 上色与下划线**在同一次重建里**做：这段文字只被切一次，重建也只有这一趟（多走一趟就等于
+/// 把同一段文字切两次）。上不上的判据是候选所在 span 的前景色 —— **没有指定**前景色才算正文，
+/// 于是行内代码的静音灰、引用块的叙述灰、代码块的语法色（与它显式说的「终端默认」）都
+/// **一个字不动**（`.scratch/link-emphasis/spec.md` §1）。
+fn underline(line: &mut Line<'static>, columns: &Range<usize>, link: bool) {
     if columns.is_empty() {
         return;
     }
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 2);
     let mut column = 0usize;
     for span in line.spans.drain(..) {
-        let hot_style = span.style.patch(Modifier::UNDERLINED);
+        let hot_style = if link && is_body(&span.style) {
+            span.style.patch(Modifier::UNDERLINED).fg(LINK)
+        } else {
+            span.style.patch(Modifier::UNDERLINED)
+        };
         let mut run = String::new();
         let mut run_hot = false;
         for ch in span.content.chars() {
@@ -396,6 +415,19 @@ fn underline(line: &mut Line<'static>, columns: &Range<usize>) {
     line.spans = spans;
 }
 
+/// 这段样式是**正文**吗（**没有指定**前景色）。
+///
+/// 「有没有指定前景色」是上不上链接色的判据：行内代码是静音灰、引用块是叙述灰、代码块要么是
+/// 语法色、要么**显式**说自己的前景色是终端默认（`Color::Reset`，见
+/// [`crate::render::markdown`]）—— 都有前景色，于是它们**保持原样**，而只有正文那一档升到
+/// 链接色（`.scratch/link-emphasis/spec.md` §1）。
+///
+/// **为什么显式的 `Color::Reset` 不算正文**：它与「没有前景色」画出来一模一样，却能把
+/// **代码块**与正文分开 —— 代码块里的字不是正文（它是一段代码），而它自己知道这一点。
+fn is_body(style: &Style) -> bool {
+    style.fg.is_none()
+}
+
 /// 一条显示行的文本（拼接它的 span）。
 pub(crate) fn row_text(line: &Line<'static>) -> String {
     line.spans
@@ -407,6 +439,7 @@ pub(crate) fn row_text(line: &Line<'static>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::palette;
 
     /// 这一行里认出来的候选，按「列区间 + 目标」写出来。
     fn found(text: &str) -> Vec<(Range<usize>, Target)> {
@@ -556,6 +589,51 @@ mod tests {
         let found = mark(&mut rows, &[false]);
         assert!(found[0].is_empty());
         assert_eq!(rows[0].spans.len(), 1);
+    }
+
+    /// 正文里的一条路径候选：前景色变成**链接色**。它指向工作区里的一个文件，与一段
+    /// 行内代码要在屏幕上分得开（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_path_candidate_in_body_text_takes_the_link_colour() {
+        let mut rows = vec![Line::from("见 README.md")];
+        mark(&mut rows, &[false]);
+        let candidate = rows[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "README.md")
+            .expect("候选是它自己的一片 span");
+        assert_eq!(candidate.style.fg, Some(palette::LINK));
+    }
+
+    /// 同一段文字写在**行内代码**里：仍是静音灰。行内代码保持灰正是这一版要的那条区分 ——
+    /// 它与文件链接长得不一样，人才分得出哪个是链接。
+    #[test]
+    fn a_path_candidate_inside_inline_code_keeps_the_quiet_grey() {
+        let mut rows = vec![Line::from(Span::styled(
+            "见 README.md",
+            Style::default().fg(palette::CODE_QUIET),
+        ))];
+        mark(&mut rows, &[false]);
+        let candidate = rows[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "README.md")
+            .expect("候选是它自己的一片 span");
+        assert_eq!(candidate.style.fg, Some(palette::CODE_QUIET));
+    }
+
+    /// 一条 URL 候选：前景色**不动**。它走浏览器那一路，不是文件链接
+    /// （`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_url_candidate_keeps_its_own_colour() {
+        let mut rows = vec![Line::from("见 https://example.com/x")];
+        mark(&mut rows, &[false]);
+        let candidate = rows[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "https://example.com/x")
+            .expect("候选是它自己的一片 span");
+        assert_eq!(candidate.style.fg, None, "URL 不上链接色");
     }
 
     #[test]

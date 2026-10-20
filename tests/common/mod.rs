@@ -9,13 +9,32 @@
 use std::time::{Duration, SystemTime};
 
 use heng::config::{DiffViewerSettings, FileViewerSettings};
-use heng::events::SessionId;
-use heng::render::{ConsoleRequest, SessionFacts, TuiState, draw_frame, width::text_columns};
+use heng::events::{Event, EventPayload, Role, SessionId, SpeakerId};
+use heng::render::{
+    ConsoleRequest, RenderEvent, SessionFacts, TuiState, draw_frame, width::text_columns,
+};
 use heng::session::listing::{SessionListing, SessionMark, SessionRow};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+/// 一条给讨论者的 `MessageCompleted`：正文进对话视图。
+pub fn said(text: &str) -> RenderEvent {
+    RenderEvent::Logged {
+        session: SessionId::new("s-1"),
+        event: Event::new(
+            1,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                text: text.to_owned(),
+                reasoning: None,
+                first_token_ms: None,
+            },
+        ),
+    }
+}
 
 pub fn facts() -> SessionFacts {
     SessionFacts {

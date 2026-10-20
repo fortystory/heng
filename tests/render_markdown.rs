@@ -9,7 +9,7 @@ use heng::render::highlight::{self, Class};
 use heng::render::markdown::{to_lines, to_lines_indented};
 use heng::render::palette;
 use heng::render::width;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
 
 /// 测试用的可用宽度：一个像样的主列。
@@ -295,13 +295,16 @@ fn a_bare_fence_draws_no_language_line() {
 fn an_unknown_language_still_names_itself() {
     let lines = to_lines("```brainfuck\n+++\n```", 20);
     assert_eq!(text(&lines[0]), format!("{}brainfuck", " ".repeat(11)));
-    // 认不出的是**高亮**，不是标签：代码行只有默认样式。
+    // 认不出的是**高亮**，不是标签：代码行**没有自己的颜色**（前景色是终端默认 ——
+    // 显式写出来是为了把「代码块」与「正文」分开，`.scratch/link-emphasis/spec.md` §1）。
     assert_eq!(text(&lines[1]), "  +++");
     assert!(
         lines[1]
             .spans
             .iter()
-            .all(|span| span.style == Style::default())
+            .all(|span| span.style.fg.is_none_or(|fg| fg == Color::Reset)),
+        "代码行没有自己的颜色：{:?}",
+        lines[1]
     );
 }
 

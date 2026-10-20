@@ -143,9 +143,20 @@ pub const MARK_LIGHT: Color = Color::White;
 // 内容域不预警、不表示选中。所以这里的值即使与界面域某一条相同，也是**刻意的撞值**，不是
 // 漏改的引用。
 
-/// 内容域的退后一档：行内代码、引用条、链接目标、分隔线、代码块的语言名、表格网格，以及
-/// 语法里的注释与标点。值与界面域的 [`MUTED`] 相同是刻意的（§3）。
+/// 内容域的退后一档：行内代码、引用条、链接目标（**URL** 那一档 —— 文件链接的目标回显归
+/// [`LINK`]）、分隔线、代码块的语言名、表格网格，以及语法里的注释与标点。值与界面域的
+/// [`MUTED`] 相同是刻意的（§3）。
 pub const CODE_QUIET: Color = Color::DarkGray;
+
+/// **文件链接**：正文里被认成工作区路径的那一段候选（`.scratch/link-emphasis/spec.md` §2）。
+///
+/// 它回答的是「这是什么」—— 一条指向工作区文件的链接 —— 所以住在**内容域**，与
+/// [`CODE_QUIET`] 那一档「这是一段代码」是同层的两件事：文件链接与行内代码必须在屏幕上
+/// 一眼分得开，这正是这一档存在的理由。
+///
+/// 值取 `LightCyan`：内容域里唯一冷而亮的一档。它与界面域 [`DEBATERS`] 的头一个**撞值是
+/// 刻意的**（§3：域间允许撞值）—— 链接另有一层下划线，两层不打架。
+pub const LINK: Color = Color::LightCyan;
 
 /// markdown 标题，配 [`ratatui::style::Modifier::BOLD`]。
 pub const CODE_HEADING: Color = Color::Cyan;
@@ -235,5 +246,12 @@ mod tests {
         assert_ne!(LIVE, HOSTED, "前台与已装载撞了");
         assert_ne!(HOSTED, MUTED, "已装载与只在盘上撞了");
         assert_ne!(LIVE, MUTED, "前台与只在盘上撞了");
+    }
+
+    /// 文件链接与行内代码必须**一眼分得开** —— 那一档新颜色存在的全部理由就是这个
+    /// （`.scratch/link-emphasis/spec.md` §2）。
+    #[test]
+    fn the_link_colour_is_not_the_quiet_grey_of_inline_code() {
+        assert_ne!(LINK, CODE_QUIET, "文件链接与行内代码撞了同一个颜色");
     }
 }

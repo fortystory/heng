@@ -14,11 +14,12 @@
 //! 再宽度无关**：宽度变了要按新宽度重跑这里，而不是只重新折行（spec §1）。
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::highlight::{self, Class};
-use super::palette::{CODE_HEADING, CODE_QUIET};
+use super::links;
+use super::palette::{CODE_HEADING, CODE_QUIET, LINK};
 use super::wording;
 use super::{pane, width};
 
@@ -64,6 +65,21 @@ struct Frame {
     url: String,
     /// 标签从当前行的第几片 span 起 —— 图片要把它整段取出来重排。
     start: usize,
+    /// 这是不是**链接**（图片不是）。只有链接的标签才上链接色 —— 图片的 alt 是内容，
+    /// 染成链接色会说错话（`.scratch/link-emphasis/spec.md` §1）。
+    is_link: bool,
+}
+
+impl Frame {
+    /// 这是不是一个**指向文件的链接**吗（那它就该上链接色）。
+    ///
+    /// 两条判据缺一不可：它得是**链接**（图片不是 —— 图片的 alt 是内容，染成链接色会
+    /// 说错话），目标还得**像一条工作区路径**（URL 走浏览器那一路，不是文件链接）。路径
+    /// 形状的判据**复用**链接层的那一套（[`links::is_file_path`]）——
+    /// 「这是不是一个文件链接」不该有两套规则（`.scratch/link-emphasis/spec.md` §1）。
+    fn is_file_link(&self) -> bool {
+        self.is_link && links::is_file_path(&self.url)
+    }
 }
 
 /// 一个还没定界的围栏块或缩进代码块。
@@ -148,7 +164,7 @@ impl Renderer {
             Event::End(tag) => self.end(tag),
             Event::Text(text) => self.write_text(&text),
             Event::Code(code) => {
-                let style = self.style().fg(CODE_QUIET);
+                let style = self.style().fg(self.code_colour());
                 self.write_piece(&code, style);
             }
             // 终端画不出 HTML，剥标签等于替作者做了一次有损翻译；透传至少保真（spec §6）。
@@ -224,8 +240,8 @@ impl Renderer {
             Tag::Emphasis => self.modifiers.push(Modifier::ITALIC),
             Tag::Strong => self.modifiers.push(Modifier::BOLD),
             Tag::Strikethrough => self.modifiers.push(Modifier::CROSSED_OUT),
-            Tag::Link { dest_url, .. } => self.open_frame(dest_url.to_string()),
-            Tag::Image { dest_url, .. } => self.open_frame(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => self.open_frame(dest_url.to_string(), true),
+            Tag::Image { dest_url, .. } => self.open_frame(dest_url.to_string(), false),
             Tag::HtmlBlock => self.open_block(),
             _ => {}
         }
@@ -369,6 +385,9 @@ impl Renderer {
     }
 
     /// 当前行的基础样式：引用里的一切都是叙述灰（spec §6）。
+    ///
+    /// 身处一段**文件链接**的标签里时（且**不在**引用块里），这一行是链接色 —— 标签整个都是
+    /// 链接，哪怕标签本身是行内代码（`.scratch/link-emphasis/spec.md` §1）。
     fn style(&self) -> Style {
         let base = if self.quote > 0 {
             Style::default().fg(CODE_QUIET)
@@ -379,7 +398,46 @@ impl Renderer {
         for item in &self.modifiers {
             modifier |= *item;
         }
-        base.add_modifier(modifier)
+        let style = base.add_modifier(modifier);
+        if self.link_colour_here(self.in_file_link()) {
+            style.fg(LINK)
+        } else {
+            style
+        }
+    }
+
+    /// 行内代码的前景色：在一段文件链接的标签里，它是**链接**的一部分（那个
+    /// ``[`seed.md`](seed.md)`` 形态），于是跟标签一起上链接色；否则它是静音灰
+    /// （`.scratch/link-emphasis/spec.md` §1）。引用块里仍是静音灰 —— 同一个例外。
+    fn code_colour(&self) -> Color {
+        if self.link_colour_here(self.in_file_link()) {
+            LINK
+        } else {
+            CODE_QUIET
+        }
+    }
+
+    /// 当前是不是**在**一个指向文件的链接里（那么这里写出来的字可以是链接色）。
+    ///
+    /// 判据看**最里层**那一帧：图片帧不是链接帧，于是图片的 alt 保持它本来的颜色 ——
+    /// alt 是内容，染成链接色会说错话（`.scratch/link-emphasis/spec.md` §1）。目标是不是
+    /// 文件**复用**链接层的那一套判据（[`links::is_file_path`]），不另写一份路径形状的规则。
+    fn in_file_link(&self) -> bool {
+        self.frames.last().is_some_and(Frame::is_file_link)
+    }
+
+    /// 这一处上不上**链接色**。
+    ///
+    /// 两条「不」：**引用块里的一切都是叙述灰** —— 「引用里的一切都是叙述灰」是既有规矩
+    /// （本文件的 `style()`：引用里的一切都是叙述灰），它**先于**这一档：引用块整体一个声音，链接另有下划线、
+    /// 仍点得开，不必再抢一档颜色（`.scratch/link-emphasis/spec.md` §1 的那一条例外）；目标
+    /// 不是工作区路径的链接不上（URL 走浏览器那一路，图片也不是链接）。
+    ///
+    /// 参数是「这一处是不是一个指向文件的链接」：标签与行内代码问的是**现在**
+    /// （[`Self::in_file_link`]），收尾时那条回显问的是**那一帧**
+    /// （[`Frame::is_file_link`]）—— 那一帧已经被弹出，`in_file_link()` 看不到它了。
+    fn link_colour_here(&self, file_link: bool) -> bool {
+        self.quote == 0 && file_link
     }
 
     fn flush_line(&mut self) {
@@ -446,15 +504,23 @@ impl Renderer {
         self.pending_blank = false;
     }
 
-    fn open_frame(&mut self, url: String) {
+    fn open_frame(&mut self, url: String, is_link: bool) {
         // 标签写在**当前目标**上：一个格里的链接与图片落在那一格自己的 span 列表里，
         // 而段落的落在 `self.line` 上（`target()` 分派这两者）。
         let start = self.target().len();
-        self.frames.push(Frame { url, start });
+        self.frames.push(Frame {
+            url,
+            start,
+            is_link,
+        });
         self.modifiers.push(Modifier::UNDERLINED);
     }
 
     /// 链接画法不变：下划线标签 + 灰色 ` (url)`，两者相同时不重复（spec §6）。
+    ///
+    /// 目标是**文件路径**时（且**不在**引用块里），回显换成链接色 —— 它是这条链接的一部分，
+    /// 与标签说同一件事（`.scratch/link-emphasis/spec.md` §1）。目标是 URL 时照旧（回显是退后
+    /// 一档的灰）；引用块里也照旧 —— 那里的一切都是叙述灰。
     fn close_link(&mut self) {
         let Some(frame) = self.frames.pop() else {
             return;
@@ -471,7 +537,11 @@ impl Renderer {
             }
         };
         if label != frame.url {
-            let style = Style::default().fg(CODE_QUIET);
+            let style = Style::default().fg(if self.link_colour_here(frame.is_file_link()) {
+                LINK
+            } else {
+                CODE_QUIET
+            });
             self.target()
                 .push(Span::styled(format!(" ({})", frame.url), style));
         }
@@ -479,10 +549,14 @@ impl Renderer {
 
     /// 图片落成 `[图片] alt (url)`：终端暂时画不出图，但「这儿有一张图」得说出来
     /// （spec §6）。`alt` 为空时不留一个空的下划线 span。
+    ///
+    /// alt **不染**链接色：图片不是链接，`Frame::is_link` 那一项是假，于是它保持本来的颜色
+    /// （`.scratch/link-emphasis/spec.md` §1）。
     fn close_image(&mut self) {
         let Some(frame) = self.frames.pop() else {
             return;
         };
+        debug_assert!(!frame.is_link, "图片帧不是链接帧");
         let alt: Vec<Span<'static>> = {
             let row = self.target();
             if frame.start <= row.len() {
@@ -655,11 +729,26 @@ fn code_lines(text: &str, lang: Option<&str>, budget: usize, indent: usize) -> V
     for row in rows {
         let content: Vec<Span<'static>> = row
             .into_iter()
-            .map(|span| Span::styled(span.text, span.class.style()))
+            .map(|span| Span::styled(span.text, code_span_style(span.class.style())))
             .collect();
         out.extend(wrap_code(&content, budget, indent));
     }
     out
+}
+
+/// 代码块里那些**没有语法色**的文字：显式说出自己的前景色是「终端默认」。
+///
+/// 链接层靠「这个 span 有没有指定前景色」判它是不是**正文**
+/// （`.scratch/link-emphasis/spec.md` §1），而代码块里的字**不是**正文：无语言的围栏块
+/// 整个是 `Class::Plain`，高亮块里的普通词与标点也是 —— 那一档本来没有前景色，于是链接色
+/// 会爬进代码块里。显式写 `Color::Reset`（**画出来与「没有前景色」一模一样**）就把这两件事
+/// 分开了：代码块说「我有前景色，只是它是默认的那个」。
+fn code_span_style(style: Style) -> Style {
+    if style.fg.is_none() {
+        style.fg(Color::Reset)
+    } else {
+        style
+    }
 }
 
 fn plain_rows(text: &str) -> Vec<Vec<highlight::Span>> {
@@ -767,4 +856,129 @@ fn widest(widths: &[usize]) -> Option<usize> {
         .enumerate()
         .max_by_key(|(_, width)| **width)
         .map(|(index, _)| index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::palette;
+
+    /// 这一行里内容是 `needle` 的那一片 span。
+    fn span_with<'a>(line: &'a Line<'static>, needle: &str) -> &'a Span<'static> {
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref() == needle)
+            .unwrap_or_else(|| panic!("这一行里没有 {needle}：{line:?}"))
+    }
+
+    /// 这一行里**含有** `needle` 的那一片 span。
+    fn span_containing<'a>(line: &'a Line<'static>, needle: &str) -> &'a Span<'static> {
+        line.spans
+            .iter()
+            .find(|span| span.content.contains(needle))
+            .unwrap_or_else(|| panic!("这一行里没有 {needle}：{line:?}"))
+    }
+
+    /// 一条指向**文件**的 Markdown 链接：标签上链接色。标签是行内代码时**也**上 ——
+    /// 「这是一个链接」比「这是一段代码」更该说清楚（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_link_to_a_file_paints_its_label() {
+        let lines = to_lines("[`seed.md`](seed.md)", 40);
+        let label = span_with(&lines[0], "seed.md");
+        assert_eq!(label.style.fg, Some(palette::LINK));
+    }
+
+    /// 目标是文件时，标签后面的**目标回显**（` (seed.md)`）也是链接色 —— 它说的是同一条
+    /// 链接（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_link_to_a_file_paints_its_echo() {
+        let lines = to_lines("[文档](seed.md)", 40);
+        let echo = span_with(&lines[0], " (seed.md)");
+        assert_eq!(echo.style.fg, Some(palette::LINK));
+    }
+
+    /// 目标是 **URL** 的链接：标签与回显**都不上**链接色。它不是文件链接，它走浏览器
+    /// 那一路（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_link_to_a_url_keeps_the_old_colours() {
+        let lines = to_lines("[文档](https://example.com/x)", 40);
+        let label = span_with(&lines[0], "文档");
+        assert_ne!(label.style.fg, Some(palette::LINK), "URL 链接不上链接色");
+        let echo = span_with(&lines[0], " (https://example.com/x)");
+        assert_eq!(echo.style.fg, Some(palette::CODE_QUIET), "回显照旧是灰的");
+    }
+
+    /// 一段**独立的**行内代码：仍是静音灰。只有「行内代码在文件链接的标签里」那一处被染成
+    /// 链接色（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn a_lonely_inline_code_stays_quiet_grey() {
+        let lines = to_lines("`seed.md`", 40);
+        let code = span_with(&lines[0], "seed.md");
+        assert_eq!(code.style.fg, Some(palette::CODE_QUIET));
+    }
+
+    /// 图片的 **alt 不染链接色**：图片不是链接（`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn an_image_alt_is_not_painted_as_a_link() {
+        let lines = to_lines("![图](seed.md)", 40);
+        let alt = span_with(&lines[0], "图");
+        assert_ne!(alt.style.fg, Some(palette::LINK), "图片的 alt 不上链接色");
+    }
+
+    /// **引用块**里的文件链接：标签与目标回显都**保持叙述灰**。「引用里的一切都是叙述灰」是
+    /// 既有规矩，它**先于**这一档 —— 引用块整体一个声音，链接另有下划线、仍点得开，不必再
+    /// 抢一档颜色（`.scratch/link-emphasis/spec.md` §1 的那一条例外）。
+    #[test]
+    fn a_link_inside_a_quote_stays_the_narrative_grey() {
+        let lines = to_lines("> 引用里的 [文档](seed.md)", 40);
+        let label = span_with(&lines[0], "文档");
+        assert_eq!(label.style.fg, Some(palette::CODE_QUIET), "标签是叙述灰");
+        let echo = span_with(&lines[0], " (seed.md)");
+        assert_eq!(echo.style.fg, Some(palette::CODE_QUIET), "回显是叙述灰");
+    }
+
+    /// 引用块里的**行内代码**标签：仍是静音灰，不跟着升链接色（同一个例外）。
+    #[test]
+    fn inline_code_inside_a_quote_link_stays_quiet_grey() {
+        let lines = to_lines("> 引用里的 [`seed.md`](seed.md)", 40);
+        let label = span_with(&lines[0], "seed.md");
+        assert_eq!(
+            label.style.fg,
+            Some(palette::CODE_QUIET),
+            "行内代码标签是灰的"
+        );
+    }
+
+    /// **嵌套图片**（`[![图](pic.png)](seed.md)`）：图片的 alt 与占位符**保持本来的颜色** ——
+    /// 它们是图片，不是链接；外层那条链接的回显是链接色。
+    #[test]
+    fn a_nested_image_keeps_its_own_colours_inside_a_file_link() {
+        let lines = to_lines("[![图](pic.png)](seed.md)", 40);
+        let alt = span_with(&lines[0], "图");
+        assert_ne!(alt.style.fg, Some(palette::LINK), "图片的 alt 不上链接色");
+        let placeholder = span_with(&lines[0], wording::IMAGE_PLACEHOLDER);
+        assert_ne!(
+            placeholder.style.fg,
+            Some(palette::LINK),
+            "占位符不上链接色"
+        );
+        let echo = span_with(&lines[0], " (seed.md)");
+        assert_eq!(echo.style.fg, Some(palette::LINK), "外层链接的回显是链接色");
+    }
+
+    /// 嵌套图片旁边的**外层文字标签**是链接色：外层那条链接指向一个文件
+    /// （`.scratch/link-emphasis/spec.md` §1）。
+    #[test]
+    fn the_text_of_an_outer_link_around_an_image_is_a_link_colour() {
+        let lines = to_lines("[![图](pic.png) 文档](seed.md)", 40);
+        let text = span_containing(&lines[0], "文档");
+        assert_eq!(
+            text.style.fg,
+            Some(palette::LINK),
+            "外层链接的文字标签是链接色：{:?}",
+            lines[0]
+        );
+        let alt = span_with(&lines[0], "图");
+        assert_ne!(alt.style.fg, Some(palette::LINK), "图片的 alt 不上链接色");
+    }
 }
