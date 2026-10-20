@@ -788,6 +788,10 @@ fn enable_terminal_modes(title: &str) {
     let _ = execute!(std::io::stdout(), Print("\x1b[22;0t"));
     set_terminal_title(title);
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    // 焦点变化报告（`?1004h`，票 10）：终端在窗口**失焦/聚焦**时各报一次。没有它，指针移出
+    // 窗口这件事我们不知道 —— 屏幕上那个关闭标记会一直挂着，直到下一次指针移动。
+    // 不支持这一条的终端把它当没看见（那一串是 private mode，终端自己会忽略）。
+    let _ = execute!(std::io::stdout(), Print("\x1b[?1004h"));
     // 键盘增强协议（Kitty keyboard protocol）：请终端把 `Shift+Enter` 这类带修饰的键报成
     // `CSI 13;2u`，而不是一个与裸 `Enter` 分不开的字节 —— 没有它，「Shift+Enter 换行」在
     // 协议层就是一句空话（`.scratch/tui-feedback/spec.md` §9）。不支持的终端把这一串当没
@@ -810,6 +814,8 @@ fn disable_terminal_modes() {
         PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         DisableBracketedPaste,
+        // 焦点变化报告的**成对**撤销（票 10）—— 与开启它的那一行配成一对（ADR 0002）。
+        Print("\x1b[?1004l"),
         // 还原进入时保存的那条标题。
         Print("\x1b[23;0t")
     );
@@ -8379,6 +8385,22 @@ impl TuiState {
         }
     }
 
+    /// 终端的焦点变了（票 10）：清掉悬浮目标并重画。
+    ///
+    /// 窗口失焦时指针多半已经不在屏幕上了 —— 那个 `✖` 留在那里就是在骗人。协议里**没有**
+    /// 「指针离开」这一种事件（`.scratch/session-close-button/issues/01-research-mouse-move-events.md`），
+    /// 所以焦点变化是唯一能收到的信号。
+    pub fn focus_changed(&mut self) {
+        self.clear_hover();
+    }
+
+    /// 清掉悬浮目标（票 10）：屏幕上那个 `✖` 随之消失。
+    fn clear_hover(&mut self) {
+        if self.hover.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
     /// 取一个终端事件。
     fn terminal_event(&mut self, event: Option<std::io::Result<CtEvent>>) {
         match event {
@@ -8391,6 +8413,8 @@ impl TuiState {
             }
             Some(Ok(CtEvent::Paste(text))) => self.paste(&text),
             Some(Ok(CtEvent::Mouse(mouse))) => self.mouse(mouse),
+            // 窗口失焦/聚焦（票 10）：指针多半已经不在屏幕上了 —— 那个关闭标记不该再挂着。
+            Some(Ok(CtEvent::FocusGained)) | Some(Ok(CtEvent::FocusLost)) => self.focus_changed(),
             // resize 就是一次重画，而重放继续成批地跑：下一帧按新尺寸排版
             // （`.scratch/tui-history-replay/spec.md` §5）。
             Some(Ok(CtEvent::Resize(..))) => self.mark_dirty(),
@@ -8465,6 +8489,8 @@ impl TuiState {
     /// layer `DragSuspend` 就是这两条，没有 trait 实现。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // 敲了键就是有人在看屏幕，屏幕上那个还挂着的 `✖` 过期了（票 10）。
+        self.clear_hover();
         // 这一次按键也算「看过了」（票 25 的未读寿命）。
         self.note_attention_seen();
         // 记号区间先于这一下按键同步：吸附与整块删读的就是它，而它得反映此刻的草稿

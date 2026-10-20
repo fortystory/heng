@@ -235,6 +235,36 @@ pub fn click(state: &mut TuiState, column: u16, row: u16) {
     }
 }
 
+/// 按下左键。
+pub fn press(state: &mut TuiState, column: u16, row: u16) {
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+/// 拖到某处（按住左键移动）。
+pub fn drag_to(state: &mut TuiState, column: u16, row: u16) {
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+/// 抬起左键。
+pub fn release(state: &mut TuiState, column: u16, row: u16) {
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
 /// 把指针挪到某处 —— 终端报的是「移动」，不是按下。
 pub fn hover(state: &mut TuiState, column: u16, row: u16) {
     state.mouse(MouseEvent {
