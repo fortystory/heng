@@ -89,6 +89,9 @@ pub fn key_bytes(key: &Key) -> Option<Vec<u8>> {
         Key::CtrlR => vec![0x12],
         // `Ctrl-1…4` 是平铺的焦点手势，到不了外来屏幕那一层。
         Key::CtrlDigit(_) => return None,
+        // `Ctrl-X` 是终端层手势（关掉前台那一个会话，票 09）—— 它在更前面就被接走了，
+        // 到这里只是兜住编译；不发进 nvim。
+        Key::CtrlX => return None,
         // `Ctrl-←` / `Ctrl-→` 在 nvim 里是「按词移动」，照原样发过去。
         Key::CtrlLeft => b"\x1b[1;5D".to_vec(),
         Key::CtrlRight => b"\x1b[1;5C".to_vec(),

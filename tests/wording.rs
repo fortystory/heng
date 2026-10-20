@@ -664,8 +664,12 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
         "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 右栏 · ctrl-d 退出"
     );
     assert_eq!(wording::status_line(false, 141, false), full);
+    // 第十条（`ctrl-x 关闭`，票 09）收在末位 —— 位置就是优先级，而这一下会毁掉一个会话。
+    // 它要多 12 列才放得下（141 → 153），于是 141 列那一档里还没有它。
+    let fuller = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-v 右栏 · ctrl-r 平铺 · ctrl-o 左栏 · ctrl-x 关闭 · ctrl-d 退出";
+    assert_eq!(wording::status_line(false, 170, false), fuller);
     // 在最大宽度上行是稳定的：再没什么可买的了。
-    assert_eq!(wording::status_line(false, 200, false), full);
+    assert_eq!(wording::status_line(false, 200, false), fuller);
     // 阶梯是「放不下就停」，所以最后两条是一起让掉的 —— 99 列那一档里 `ctrl-t` 还在、
     // `ctrl-v` 与 `ctrl-o` 已经没了（位置就是优先级）。
     assert!(
@@ -684,7 +688,7 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
     assert_eq!(
         wording::status_line(true, 200, false)
             .replace(wording::EXIT_HINT_BUSY, wording::EXIT_HINT_IDLE),
-        full
+        fuller
     );
 }
 

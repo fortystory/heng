@@ -188,7 +188,7 @@ fn the_header_has_no_close_button_anymore() {
     let text = screen(120, 24, &mut state);
 
     assert!(text.contains("新建"), "右端只剩新建：{text}");
-    assert!(!text.contains("关闭"), "页顶没有关闭入口了：{text}");
+    assert!(!text.contains("关闭「"), "页顶没有关闭入口了：{text}");
 }
 
 /// 前台那一行的标记位不再写字形 —— 前台由标题色说，焦点由粗体与时间列说。

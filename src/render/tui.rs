@@ -166,6 +166,14 @@ pub enum Key {
     /// 为什么不取 `Ctrl-M`：它在终端里就是回车（`\r`），crossterm 报成 `KeyCode::Enter`，
     /// 与「提交」正面撞车 —— 与 `Ctrl-J` 是同一件事（`.scratch/tui-feedback/spec.md` §9）。
     CtrlT,
+    /// `Ctrl-X`：关掉**前台**那一个会话（票 09）。
+    ///
+    /// 全局手势：任何界面都生效（它不归任何视图管）。目标忙碌时走与点关闭标记同一条拒绝
+    /// 路径 —— 提示行两段 + 可点的「切到「…」」（票 06）。
+    ///
+    /// 为什么不取 `Ctrl-S` / `Ctrl-Q`：那两个在别处有含义或没有键位；`Ctrl-X` 是这一圈里
+    /// 剩下的那枚空闲键。
+    CtrlX,
     /// `Ctrl-V`：主列两页的切换 —— 对话 ⇄ 轨迹（`.scratch/trace-shortcuts/spec.md` §1）。
     ///
     /// 与 [`Key::CtrlO`] 同一档的纯视图手势：忙闲都生效、也不清举手；详情覆盖层与历史重放
@@ -206,6 +214,8 @@ fn map_key(key: KeyEvent) -> Option<Key> {
             // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：`Ctrl-K` 被行编辑
             // 的「抹到行尾」占着，它是这一圈里剩下的那枚空闲键。
             'v' => Some(Key::CtrlV),
+            // 关掉前台那一个会话（票 09）：全局手势。
+            'x' => Some(Key::CtrlX),
             _ => None,
         };
     }
@@ -7314,6 +7324,13 @@ impl TuiState {
             Key::Enter => self.switch_to_focused_session(),
             // 页内 `/`：进过滤。页签条仍只走鼠标 —— 这是**页内**键位。
             Key::Char('/') => self.begin_sessions_filter(),
+            // `x`：关掉**焦点行**那一个会话（票 09）—— 键盘路径作用于焦点行，不是「被点的
+            // 那一行」。焦点行没有就什么都不做、也不提示。
+            Key::Char('x') => {
+                if let Some(id) = self.sessions.focused_row().map(|row| row.id.clone()) {
+                    self.close_session(id);
+                }
+            }
             Key::Char('r') => {
                 // 只读预览里改名是写流（票 18）：说一句，不进改名模式。
                 if self.read_only {
@@ -8459,6 +8476,15 @@ impl TuiState {
             self.suspend = true;
             return;
         }
+        // `Ctrl-X` 与挂起同一档：它是**终端层**手势 —— 任何界面都拦不住它（票 09：
+        // 「任何界面按 `Ctrl-X` 关掉前台那一会话」）。空宿主时什么都不做、也不提示。
+        if key == Key::CtrlX {
+            let front = self.front().clone();
+            if self.sessions.hosted.contains(&front) {
+                self.close_session(front);
+            }
+            return;
+        }
         // 一次拖选最先被 `Esc` 取消：它是一次还没落地的指针手势
         // （`.scratch/tui-feedback/spec.md` §5）。
         if key == Key::Esc && self.drag.is_some() {
@@ -9183,6 +9209,16 @@ impl TuiState {
         // （与 `viewer_status_line` 那条区分同一个理由：提示说的是键盘*现在*干什么）。
         if self.right_wanted && self.trace_keyboard {
             return wording::rail_status_line_with(receipt.as_deref(), self.busy(), width, raised);
+        }
+        // 会话页拿住键盘时，提示说的是**这一页**的键位（票 09）：输入区那套头一条是
+        // `enter 发送`，而此刻键盘不在输入区 —— 提示不许承诺兑现不了的事。
+        if self.sidebar_keyboard && self.tab == Tab::Sessions {
+            return wording::sessions_status_line_with(
+                receipt.as_deref(),
+                self.busy(),
+                width,
+                raised,
+            );
         }
         if self.prompt_reply.is_some() {
             wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)

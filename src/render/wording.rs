@@ -1655,7 +1655,7 @@ pub fn status_spinner(frame: u64, busy: bool) -> &'static str {
 ///
 /// 右栏拿住键盘时**不铺这一套**，它有自己的 [`RAIL_HINTS`] —— `enter` 在两侧不是同一件事
 /// （spec §2）。
-const KEY_HINTS: [&str; 9] = [
+const KEY_HINTS: [&str; 10] = [
     "enter 发送",
     "ctrl-j 换行",
     "esc 取消",
@@ -1665,6 +1665,22 @@ const KEY_HINTS: [&str; 9] = [
     "ctrl-v 右栏",
     "ctrl-r 平铺",
     "ctrl-o 左栏",
+    // `Ctrl-X`：关掉前台那一个会话（票 09）。它收在**最后** —— 位置就是优先级，而这一下
+    // 会毁掉一个会话，优先级最低是对的（窄档从末位丢起，先丢它）。
+    "ctrl-x 关闭",
+];
+
+/// 会话页持有键盘时的键位提示（票 09）。
+///
+/// 键盘在会话页时，提示该说**这一页**会做什么 —— 输入区那套（`KEY_HINTS` 头一条是
+/// `enter 发送`）此刻兑现不了：键盘不在输入区。位置就是优先级（同 [`KEY_HINTS`]）。
+const SESSIONS_HINTS: [&str; 6] = [
+    "↑↓ 移动",
+    "enter 切过去",
+    "x 关闭",
+    "r 改名",
+    "/ 过滤",
+    "esc 还键盘",
 ];
 
 /// 右栏拿住键盘时的键位提示，按它们显示的先后：最常用的在前。
@@ -1741,6 +1757,16 @@ pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
 /// 同上，但把一个**回执**排在最前（`.scratch/tui-feedback/spec.md` §6）。
 pub fn status_line_with(receipt: Option<&str>, busy: bool, width: u16, raised: bool) -> String {
     hint_row(receipt, &KEY_HINTS, exit_hint(busy, raised), width)
+}
+
+/// 会话页持有键盘时的提示行：同样的阶梯，铺在 [`SESSIONS_HINTS`] 上（票 09）。
+pub fn sessions_status_line_with(
+    receipt: Option<&str>,
+    busy: bool,
+    width: u16,
+    raised: bool,
+) -> String {
+    hint_row(receipt, &SESSIONS_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 前端没有在读行时的提示行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。

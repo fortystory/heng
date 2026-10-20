@@ -849,7 +849,8 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         roomy.contains(&"ctrl-t 换模型".to_owned()),
         "换模型的快捷键在表里：{roomy:?}"
     );
-    // 票 16 之后这张表是九条：整份要 141 列提示行，也就是 182 列终端（主列 141）。
+    // 票 16 之后这张表是九条（票 09 起是十条）：整份要 141 列提示行，也就是 182 列终端
+    // （主列 141）。第十条 `ctrl-x 关闭` 收在末位 —— 窄档从末位丢起，先丢它。
     assert!(
         roomy.contains(&"ctrl-v 右栏".to_owned()),
         "182 列那一档里新键已经看得见：{roomy:?}"
@@ -857,6 +858,15 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     assert!(
         roomy.contains(&"ctrl-o 左栏".to_owned()),
         "整份表都在：{roomy:?}"
+    );
+    assert!(
+        !roomy.contains(&"ctrl-x 关闭".to_owned()),
+        "末位那一条在 182 列那一档装不下：{roomy:?}"
+    );
+    assert!(
+        hint_items(200).contains(&"ctrl-x 关闭".to_owned()),
+        "再宽一档就看得见关会话那一条了：{:?}",
+        hint_items(200)
     );
     assert!(
         !hint_items(181).contains(&"ctrl-o 左栏".to_owned()),
