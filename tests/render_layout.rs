@@ -11017,9 +11017,15 @@ fn ctrl_r_tiles_every_hosted_session() {
     let frame = buffer(120, 40, &mut state);
     let pool = tile_pool(120, 40);
     let tiles = heng::render::layout::tile_cells(pool, 3).expect("3 个会话平铺 3 格");
-    assert!(tile_heading(&frame, tiles[0], 120).contains("◆ 甲会话"));
-    assert!(tile_heading(&frame, tiles[1], 120).contains("· 乙会话"));
-    assert!(tile_heading(&frame, tiles[2], 120).contains("· 丙会话"));
+    // 焦点标记 `◆` 与其余那枚 `·` 都已退场（票 08）：格标题行只有标题，焦点格靠
+    // **ACCENT + 粗体**认。
+    assert!(tile_heading(&frame, tiles[0], 120).contains("甲会话"));
+    assert!(tile_heading(&frame, tiles[1], 120).contains("乙会话"));
+    assert!(tile_heading(&frame, tiles[2], 120).contains("丙会话"));
+    assert!(
+        !tile_heading(&frame, tiles[0], 120).contains('◆'),
+        "焦点那个字形退场了"
+    );
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("[+ 加入]"), "没有加号格：{text}");
     assert!(!text.contains("▤ 平铺"), "平铺态不画顶部条：{text}");
@@ -11266,7 +11272,9 @@ fn the_tab_strip_lives_inside_the_main_column() {
     let panes =
         heng::render::layout::plan(ratatui::layout::Rect::new(0, 0, 120, 40), 1, true, true);
     let top = row_text(&frame, 0, 120);
-    assert!(top.contains("会话 A") && top.contains("◆"), "{top}");
+    // 焦点标记 `◆` 已退场（票 07）：哪一签是前台只靠 **ACCENT + 粗体**认。
+    assert!(top.contains("会话 A"), "{top}");
+    assert!(!top.contains('◆'), "焦点那个字形退场了：{top}");
     // 顶部条只占主列那一段：左栏列上第 0 行是空白（或身份），第 1 行不是顶部条那条虚线。
     assert_ne!(frame[(0, 1)].symbol(), "┄", "顶部条的虚线不跨左栏");
     let rule = row_text(&frame, 1, 120);

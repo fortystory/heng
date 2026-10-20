@@ -165,6 +165,18 @@ pub fn screen(width: u16, height: u16, state: &mut TuiState) -> String {
         .join("\n")
 }
 
+/// 某一**屏幕行**里那段文字的起始列（列按显示宽度算）。
+///
+/// 与 [`find_cell`] 的区别：它只在指定的那一行里找 —— 页签条与格标题行都在第 0 行，
+/// 满屏找会撞上左栏会话页里的同名会话。
+pub fn in_row(frame: &Buffer, row: u16, width: u16, needle: &str) -> (u16, u16) {
+    let line = row_text(frame, row, width);
+    let byte = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("第 {row} 行没有 {needle}：{line}"));
+    (text_columns(&line[..byte]) as u16, row)
+}
+
 /// 屏幕上那段文字的左端列与它所在的那一行。
 pub fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16) {
     find_cell_below(frame, width, height, needle, 0)

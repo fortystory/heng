@@ -1782,14 +1782,16 @@ pub fn rail_status_line_with(
     hint_row(receipt, &RAIL_HINTS, exit_hint(busy, raised), width)
 }
 
-/// 顶部页签条上一个会话标签（票 15）：`[◆ 标题]` / `[ 标题]`。
+/// 顶部页签条上一个会话标签（票 15、票 07）：`[✖ 标题]` / `[ 标题]`。
 ///
-/// 只有**焦点**带 `◆`（2026-10-17 维护者修订：平铺槽位就是宿主表本身，不再有「集合成员」这个
-/// 中间状态，`▪` 随之退场）。状态类（忙 / 闲 / 等人类、未读、装载色）**一个都不上标签** ——
-/// 等人类由状态行的全局读数承担（票 15 决定 37）。
-pub fn top_tab(focused: bool, title: &str) -> String {
-    let mark = if focused { "◆" } else { " " };
-    format!("[{mark} {title}]")
+/// 标记位是**关闭标记**（指针悬着时红 `✖`）或一格空气 —— 焦点那枚 `◆` 已经退场（票 07）：
+/// 哪一签是前台只靠 **ACCENT + 粗体**认。标签**宽度不变**，所以悬浮不抖（后面那些标签的
+/// 起点与 `+N` 一个字都不动）。
+///
+/// 状态类（忙 / 闲 / 等人类、未读、装载色）**一个都不上标签** —— 等人类由状态行的全局读数
+/// 承担（票 15 决定 37）。
+pub fn top_tab(closing: bool, title: &str) -> String {
+    format!("[{} {title}]", if closing { CLOSE_CROSS } else { " " })
 }
 
 /// 顶部页签条放不下时收在右端的那一段：`+N`，不可点（票 15）。
@@ -1816,11 +1818,14 @@ pub fn background_readout(running: usize, waiting: usize) -> Option<String> {
     }
 }
 
-/// 平铺态一格的标题行：焦点格 `◆ 标题`，其余 `· 标题`（票 17）。
+/// 平铺态一格的标题行：`✖ 标题` 或 ` 标题`（票 17、票 08）。
+///
+/// 标记位是**关闭标记**（指针悬着时红 `✖`）或一格空气 —— 焦点那枚 `◆` 与其余那枚 `·` 都已
+/// 退场（票 08）：焦点格靠 **ACCENT + 粗体**认。
 ///
 /// 状态类一个都不上格标题：忙 / 闲 / 等人类只有两个家 —— 左栏与状态行的全局读数。
-pub fn tile_title(focused: bool, title: &str) -> String {
-    format!("{} {title}", if focused { "◆" } else { "·" })
+pub fn tile_title(closing: bool, title: &str) -> String {
+    format!("{} {title}", if closing { CLOSE_CROSS } else { " " })
 }
 
 /// 平铺几何放不下（票 17）：回标签态，并说一句 —— 否则按 `Ctrl-R` 像没反应。

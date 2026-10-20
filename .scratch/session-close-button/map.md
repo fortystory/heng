@@ -1,7 +1,7 @@
 # 会话标题上的关闭按钮（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；实现票 `04`–`06` done、`07`–`12` 待认领
+Status: 3/3 resolved —— **图已走完并折成 [`spec.md`](spec.md)**（2026-10-20）；实现票 `04`–`08` done、`09`–`12` 待认领
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-20，四轮 grilling 共十七问：三处落点 / 关闭语义 / 关后重排与前台落点 /
 hover 判定范围 / 焦点标记去留 / 忙时能不能关 / 平铺态 ✖ 显隐 / 红色语义 / 未装载的行怎么办 /
@@ -105,8 +105,8 @@ frontier）：
 - [x] [04 指针的移动事件不再被丢掉](issues/04-pointer-move-events.md)
 - [x] [05 左栏「会话」页的关闭标记](issues/05-close-button-in-sessions-page.md)
 - [x] [06 关掉前台那一会话后，前台落到相邻](issues/06-close-foreground-and-land-on-neighbor.md)
-- [ ] [07 顶部页签条的关闭标记](issues/07-close-button-in-tab-strip.md)
-- [ ] [08 平铺态格标题行的关闭标记](issues/08-close-button-in-tile-header.md)
+- [x] [07 顶部页签条的关闭标记](issues/07-close-button-in-tab-strip.md)
+- [x] [08 平铺态格标题行的关闭标记](issues/08-close-button-in-tile-header.md)
 - [ ] [09 两条键位：全局 Ctrl-X 与会话页内 x](issues/09-keyboard-close-shortcuts.md)
 - [ ] [10 黏住的标记会消失](issues/10-stale-cross-clearing.md)
 - [ ] [11 词条、文档与被推翻条款的改写](issues/11-terms-docs-and-overturned-clauses.md)

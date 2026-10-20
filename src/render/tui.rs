@@ -3971,6 +3971,13 @@ enum HitAction {
     SessionRow(usize),
     /// 点会话页页顶的 `新建`（动作由票 21 接）。
     SessionNew,
+    /// 点顶部页签条某个标签上的**关闭标记**（宿主表下标）：关掉那一个会话（票 07）。
+    ///
+    /// 存**下标**而不是会话身份，与 [`HitAction::TopSession`] 同一条理由：`HitAction` 要保持
+    /// `Copy`。
+    TopSessionClose(usize),
+    /// 点平铺某一格标题行上的**关闭标记**（格序号）：关掉那一个会话（票 08）。
+    TileClose(usize),
     /// 点会话页某一行的**关闭标记**（那一行在页区里的行号）：关掉**那一行**的会话 ——
     /// 不落焦点、不切前台（票 05）。
     ///
@@ -4864,19 +4871,21 @@ impl TuiState {
     /// 顺序 = **宿主表装载顺序**（票 15 决定 39），稳定；可用宽度放不下时从**尾部**收，
     /// 收起来的那一段由 [`wording::top_more`] 靠右端写出来。判据是这一段文字自己的显示
     /// 列数，不是一个估算。
-    fn top_tab_entries(&self, room: u16) -> (Vec<(String, usize, bool)>, usize) {
-        let mut entries: Vec<(String, usize, bool)> = Vec::new();
+    fn top_tab_entries(&self, room: u16) -> (Vec<(String, usize, bool, bool)>, usize) {
+        let mut entries: Vec<(String, usize, bool, bool)> = Vec::new();
         let mut used = 0usize;
         for (index, id) in self.sessions.hosted.iter().enumerate() {
             let title = self.hosted_title(id);
             let focused = id == &self.front;
-            let text = wording::top_tab(focused, &fit_title(&title, TOP_TAB_TITLE_MAX));
+            // 指针悬着的那一个标签，标记位换成**关闭标记**（票 07）—— 标签宽度不变。
+            let closing = self.hover.as_ref() == Some(id);
+            let text = wording::top_tab(closing, &fit_title(&title, TOP_TAB_TITLE_MAX));
             let width = text_columns(&text);
             if used + width + 1 > room as usize {
                 break;
             }
             used += width + 1;
-            entries.push((text, index, focused));
+            entries.push((text, index, focused, closing));
         }
         let mut hidden = self.sessions.hosted.len().saturating_sub(entries.len());
         if hidden > 0 {
@@ -5595,7 +5604,11 @@ impl TuiState {
                 .find(|(listed, _)| *listed == screen)
                 .map(|(_, id)| id.clone()),
             // 顶部页签条的标签按**宿主表下标**记，翻译回来仍是同一个会话身份。
-            HitAction::TopSession(index) => self.sessions.hosted.get(index).cloned(),
+            HitAction::TopSession(index) | HitAction::TopSessionClose(index) => {
+                self.sessions.hosted.get(index).cloned()
+            }
+            // 平铺的格按**格序号**记；那一格装的是哪一个会话在 `tiles` 里。
+            HitAction::TileClose(slot) => self.tiles.get(slot).cloned(),
             // 平铺的格按**格序号**记；那一格装的是哪一个会话在 `tiles` 里。
             HitAction::Tile(slot) => self.tiles.get(slot).cloned(),
             _ => None,
@@ -5865,6 +5878,18 @@ impl TuiState {
             // 页顶现在**只有** `新建`（票 05：那个 `关闭` 入口退场，关闭改成每行一个标记）。
             Some(HitAction::SessionNew) => {
                 self.events.push(FrontEndEvent::NewSession);
+            }
+            // 页签条标签上的关闭标记（票 07）与平铺格标题行上的那个（票 08）：关掉**那一个**
+            // 会话 —— 目标是前台时按票 06 的规则先切到相邻、再关。
+            Some(HitAction::TopSessionClose(index)) => {
+                if let Some(id) = self.session_of_action(HitAction::TopSessionClose(index)) {
+                    self.close_session(id);
+                }
+            }
+            Some(HitAction::TileClose(index)) => {
+                if let Some(id) = self.session_of_action(HitAction::TileClose(index)) {
+                    self.close_session(id);
+                }
             }
             Some(HitAction::SessionCloseRow(line)) => {
                 // 点那一行的关闭标记：关掉**那一行**的会话 —— 不落焦点（票 05）。
@@ -9759,7 +9784,7 @@ fn draw_top_tabs(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mu
     let room = tiling_x.saturating_sub(area.x + 2);
     let (entries, hidden) = state.top_tab_entries(room);
     let mut x = area.x + 1;
-    for (text, index, focused) in entries {
+    for (text, index, focused, closing) in entries {
         let width = text_columns(&text) as u16;
         let style = if focused {
             Style::default()
@@ -9769,6 +9794,22 @@ fn draw_top_tabs(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mu
             Style::default().fg(palette::PLAIN)
         };
         paint_text(frame, x, area.y, &text, style);
+        if closing {
+            // 标记位重画成红色的 `✖`（整条标签是同一个样式，标记要自己的颜色）。
+            paint_text(
+                frame,
+                x + 1,
+                area.y,
+                wording::CLOSE_CROSS,
+                Style::default().fg(palette::CLOSE),
+            );
+            // 它的命中矩形**先于**整条标签注册：命中表取第一个命中的区域，注册顺序即优先级
+            // —— 不先注册，点标记就变成「切前台」（票 07）。
+            state.regions.push(
+                Rect::new(x + 1, area.y, 1, 1),
+                HitAction::TopSessionClose(index),
+            );
+        }
         state
             .regions
             .push(Rect::new(x, area.y, width, 1), HitAction::TopSession(index));
@@ -11587,6 +11628,8 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         // 这一格是滚轮的落点之一（票 02）：记的是整格，标题行也算这一格。
         state.tile_rects.push((rect, id.clone()));
         let focused = id == focus;
+        // 指针悬着的那一格，标记位换成**关闭标记**（票 08）—— 标题的截断宽不变。
+        let closing = state.hover.as_ref() == Some(&id);
         let title = state.hosted_title(&id);
         let title = fit_title(&title, rect.width.saturating_sub(4) as usize);
         let style = if focused {
@@ -11600,9 +11643,24 @@ fn draw_tiles(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             frame,
             rect.x + 1,
             rect.y,
-            &wording::tile_title(focused, &title),
+            &wording::tile_title(closing, &title),
             style,
         );
+        if closing {
+            // 标记位重画成红色的 `✖`（整个标题是同一个样式，标记要自己的颜色）。
+            paint_text(
+                frame,
+                rect.x + 1,
+                rect.y,
+                wording::CLOSE_CROSS,
+                Style::default().fg(palette::CLOSE),
+            );
+            // 它的命中矩形**先于**整格注册（票 08）：命中表取第一个命中的区域。
+            state.regions.push(
+                Rect::new(rect.x + 1, rect.y, 1, 1),
+                HitAction::TileClose(index),
+            );
+        }
         // 焦点格的正文让给文本层（拖选 / 可点链接），所以只有标题行是「换焦点」的命中；
         // 非焦点格整格可点 —— 点了就换焦点（票 18）。
         let hit = if focused {
