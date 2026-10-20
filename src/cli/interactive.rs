@@ -255,7 +255,9 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             diff_viewer: config.diff_viewer.clone(),
             // 工具表里每一份声明 —— 详情覆盖层的 Schema 面读的就是它（票 24 收口补的那一面）。
             // 表在上面的渲染器之前建好，这里只是把它的声明抄成一份按名字查的账。
-            tool_declarations: facts_tool_declarations,
+            //
+            // 抄一份：下面那条**会话级**记录（轨迹页上点得开的那条）读的是同一张表。
+            tool_declarations: facts_tool_declarations.clone(),
             // 单 agent 会话以它的档案发言，所以那就是转录的名字配色需要安排的全部名册
             // （票 07 §1）。
             speaker_order: vec![profile.name.clone()],
@@ -407,6 +409,11 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         )));
     }
     harness.identity(&crate::agent::agent_identity());
+    // 那张工具表的**全表**：一条**可点开**的记录，点开是逐条摊开的声明 —— 于是「这个会话有哪些
+    // 工具、每个工具的用法说明是什么」在界面上读得到。它与系统提示词同一纪律：不进事件流、
+    // 不进模型上下文、从不落盘，所以它是**按当前代码拼的一份**（老会话重开看到的是今天建的那
+    // 张表）—— 那句话由来源名自己说出来。摆在横幅之前（票 09）。
+    harness.tool_declarations(&facts_tool_declarations);
     harness.notice(&render::wording::banner(
         harness.session_id().as_str(),
         &model,

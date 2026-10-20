@@ -1,7 +1,7 @@
 # 09: 转录上一条「工具声明」记录，点开是全表（会话级 · 通道二）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 07, 04, 05
 Part of: ../map.md
 
@@ -56,4 +56,73 @@ Part of: ../map.md
 
 ## 评论
 
-（空 —— 开工时补：落地与实测）
+- 2026-10-21 落地（`/implement` 那一轮）：**会话级那条记录**做完了。形态照系统提示词那条 ——
+  一条**可点开**的注入记录，点开是那张表逐条摊开的样子。
+
+  **改动的面**（都在本票范围里）：
+
+  - `src/events.rs`：新的 `ContextSource::ToolDeclarations(usize)` —— 那一枚**带着条数**，
+    因为来源名要把「这张表有几条」说出来。它与 `Identity` 同一纪律：**不是事件**、永远不进
+    事件流。
+  - `src/render/mod.rs`：新的 `RenderEvent::ToolDeclarations { session, count, text }` 与它的
+    `session()` 那一条、构造器、`RenderHandle::tool_declarations()`。
+  - `src/render/transcript.rs`：它变成一个 `Block::ContextInjected { source, content }` ——
+    与系统提示词那条**同一个块**，所以详情覆盖层那一面（`DetailKind::Context`）一个字都不用
+    改就接住了它。
+  - `src/render/wording.rs`：`context_source` 那一臂 —— `工具声明（19 条，按当前代码拼，不进
+    事件流）`；外加全表里一条声明的小标题 `declaration_table_entry`。
+  - `src/render/declaration.rs`：`whole_table()` —— 全表那段文字的排法（一个函数）：每条是
+    「名字 + 用法说明」，条与条之间空一行，**参数 schema 不在里面**。
+  - `src/context.rs`：那个穷尽 match 补一臂（`[注入] 工具声明`）—— 那一处永远到不了，但
+    match 要穷尽。
+  - `src/lib.rs`：`Harness::tool_declarations()`，照 `identity()` 同形。
+  - `src/cli/interactive.rs` / `src/cli/discuss.rs`：推那一条记录 —— 交互式那条摆在**横幅之前**
+    （紧挨着 `harness.identity(...)`），讨论那条摆在开跑之前。讨论 CLI 建的是**同一张表**
+    （讨论者与合成器共享），所以一条就够；执行者那张是子集，不另显。
+
+  **两处不在本票范围、但非改不可的编译性改动**（新枚举变体逼出来的，各一行 match 臂）：
+  `src/render/tui.rs` 的 `event_at`（那一枚不属于任何一刻，与 `Identity` 同处理）与
+  `src/render/headless.rs` 的消费循环（机器模式不养转录，与 `Identity` 同处理）。**没有动那个
+  「声明」面的任何画法。**
+
+  **新增测试 5 条**（都在本票指定的两个地方）：
+
+  - `src/render/tui.rs`（3 条）：那条记录变成**一条可点开的注入记录**（来源名那一枚带着条数）；
+    来源名说清**多少条**与「**按当前代码拼，不进事件流**」；全表逐条摊开，每条是
+    「名字 + 用法说明」而**参数 schema 不在里面**。
+  - `tests/render_layout.rs`（2 条）：转录上是**一行**、全表不在转录上摊开，点开是**逐条摊开的
+    全表**；那条记录**不进事件流**（`harness.events()` 一条不多）与**不进模型上下文**
+    （provider 收到的那条请求的 `messages` 里没有那张表）。
+
+  **实测**（本机，2026-10-21）：
+
+  - `cargo test --lib render::` —— **214 passed / 0 failed**（其中本票新增 3 条）。
+  - `cargo test --test render_layout` —— **312 passed / 0 failed**（本票新增 2 条）。
+  - `cargo test --no-fail-fast` —— **1944 passed / 0 failed**（89 个测试目标）。
+  - `cargo clippy --all-targets` —— **无警告**。
+  - `cargo fmt --check` —— **干净**。
+  - `python3 scripts/check-language.py` —— **OK**（中文注释行数没有回退）。
+
+  **文档面要跟着改的**（并进[票 10](10-docs-glossary-and-walkthrough.md)，本票不碰 `docs/`）：
+
+  1. `docs/render.md` 的「系统提示词」那一节旁边要补一句：**转录上现在还有一条
+     `工具声明（N 条，按当前代码拼，不进事件流）`**，点开是那张工具表的**全表**（每条是
+     「名字 + 用法说明」；**参数 schema 不在里头** —— 它在 per-call 那个「声明」面里）。
+  2. 同一份文档里那张「检视器的面」的分派表要补一行：**注入**那一类现在多了一个来源
+     （`工具声明`），它的详情面就是**注入**那一面（来源标题 + 全表正文）。
+  3. **词表**（`CONTEXT.md`）：「工具表」那条要补一句 —— 这张表现在**在界面上看得见**
+     （转录上一条可点开的记录），而它**不是**注入、也不进模型上下文。
+  4. 「真机走查」清单要加一条：**开一个会话，在轨迹页上找到「工具声明」那一行，点开，滚到
+     底** —— 逐条摊开的全表读得到，每个工具的用法说明读得到，而参数 schema **读不到**（它在
+     每次调用那一条的「声明」面里）。
+
+  **留给实现期的一个事实**（不阻塞）：轨迹页的**全文搜索索引**收的是每一块自己的那段文字 ——
+  于是这张全表（约六千字符）会整份进索引。搜得到「bash」时命中的那一块就是它，而它的摘要行
+  仍然只有一行。这一条是 `map.md`「尚未明确」里那个问题的答案：**会进索引**，代价是索引大
+  了一点、命中时看到的是那条记录。
+
+- **Lead 复核（2026-10-21）**：**讨论 CLI 那一条也推** —— 讨论 CLI 建的是**同一张**表
+  （[05](05-grilling-which-table.md) 的「同一张，所以不用管」），所以那条记录在讨论会话里同样
+  成立。（`identity()` 那一版讨论 CLI **没有**推，那是那条记录自己的历史，不作为这一条的先例。）
+  两处**编译性**的改动（`src/render/tui.rs` 的 `event_at` 与 `src/render/headless.rs` 的消费
+  循环各加一条 match 臂）是新枚举变体逼出来的，各一行，没动「声明」面的任何画法 —— **认可**。

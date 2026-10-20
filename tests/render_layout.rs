@@ -8,6 +8,7 @@
 //! 在路上算出来的那些矩形。
 
 mod common;
+mod support;
 
 use common::{buffer, click, find_cell_char, row_text, screen_lines};
 
@@ -10493,6 +10494,119 @@ fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
         "默认落在注入那一面：{text}"
     );
     assert!(text.contains("注入的正文一段"), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// 工具表那张**全表**（票 09）
+//
+// 会话级的那一条记录：转录上一行，点开是逐条摊开的声明。它与系统提示词同形 —— 不进事件流、
+// 不进模型上下文、从不落盘。
+// ---------------------------------------------------------------------------
+
+/// 那张工具表的**全表**在转录上是**一行**，点开是逐条摊开的声明（票 09）。
+///
+/// 全表本来就不是一页纸（内建声明的用法说明合计五千多字符），所以它不进转录正文 —— 它进的
+/// 是**详情**：那里逐条摊开，每个工具是「名字 + 用法说明」。
+#[test]
+fn the_tool_table_record_is_one_line_and_opens_the_whole_table() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(RenderEvent::tool_declarations(
+        SessionId::new("01J8ZQ4K7M"),
+        2,
+        "── bash ──\n在沙箱里跑一条命令。\n\n── read_file ──\n读一个文件。",
+    ));
+
+    open_trace_tab(&mut state, 120, 40);
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("工具声明"), "转录上有那一条记录：{page}");
+    assert!(
+        !page.contains("在沙箱里跑一条命令。"),
+        "全表不在转录上摊开：{page}"
+    );
+
+    click_row(&mut state, 120, 40, "工具声明");
+    let text = screen_lines(120, 40, &mut state).join("\n");
+    assert!(text.contains("bash"), "点开是全表：{text}");
+    assert!(text.contains("在沙箱里跑一条命令。"), "用法说明在：{text}");
+    assert!(text.contains("read_file"), "每个工具都在：{text}");
+    assert!(text.contains("读一个文件。"), "每个用法说明都在：{text}");
+}
+
+/// 那条记录**不进事件流、不进模型上下文** —— 它只是渲染层的一条记录（票 09）。
+///
+/// 与系统提示词同一纪律：老会话重开时它是**今天**建的那张表，而它从不写进 `log.jsonl`。
+#[tokio::test]
+async fn the_tool_table_record_never_enters_the_event_stream_or_the_model_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("log.jsonl");
+    let provider = support::FakeProvider::new(vec![support::Reply::text("答")]);
+    let mut harness = heng::assemble(heng::AssemblyParts {
+        provider: Box::new(provider.clone()),
+        speaker: heng::events::SpeakerId::Debater("kimi".into()),
+        config: heng::config::SessionConfig::new("fake-model"),
+        render: heng::render::RenderChannel::start(
+            heng::render::Renderer::headless(heng::render::RenderSinks {
+                stdout_result: Box::new(support::CaptureBuf::default()),
+                stderr_diagnostic: Box::new(support::CaptureBuf::default()),
+            }),
+            SessionId::new("s-tool-table"),
+        ),
+        scaffold: heng::SessionScaffold {
+            cwd: dir.path().to_path_buf(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-tool-table"),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
+            policy: heng::permissions::Policy::for_mode(heng::permissions::Mode::Auto),
+            asker: None,
+            questions: None,
+            hook: None,
+            home: None,
+        },
+    })
+    .await
+    .unwrap();
+
+    let before = harness.events().len();
+    harness.tool_declarations(&tool_table());
+    let after = harness.events();
+    assert_eq!(after.len(), before, "它不进事件流：一条都不多");
+    assert!(
+        !after.iter().any(|event| matches!(
+            &event.payload,
+            heng::events::EventPayload::ContextInjected { source, .. }
+                if matches!(source, heng::events::ContextSource::ToolDeclarations(_))
+        )),
+        "它不进事件流"
+    );
+
+    // 跑一个回合，于是 provider 收到那条请求 —— 模型上下文里没有那张表。
+    harness.run_turn("问题").await.unwrap();
+    let requests = provider.requests();
+    let messages: Vec<String> = requests
+        .iter()
+        .flat_map(|request| request.messages.iter())
+        .map(|message| format!("{message:?}"))
+        .collect();
+    assert!(!messages.is_empty(), "provider 确实收到了请求");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.contains("只在这一档出现的那段用法说明")),
+        "它不进模型上下文：{messages:?}"
+    );
+
+    harness.shutdown().await;
+}
+
+/// 一张**假**工具表：它不在这个会话的工具表里，于是「它进了 messages」这件事一旦发生就是
+/// 一次实打实的越界。
+fn tool_table() -> Vec<heng::render::declaration::ToolDeclaration> {
+    vec![heng::render::declaration::ToolDeclaration {
+        name: "fake_tool".to_owned(),
+        description: "只在这一档出现的那段用法说明。".to_owned(),
+        parameters: serde_json::json!({"type": "object"}),
+    }]
 }
 
 // ---------------------------------------------------------------------------

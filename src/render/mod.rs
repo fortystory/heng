@@ -140,6 +140,20 @@ pub enum RenderEvent {
         session: SessionId,
         text: String,
     },
+    /// 这个会话那张**工具表**的全表，给读的人看的一条记录。
+    ///
+    /// 与 [`RenderEvent::Identity`] 同一纪律：它不是事件、也永远不进事件流（工具表在组装期
+    /// 建好、此后只读，所以它**按当前代码拼的一份**）。所以这一条是**今天**那张表 ——
+    /// `--continue` 重开看到的不是当时那张，那句话由来源名说出来。
+    ///
+    /// 它点得开、看得全（点开是那张表逐条摊开的样子），但不进模型上下文、也不写 `log.jsonl`。
+    ToolDeclarations {
+        session: SessionId,
+        /// 这张表有几条。来源名把它说出来。
+        count: usize,
+        /// 全表逐条摊开的那段文字。
+        text: String,
+    },
 }
 
 impl RenderEvent {
@@ -155,7 +169,8 @@ impl RenderEvent {
             | Self::WorkspaceChanged { session }
             | Self::Notice { session, .. }
             | Self::SessionState { session, .. }
-            | Self::Identity { session, .. } => session,
+            | Self::Identity { session, .. }
+            | Self::ToolDeclarations { session, .. } => session,
         }
     }
 
@@ -172,6 +187,15 @@ impl RenderEvent {
     pub fn identity(session: SessionId, text: impl Into<String>) -> Self {
         Self::Identity {
             session,
+            text: text.into(),
+        }
+    }
+
+    /// 这个会话那张工具表的**全表**，给读的人看。没有时刻：它不属于任何一刻，是**当前**那张表。
+    pub fn tool_declarations(session: SessionId, count: usize, text: impl Into<String>) -> Self {
+        Self::ToolDeclarations {
+            session,
+            count,
             text: text.into(),
         }
     }
@@ -263,6 +287,18 @@ impl RenderHandle {
         let _ = self
             .sender
             .send(RenderEvent::identity(self.session.clone(), text));
+    }
+
+    /// 把这个会话那张工具表的**全表**摆进转录（轨迹页看得到的那一条；不进事件流）。
+    ///
+    /// 全表那段文字由渲染层自己排（[`crate::render::declaration::whole_table`]）—— 于是条数与
+    /// 正文出自同一份账，不会漂开。
+    pub fn tool_declarations(&self, declarations: &[crate::render::declaration::ToolDeclaration]) {
+        let _ = self.sender.send(RenderEvent::tool_declarations(
+            self.session.clone(),
+            declarations.len(),
+            crate::render::declaration::whole_table(declarations),
+        ));
     }
 
     /// 对前端说一句「工作区变了」：不画一行、不进事件流，只请握着文件索引的那一端重扫一次

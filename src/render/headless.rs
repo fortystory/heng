@@ -51,6 +51,8 @@ impl Render for Headless {
             match receiver.recv().await {
                 // 拼好的系统提示词：机器模式不养转录，也没有人读它。
                 Ok(RenderEvent::Identity { .. }) => {}
+                // 工具表那张全表：与系统提示词同一条路 —— 机器模式不养转录，也没有人读它。
+                Ok(RenderEvent::ToolDeclarations { .. }) => {}
                 // 忙闲是**界面**的事（票 22）：机器模式没有列表，也没有状态行。
                 Ok(RenderEvent::SessionState { .. }) => {}
                 Ok(RenderEvent::Delta {

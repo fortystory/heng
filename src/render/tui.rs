@@ -13676,6 +13676,9 @@ fn event_at(event: &RenderEvent) -> DateTime<Utc> {
         RenderEvent::SessionState { .. } => Utc::now(),
         // 系统提示词不属于任何一刻：它是**当前**的拼法，不是"那时"发生的事。
         RenderEvent::Identity { .. } => Utc::now(),
+        // 那张工具表的**全表**同样不属于任何一刻：它是**当前**那张表（老会话重开时重新建
+        // 的一张），不是"那时"的那张。
+        RenderEvent::ToolDeclarations { .. } => Utc::now(),
         // 它到不了这里：`apply` 在那之前就把它接走了。给一个当下的时刻只是为了 match 完整。
         RenderEvent::WorkspaceChanged { .. } => Utc::now(),
     }
@@ -17503,6 +17506,73 @@ mod tests {
             }
             _ => panic!("期望正好一条注入记录（可点开的那一种）"),
         }
+    }
+
+    /// 那张工具表的**全表**也借「注入的上下文」那条记录现身：一条**可点开**的行，来源名自己
+    /// 说清它有几条、说清它是按当前代码拼的、不进事件流。它走的是渲染通道，所以事件流上一个
+    /// 字都不多（票 09）。
+    #[test]
+    fn the_tool_table_becomes_a_foldable_injection_record() {
+        let mut transcript = crate::render::transcript::Transcript::new();
+
+        let blocks = transcript.push(RenderEvent::tool_declarations(
+            s(),
+            2,
+            "── bash ──\n在沙箱里跑一条命令。\n\n── read_file ──\n读一个文件。",
+        ));
+
+        match blocks.as_slice() {
+            [crate::render::transcript::Block::ContextInjected { source, content }] => {
+                assert_eq!(
+                    *source,
+                    crate::events::ContextSource::ToolDeclarations(2),
+                    "来源名那一枚带着这张表的条数"
+                );
+                assert!(
+                    content.contains("bash") && content.contains("在沙箱里跑一条命令。"),
+                    "详情里是全表：{content}"
+                );
+            }
+            _ => panic!("期望正好一条注入记录（可点开的那一种）"),
+        }
+    }
+
+    /// 来源名把两件事说清：**多少条**，以及它是**按当前代码拼、不进事件流**的那一份 ——
+    /// 老会话重开看到的是今天建的那张表，这句话由它说出来（票 05、票 09）。
+    #[test]
+    fn the_source_name_says_how_many_and_that_it_is_spliced_from_the_current_code() {
+        let name = wording::context_source(&crate::events::ContextSource::ToolDeclarations(19));
+        assert!(name.contains("19 条"), "条数在来源名里：{name}");
+        assert!(name.contains("按当前代码拼"), "它是今天那一份：{name}");
+        assert!(name.contains("不进事件流"), "它不进事件流：{name}");
+    }
+
+    /// 那张**全表**逐条摊开：每条是「名字 + 用法说明」，**参数 schema 不在里面** —— 它在
+    /// per-call 那一档（详情覆盖层的「声明」面）里，而两件事各答各的（票 09）。
+    ///
+    /// 顺序是那张表的顺序 —— 与 provider 收到的 `tools` 数组同序。
+    #[test]
+    fn the_whole_table_lists_every_tool_with_its_usage_description() {
+        let mut table = declarations();
+        table.push(crate::render::declaration::ToolDeclaration {
+            name: "read_file".to_owned(),
+            description: "读一个文件。".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"参数只在这一档": {}},
+            }),
+        });
+
+        let text = crate::render::declaration::whole_table(&table);
+
+        assert_eq!(
+            text, "── bash ──\n在沙箱里跑一条命令。\n\n── read_file ──\n读一个文件。",
+            "每条是「名字 + 用法说明」，条与条之间空一行"
+        );
+        assert!(
+            !text.contains("参数只在这一档"),
+            "参数 schema 不在全表里：{text}"
+        );
     }
 
     #[test]

@@ -555,6 +555,14 @@ pub fn declaration_parameters_section() -> &'static str {
     "参数 schema"
 }
 
+/// 工具表那张**全表**里一条声明的小标题：那个**工具的名字**。
+///
+/// 名字是**协议的一部分**（模型按它调用），所以原样透传 —— 不翻译、不加前缀、不改大小写。
+/// 围着它的是详情里那种小标题的记号，于是读的人一眼看得出「下面那段是这个名字的用法说明」。
+pub fn declaration_table_entry(name: &str) -> String {
+    detail_section(name)
+}
+
 /// 声明面拿不到这次调用的声明时怎么写：**一句话说明查不到**。
 ///
 /// 不画空面、不编一份 schema 出来 —— 与这一轮其它降级同一条纪律（拿不到就不假装有）。查不到
@@ -1576,8 +1584,13 @@ pub fn context_source(source: &ContextSource) -> String {
         ContextSource::SkillsCatalog => "技能清单".to_owned(),
         ContextSource::McpCatalog => "MCP 加载".to_owned(),
         ContextSource::Skill => "技能".to_owned(),
-        // 唯一一条**不进事件流**的来源，所以标题自己把那句话说掉。
+        // 不进事件流的来源之一，所以标题自己把那句话说掉。
         ContextSource::Identity => "系统提示词（按当前代码拼，不进事件流）".to_owned(),
+        // 与上面那条同一纪律，而它多答一件事：**这张表有几条**。于是「这个会话有哪些工具」
+        // 在点开之前就有一个数（票 05、票 09）。
+        ContextSource::ToolDeclarations(count) => {
+            format!("工具声明（{count} 条，按当前代码拼，不进事件流）")
+        }
         // 留着读**老**流：它点名的那一档模式已经没了，但在
         // `.scratch/todo-and-modes` 之前写下的会话仍然带着这条注入，复盘它时应该说出它
         // 当时是什么（ADR 0003）。

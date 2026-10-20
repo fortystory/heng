@@ -215,7 +215,9 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             file_viewer: config.file_viewer,
             diff_viewer: config.diff_viewer.clone(),
             // 每一份工具声明 —— 详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
-            tool_declarations: facts_tool_declarations,
+            //
+            // 抄一份：下面那条**会话级**记录（轨迹页上点得开的那条）读的是同一张表。
+            tool_declarations: facts_tool_declarations.clone(),
             // 这一对，按名册顺序 —— 与 `pick_pair` 产出的顺序相同，正是它把第一个调色板槽位给了第
             // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
@@ -287,6 +289,12 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     };
 
     let mut quit = ExitRequest::default();
+    // 那张工具表的**全表**：一条**可点开**的记录，点开是逐条摊开的声明。讨论者与合成器共享
+    // 这一张表（与主会话那张逐字同形），所以一条就够 —— 执行者那张是子集，不另显（票 05、
+    // 票 09）。它不进事件流、不进模型上下文、从不落盘。
+    harness
+        .render_handle()
+        .tool_declarations(&facts_tool_declarations);
     let outcome = run_discussion(&mut harness, &mut events, &question, &mut quit).await;
     harness.shutdown().await;
 

@@ -299,6 +299,16 @@ impl Transcript {
                 });
                 blocks
             }
+            // 那张工具表的**全表**：与系统提示词同形 —— 一条**可点开**的注入记录，来源名自己
+            // 说清它有几条、说清它是按当前代码拼的、不进事件流（票 09）。
+            RenderEvent::ToolDeclarations { count, text, .. } => {
+                let mut blocks = self.flush();
+                blocks.push(Block::ContextInjected {
+                    source: ContextSource::ToolDeclarations(count),
+                    content: text,
+                });
+                blocks
+            }
             // 静默信号：它不产任何块 —— 屏幕上的东西一个都不变
             // （`.scratch/files-page/spec.md` §2）。
             RenderEvent::WorkspaceChanged { .. } => Vec::new(),

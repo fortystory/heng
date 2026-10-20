@@ -58,6 +58,7 @@ use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Provider;
 use crate::questions::UserQuestions;
+use crate::render::declaration::ToolDeclaration;
 use crate::render::{RenderChannel, RenderHandle};
 use crate::session::{Session, SessionParts, StoredSession};
 use crate::tools::sandbox;
@@ -1185,6 +1186,18 @@ impl Harness {
     /// 拼好的系统提示词摆进转录（轨迹页看得到的那一条，不进事件流）。
     pub fn identity(&self, text: &str) {
         self.render.identity(text);
+    }
+
+    /// 这个会话那张工具表的**全表**摆进转录（轨迹页看得到的那一条，不进事件流）。
+    ///
+    /// 与 [`Harness::identity`] 同一纪律：它不是事件、永远不进事件流、也从不落盘 —— 所以它是
+    /// **按当前代码拼的一份**：老会话重开看到的是**今天**建的那张表，不是当时那张，而那句话由
+    /// 来源名说出来（票 05、票 09）。
+    ///
+    /// 全表那段文字由渲染层自己排（[`crate::render::declaration::whole_table`]），于是条数与
+    /// 正文出自同一份账。
+    pub fn tool_declarations(&self, declarations: &[ToolDeclaration]) {
+        self.render.tool_declarations(declarations);
     }
 
     /// 目前为止的整条流，按 `seq` 顺序。
