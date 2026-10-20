@@ -1,7 +1,7 @@
 # 07: 工具声明的账带上整份声明（prefactor）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 04, 06
 Part of: ../map.md
 
@@ -63,3 +63,29 @@ Part of: ../map.md
 ## 评论
 
 （空 —— 开工时补：落地与实测）
+
+## 评论
+
+2026-10-21 落地（Lead 亲手做的，先 TDD：红 → 绿）。
+
+- **新类型** [`src/render/declaration.rs`](../../../src/render/declaration.rs)：
+  `ToolDeclaration { description: String, parameters: serde_json::Value }` —— **渲染层自己的**小类型
+  （[06](06-grilling-boundaries.md) 的决定：不依赖 provider 模块的公开类型）。名字是账的键。
+- **抄取点**：[`src/cli/probe.rs`](../../../src/cli/probe.rs) 的 `tool_schemas()` →
+  **`tool_declarations(specs: Vec<ToolSpec>)`** —— 它现在**带着用法说明**一起抄（今天只抄了
+  `parameters`，那段用法说明在抄取那一步就丢了）。
+- **改名**：`SessionFacts::tool_schemas` → **`tool_declarations`**；字段的注释与函数的注释都改准
+  （它们今天把参数 schema 说成「声明」）。
+- **写入点三处**（装配链逐字同形）：`src/cli/interactive.rs`、`src/cli/discuss.rs`、
+  `src/cli/loading.rs` —— 全部改成 `tool_declarations(tools.specs())`。
+- **读者两处**：`src/render/tui.rs` 的 `detail_faces` / `face_sections` / `tool_schema_rows` ——
+  参数照旧 `pretty` 打出来（**画用法说明是[票 08](08-per-call-usage-description.md) 的事**，
+  这一票只让数据到位）。
+- **测试桩**：单元测试里的 `schemas()` 桩与六个 `tool_schemas: Default::default()` 桩、以及
+  `tests/history_replay.rs` 与 `tests/render_layout.rs` 两处 `tool_schemas()` 桩 —— 全部跟着改成
+  新形状（**没有**为了让旧桩继续编译而把新字段做成可选）。
+- **一条新用例**（先红后绿）：`src/cli/probe.rs` 的
+  `the_copied_account_carries_the_usage_description` —— 账里能读到那段用法说明。
+
+验证：`cargo test` 1935 passed / 0 failed；`cargo clippy --all-targets` 无警告；`cargo fmt --check`
+干净。

@@ -48,7 +48,7 @@ pub fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
-        tool_schemas: Default::default(),
+        tool_declarations: Default::default(),
         speaker_order: Vec::new(),
     }
 }

@@ -22,21 +22,26 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use std::collections::BTreeMap;
 
-/// 这个会话的工具表里那些**声明 schema**：`bash` 在里面（重放的那些工具调用用的就是它）。
+/// 这个会话的工具表里那些**声明**：`bash` 在里面（重放的那些工具调用用的就是它）。
 ///
 /// 面这一层读它，而重放这条路与实时那条路共用同一份注入 —— 于是「重放出来的详情与实时那次
-/// 逐字相同」这条契约也包括 Schema 面（票 24 收口补的那一面）。
-fn tool_schemas() -> BTreeMap<String, serde_json::Value> {
-    let mut schemas = BTreeMap::new();
-    schemas.insert(
+/// 逐字相同」这条契约也包括那个「声明」面（票 24 收口补的那一面）。
+///
+/// **用法说明也在里面** —— 那正是今天丢掉的那一样（票 07）。
+fn tool_declarations() -> BTreeMap<String, heng::render::declaration::ToolDeclaration> {
+    let mut declarations = BTreeMap::new();
+    declarations.insert(
         "bash".to_owned(),
-        serde_json::json!({
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        }),
+        heng::render::declaration::ToolDeclaration {
+            description: "在沙箱里跑一条命令。".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            }),
+        },
     );
-    schemas
+    declarations
 }
 
 fn facts() -> SessionFacts {
@@ -53,7 +58,7 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
-        tool_schemas: tool_schemas(),
+        tool_declarations: tool_declarations(),
         speaker_order: vec!["kimi".to_owned()],
     }
 }

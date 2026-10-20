@@ -219,7 +219,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let prompts = mcp_prompt_entries(&mcp).await;
 
     // 工具表在**渲染器之前**建出来：详情覆盖层的 Schema 面要读它那份声明，而它随会话事实在组装时
-    // 注入一次（`SessionFacts::tool_schemas`）。表仍然只建一份 —— 往下照旧交给脚手架，没有第二张。
+    // 注入一次（`SessionFacts::tool_declarations`）。表仍然只建一份 —— 往下照旧交给脚手架，没有第二张。
     let tools = tools::with_mcp(
         tools::with_web(
             tools::with_dynamic(&config.tools, questions.is_some()),
@@ -227,7 +227,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         ),
         Arc::clone(&mcp),
     );
-    let facts_tool_schemas = tool_schemas(&tools);
+    let facts_tool_declarations = tool_declarations(tools.specs());
 
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
@@ -255,7 +255,7 @@ pub(crate) async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             diff_viewer: config.diff_viewer.clone(),
             // 工具表里每一份声明 —— 详情覆盖层的 Schema 面读的就是它（票 24 收口补的那一面）。
             // 表在上面的渲染器之前建好，这里只是把它的声明抄成一份按名字查的账。
-            tool_schemas: facts_tool_schemas,
+            tool_declarations: facts_tool_declarations,
             // 单 agent 会话以它的档案发言，所以那就是转录的名字配色需要安排的全部名册
             // （票 07 §1）。
             speaker_order: vec![profile.name.clone()],

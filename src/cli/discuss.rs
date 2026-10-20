@@ -176,7 +176,7 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
 
     // 工具表在**渲染器之前**建出来，理由与单 agent 那条路同：详情覆盖层的 Schema 面要读它那份
-    // 声明，而它随会话事实在组装时注入一次（`SessionFacts::tool_schemas`）。讨论者拿的就是这一张。
+    // 声明，而它随会话事实在组装时注入一次（`SessionFacts::tool_declarations`）。讨论者拿的就是这一张。
     let tools = tools::with_mcp(
         tools::with_web(
             tools::with_dynamic(&config.tools, questions.is_some()),
@@ -184,7 +184,7 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         ),
         mcp,
     );
-    let facts_tool_schemas = tool_schemas(&tools);
+    let facts_tool_declarations = tool_declarations(tools.specs());
 
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
@@ -215,7 +215,7 @@ pub(crate) async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             file_viewer: config.file_viewer,
             diff_viewer: config.diff_viewer.clone(),
             // 每一份工具声明 —— 详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
-            tool_schemas: facts_tool_schemas,
+            tool_declarations: facts_tool_declarations,
             // 这一对，按名册顺序 —— 与 `pick_pair` 产出的顺序相同，正是它把第一个调色板槽位给了第
             // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],

@@ -316,17 +316,28 @@ pub(crate) fn web_service(config: &Config) -> WebService {
     }
 }
 
-/// 工具表里每个工具的**声明 schema**，按工具名 —— 详情覆盖层的 Schema 面要的那份账
-/// （[`SessionFacts::tool_schemas`]）。
+/// 工具表里每个工具的**声明**，按工具名 —— 详情覆盖层那个「声明」面要的那份账
+/// （[`SessionFacts::tool_declarations`]）。
 ///
-/// 它直接来自 [`Registry::specs`]：那正是 `agent` 每次请求发给 provider 的同一份声明，所以渲染
+/// 它直接来自 [`Registry::specs`](crate::tools::Registry::specs)：那正是 `agent` 每次请求发给 provider 的同一份声明，所以渲染
 /// 层画出来的与模型手里的不会漂开，也不经第二次加工。表在组装期建好之后不再变，于是这一份抄本
 /// 只在组装时取一次。
-pub(crate) fn tool_schemas(registry: &Registry) -> BTreeMap<String, serde_json::Value> {
-    registry
-        .specs()
+///
+/// **用法说明也在里面** —— 今天这份账只抄了 `parameters`，于是 provider 读到的那段用法说明在
+/// 界面上一个字都读不到
+/// （`.scratch/tool-declaration-visibility/issues/07-account-carries-the-whole-declaration.md`）。
+pub(crate) fn tool_declarations(specs: Vec<ToolSpec>) -> BTreeMap<String, ToolDeclaration> {
+    specs
         .into_iter()
-        .map(|spec| (spec.name, spec.parameters))
+        .map(|spec| {
+            (
+                spec.name,
+                ToolDeclaration {
+                    description: spec.description,
+                    parameters: spec.parameters,
+                },
+            )
+        })
         .collect()
 }
 
@@ -504,3 +515,31 @@ pub(crate) fn prune(args: &[String], env: &EnvMap) -> ExitCode {
 // ---------------------------------------------------------------------------
 // `sessions`：可观测性 CLI（spec §18）
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::ToolSpec;
+
+    /// 抄给渲染层的那本账里**带着用法说明**。
+    ///
+    /// 今天那份账只抄了 `parameters` —— provider 读到的那段用法说明在抄取那一步就丢了，于是它在
+    /// 界面上一个字都读不到（`.scratch/tool-declaration-visibility/issues/07-account-carries-the-whole-declaration.md`）。
+    #[test]
+    fn the_copied_account_carries_the_usage_description() {
+        let specs = vec![ToolSpec {
+            name: "ask_user_question".to_owned(),
+            description: "何时问、答案 JSON 怎么读".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let account = tool_declarations(specs);
+        assert_eq!(
+            account["ask_user_question"].description, "何时问、答案 JSON 怎么读",
+            "用法说明得跟着声明一起抄过去"
+        );
+        assert_eq!(
+            account["ask_user_question"].parameters["type"], "object",
+            "参数 schema 还在"
+        );
+    }
+}

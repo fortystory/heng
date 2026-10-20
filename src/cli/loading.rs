@@ -136,7 +136,7 @@ impl AssemblyKit {
             number_style: self.config.number_style,
             file_viewer: self.config.file_viewer,
             diff_viewer: self.config.diff_viewer.clone(),
-            tool_schemas: tool_schemas(&tools),
+            tool_declarations: tool_declarations(tools.specs()),
             speaker_order: vec![self.speaker.clone()],
         }
     }

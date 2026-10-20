@@ -1,7 +1,7 @@
 # 三个方向各出一帧：工具声明在界面上看得见，长什么样
 
 Type: prototype
-Status: claimed
+Status: resolved
 Part of: ../map.md
 Blocked by: 01, 02
 
@@ -64,3 +64,14 @@ vs 只列名字与首行（其余点开再看）。
   [02](../issues/02-research-channels.md)），底账齐了：19 条内建、`description` 合计 5881 字符、
   最长一条 896 字符；三条通道的代价见[票 02](../research/02-channels.md) 第 5 节那张表。
   本票按上面那三帧开工。
+
+## 作答
+
+2026-10-21 维护者**直接拍定**了形态（两张都做，见
+[04](04-grilling-visible-shape.md)）—— 本票的目的是**提高讨论的保真度**，而讨论已经发生并收口，
+所以**帧不再出**：出帧是为「谈空画不出」服务的，而这次形态已经被拍定，实现时若要改画法，
+照 [04](04-grilling-visible-shape.md) 的结论与 [票 08](08-per-call-usage-description.md)、
+[票 09](09-session-level-declaration-record.md) 的验收走。
+
+「一次看全表」的那条体积事实仍然作数（`description` 合计 5881 字符、参数 schema 1.5–2 万字符
+—— 一页多），它是会话级那一档「转录上一行 + 点开一块可滚的详情」的依据。

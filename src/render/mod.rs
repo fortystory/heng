@@ -22,6 +22,7 @@
 //! 每个合并块只写一次。
 
 pub mod changes;
+pub mod declaration;
 pub mod editor;
 pub mod file_index;
 pub mod files;

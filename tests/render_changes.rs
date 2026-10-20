@@ -34,7 +34,7 @@ fn facts() -> SessionFacts {
         diff_viewer: DiffViewerSettings::default(),
         // 这个会话的工具声明：Schema 面按名字查它（票 24 收口补的那一面）。这些测试
         // 不打开工具详情，于是给一份空的。
-        tool_schemas: Default::default(),
+        tool_declarations: Default::default(),
         speaker_order: Vec::new(),
     }
 }

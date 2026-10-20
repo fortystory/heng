@@ -24,10 +24,11 @@ use crate::events::{
 };
 use crate::mcp::{self, McpService};
 use crate::permissions::{Asker, Mode, Policy};
-use crate::provider::Message;
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{BuildError, OpenAiProvider, stderr_warnings};
+use crate::provider::{Message, ToolSpec};
 use crate::questions::{UserQuestion, UserQuestions};
+use crate::render::declaration::ToolDeclaration;
 use crate::render::token::{self, Token};
 use crate::render::{
     self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent, PickerKind,
@@ -35,7 +36,7 @@ use crate::render::{
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{FrontFacts, SessionHost, SessionStore, StoredSession, titles};
-use crate::tools::{self, Registry, Sandbox};
+use crate::tools::{self, Sandbox};
 use crate::web::WebService;
 use crate::web::fetch_http::HttpFetch;
 use crate::web::search_deepseek::{DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch};

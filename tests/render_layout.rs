@@ -26,19 +26,24 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::style::{Color, Modifier};
 
-/// 这个会话的工具表里那些**声明 schema**：`bash` 在里面，别的名字都不在 —— Schema 面查得到
+/// 这个会话的工具表里那些**声明**：`bash` 在里面，别的名字都不在 —— 那个「声明」面查得到
 /// 与查不到两条路都能在这条接缝上测（票 24 收口补的那一面）。
-fn tool_schemas() -> BTreeMap<String, serde_json::Value> {
-    let mut schemas = BTreeMap::new();
-    schemas.insert(
+///
+/// **用法说明也在里面** —— 那正是今天丢掉的那一样（票 07）。
+fn tool_declarations() -> BTreeMap<String, heng::render::declaration::ToolDeclaration> {
+    let mut declarations = BTreeMap::new();
+    declarations.insert(
         "bash".to_owned(),
-        serde_json::json!({
-            "type": "object",
-            "properties": {"command": {"type": "string", "description": "要跑的命令"}},
-            "required": ["command"],
-        }),
+        heng::render::declaration::ToolDeclaration {
+            description: "在沙箱里跑一条命令。".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string", "description": "要跑的命令"}},
+                "required": ["command"],
+            }),
+        },
     );
-    schemas
+    declarations
 }
 
 fn facts() -> SessionFacts {
@@ -56,7 +61,7 @@ fn facts() -> SessionFacts {
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
         // 工具表里那些声明：详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
-        tool_schemas: tool_schemas(),
+        tool_declarations: tool_declarations(),
         speaker_order: Vec::new(),
     }
 }
@@ -6467,7 +6472,7 @@ fn the_schema_face_says_so_when_the_tool_is_not_in_the_table() {
     // 工具表里没有这个名字时**写一句话说明查不到** —— 重放一个老会话时那个工具可能已经不在
     // 表里。不画空面、也不编一份 schema 出来（票 24 收口的降级）。
     let mut session_facts = facts_with_roster(&["kimi"]);
-    session_facts.tool_schemas = BTreeMap::new();
+    session_facts.tool_declarations = BTreeMap::new();
     let mut state = TuiState::new(session_facts, std::path::PathBuf::from("/x/heng"), None);
     state.apply(tool_started(
         1,
@@ -6589,7 +6594,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
             // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
-            tool_schemas: tool_schemas(),
+            tool_declarations: tool_declarations(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),
@@ -7568,7 +7573,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
             // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
-            tool_schemas: tool_schemas(),
+            tool_declarations: tool_declarations(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),
