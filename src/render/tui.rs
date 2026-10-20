@@ -675,6 +675,10 @@ impl Tui {
                 paint_frame(&mut terminal, &mut state);
                 let _ = execute!(frame_out, EndSynchronizedUpdate);
                 state.mark_clean();
+                // 悬浮目标按**这一帧**的命中表重算（票 04）：命中表每帧重填，列表滚动、
+                // 会话被关掉之后指针底下那条会话可能已经变了。变了就再画一帧 —— 屏幕上
+                // 那个标记画的是上一帧的答案。
+                state.refresh_hover();
                 // 标题只在真变了的时候重写：算一次期望值、与上一版比对。状态来自
                 // `running` / `pending` / `replay` / 目标名四处，逐个挂钩一定会漏，所以
                 // 比对发生在绘制路径上（`.scratch/terminal-title/spec.md` §5）。
@@ -3422,6 +3426,19 @@ pub struct TuiState {
     menu_rect: Option<Rect>,
     /// 上一帧把一个问题的可点部分画在了哪里。
     regions: Regions,
+    /// 指针现在停在哪一条会话上（**悬浮目标**）：由**命中表**翻译出来的那个会话身份 ——
+    /// 落在会话页的一行、顶部页签条的一个标签或平铺的一格标题行上，就是那一条；落在
+    /// 别处（输入区、状态行、空白）就是 `None`。
+    ///
+    /// 命中表是「这一帧画出来的那一张」：指针移动时读到的是**上一帧**画的那张（指针是在
+    /// 两帧之间被回应的），而每画完一帧又按**新的一张**重算一遍（`refresh_hover`）。
+    ///
+    /// 纯渲染器状态，不进事件流。它**变了**才请求重画（票 04）：终端按格去重之后，一次
+    /// 横扫仍然是上百个移动事件，逐个重画会把界面刷成一片。
+    hover: Option<crate::events::SessionId>,
+    /// 指针上一次被报到的位置（终端列行）。悬浮目标由它与命中表算出；绘制时还要读它
+    /// 判「指针是不是在标题行上」那一类更细的问题（票 08）。
+    pointer: Option<(u16, u16)>,
     /// 上一帧的**排版结果**（布局那一侧的 `Regions`）：滚轮按指针落在哪一块来分派
     /// （`.scratch/wheel-routing/spec.md` §1）。每帧在画任何东西之前重填，没画出来就是
     /// `None` —— 与 `regions` / `screen_text` 同一条「这一帧真画了什么就记什么」。
@@ -4782,6 +4799,8 @@ impl TuiState {
             questionnaire_bottom: None,
             menu_rect: None,
             regions: Regions::default(),
+            hover: None,
+            pointer: None,
             layout: None,
             tile_rects: Vec::new(),
             wheel_shown: [None; 3],
@@ -5471,7 +5490,12 @@ impl TuiState {
         if self.replay.is_some() {
             return;
         }
-        self.dirty = true;
+        // **移动**事件不重画：只有悬浮目标变了才重画（票 04）。终端按格去重之后，一次横扫
+        // 仍然是上百个移动事件 —— 逐个重画会把界面刷成一片。
+        let moved = matches!(mouse.kind, MouseEventKind::Moved);
+        if !moved {
+            self.dirty = true;
+        }
         // 查看器立着时指针全归它（含滚轮与拖动）：框外关掉、框内转发。排在别的分派之前，
         // 与「覆盖层立着时滚轮按指针位置分派」同一条来路。
         if self.file_viewer.is_some() {
@@ -5484,8 +5508,82 @@ impl TuiState {
             MouseEventKind::Down(MouseButton::Left) => self.press_at(mouse.column, mouse.row),
             MouseEventKind::Drag(MouseButton::Left) => self.drag_to(mouse.column, mouse.row),
             MouseEventKind::Up(MouseButton::Left) => self.release_at(mouse.column, mouse.row),
+            MouseEventKind::Moved => self.pointer_moved(mouse.column, mouse.row),
             _ => {}
         }
+    }
+
+    /// 指针挪到了别处：记下它现在停在哪一条会话上（**悬浮目标**）。
+    ///
+    /// **只有目标变了**才请求重画 —— 同一条会话里挪动不重画（票 04）。
+    fn pointer_moved(&mut self, column: u16, row: u16) {
+        self.pointer = Some((column, row));
+        self.refresh_hover();
+    }
+
+    /// 按**这一帧**的命中表重算悬浮目标。
+    ///
+    /// 命中表每帧重填，所以列表滚动、会话被关掉、切走前台之后，指针底下那条会话可能已经
+    /// 变了 —— 悬浮目标要跟着**这一帧**走（票 04）。变了就请求重画：屏幕上那个标记要跟着
+    /// 改，而它此刻画的是上一帧的答案。
+    ///
+    /// 指针还没报过位置时什么也不做 —— 没有指针就没有悬浮目标。
+    pub fn refresh_hover(&mut self) {
+        let Some((column, row)) = self.pointer else {
+            return;
+        };
+        let target = self.hover_target(column, row);
+        if target != self.hover {
+            self.hover = target;
+            self.dirty = true;
+        }
+    }
+
+    /// 指针底下那条会话：把命中的那个动作翻译成会话身份。
+    ///
+    /// 翻译不了的（输入区、状态行、空白、别的部件）就是 `None` —— 那里没有会话名，
+    /// 也就没有可关的那一条。
+    fn hover_target(&self, column: u16, row: u16) -> Option<crate::events::SessionId> {
+        let action = self.regions.action_at(column, row)?;
+        // 平铺：**只有格标题行算** —— 非焦点格整格都可点，而悬浮的落点是会话名（格标题行），
+        // 不是格里的正文（map 冻结项 9）。
+        if let HitAction::Tile(slot) = action {
+            let in_header = self
+                .tile_rects
+                .get(slot)
+                .is_some_and(|(cell, _)| cell.y == row);
+            if !in_header {
+                return None;
+            }
+        }
+        self.session_of_action(action)
+    }
+
+    /// 这个命中动作指向哪一个会话。
+    ///
+    /// 命中表里存的是**下标**（`HitAction` 要保持 `Copy`），会话身份在各自那一张表里 ——
+    /// 会话页的行、页签条的标签、平铺的格各有一张。点击与悬浮走的是**同一份**翻译。
+    fn session_of_action(&self, action: HitAction) -> Option<crate::events::SessionId> {
+        match action {
+            HitAction::SessionRow(screen) => self
+                .sessions
+                .hits
+                .iter()
+                .find(|(listed, _)| *listed == screen)
+                .map(|(_, id)| id.clone()),
+            // 顶部页签条的标签按**宿主表下标**记，翻译回来仍是同一个会话身份。
+            HitAction::TopSession(index) => self.sessions.hosted.get(index).cloned(),
+            // 平铺的格按**格序号**记；那一格装的是哪一个会话在 `tiles` 里。
+            HitAction::Tile(slot) => self.tiles.get(slot).cloned(),
+            _ => None,
+        }
+    }
+
+    /// 指针当前停在哪一条会话上（**悬浮目标**）。
+    ///
+    /// 指针不在任何会话上时是 `None`。
+    pub fn hovered_session(&self) -> Option<&crate::events::SessionId> {
+        self.hover.as_ref()
     }
 
     /// 滚轮一格：整条链交给层表，由各层按落点认领（详情覆盖层直接占着它；问卷 / 中间
@@ -5794,7 +5892,7 @@ impl TuiState {
             Some(HitAction::TopSession(index)) => {
                 // 顶部条只在标签态画（2026-10-17 修订：平铺态没有它），所以这里只有
                 // 「点标签 = 切前台」这一件事。
-                if let Some(id) = self.sessions.hosted.get(index).cloned()
+                if let Some(id) = self.session_of_action(HitAction::TopSession(index))
                     && id != self.front
                 {
                     self.events.push(FrontEndEvent::OpenSession { id });
@@ -6943,7 +7041,7 @@ impl TuiState {
     ///
     /// 平铺态换焦点只改前台指针，几何一个像素不动（票 17 决定 9）。
     fn focus_tile(&mut self, slot: usize) {
-        let Some(id) = self.tiles.get(slot).cloned() else {
+        let Some(id) = self.session_of_action(HitAction::Tile(slot)) else {
             return;
         };
         if id != self.front {
@@ -7324,10 +7422,9 @@ impl TuiState {
             return;
         }
         // 第二下**不再碰焦点**（票 32 的验收二），切的是**点的那一行**。
-        let Some((_, id)) = self.sessions.hits.iter().find(|(row, _)| *row == line) else {
+        let Some(id) = self.session_of_action(HitAction::SessionRow(line)) else {
             return;
         };
-        let id = id.clone();
         if id == self.front {
             return;
         }
