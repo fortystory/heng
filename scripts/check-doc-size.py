@@ -414,12 +414,15 @@ def review_rules(unit: Unit) -> list[str]:
 #   15,500 / 80 → **15,800 / 81**（文件链接的链接色与文件弹窗那一 feature 的 spec 索引行；见
 #   `.scratch/link-emphasis/spec.md`）。同日 `tool-declaration-visibility` 那一行从**种子**改成
 #   **决策图**（形态与票数各换一次，行数与体量都动）。
+# **同日拆出 `tool-declaration-visibility` 的四张构建切片时再跟一次**：同一类显式动作，
+#   `.scratch/README.md` **15,800 / 81 → 15,900 / 81**（那一行的**票数**多写了四张构建切片与一句
+#   注记，行数没动）。
 ENTRY_BUDGET = {
     # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
     # 19,950 → 20,100（终点 18,500 不变）。
     "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 15800,
+        "chars": 15900,
         "lines": 81,
         "target_chars": 13500,
         "target_lines": 100,

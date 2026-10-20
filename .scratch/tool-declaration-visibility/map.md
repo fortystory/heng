@@ -1,7 +1,7 @@
 # 工具声明在界面上看得见（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 2 resolved + 4 claimed —— 图未走完
+Status: 2 resolved + 4 claimed + 4 ready-for-agent —— 图未走完
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-21）。两张事实票当场收回，四张决策票留待后续 session。
 本图只做**规划**，不产代码改动。
@@ -127,3 +127,17 @@ Charting: **已完成**（2026-10-21）。两张事实票当场收回，四张�
 图走完之后会被折成 spec（**交棒**），而图**留着当决策记录**。
 
 **frontier 现在是谁**：03（编号最小、未阻塞、未认领）。
+
+### 构建切片（2026-10-21 `/to-tickets` 拆出）
+
+**四张实现票全部**被决策票挡着** —— 它们是那张图走完之后要落的形状，形态由 04 拍、内容由 05 拍、
+账的形状由 06 拍。决策票一改形状，对应的票就改或关（map 的规矩：被排除的方向**关闭**，不实现）。
+
+- [ ] [07: 工具声明的账带上整份声明（prefactor）](issues/07-account-carries-the-whole-declaration.md)
+- [ ] [08: 工具调用的详情里能读到用法说明（per-call）](issues/08-per-call-usage-description.md)
+- [ ] [09: 转录上一条「工具声明」记录，点开是全表（会话级）](issues/09-session-level-declaration-record.md)
+- [ ] [10: 文档、词表与真机走查收口](issues/10-docs-glossary-and-walkthrough.md)
+
+共 **10** 张票（6 张决策票 + 4 张构建切片）。**构建切片一条都不许在决策票走完之前动手** ——
+`/to-spec` 折出来的 spec 是它们的共同依据；04 若排除了某一档（方向三「只改文档」、或 08 与 09
+里的一个），对应的票**关闭**，不实现。
