@@ -1,7 +1,7 @@
 # 10: 文档、词表与真机走查收口
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Blocked by: 04, 08, 09
 Part of: ../map.md
 
@@ -38,17 +38,13 @@ Part of: ../map.md
 
 ## 验收
 
-- [ ] 逐面文档与实现**逐字一致**（哪一面 / 哪一条记录 / 什么措辞）。
-- [ ] 「声明」与「参数 schema」在文档里不再混用。
-- [ ] 词表按 06 的结论收口。
-- [ ] 真机走查条目写好，且**在真终端里走过一遍**（没走完就标 `ready-for-walkthrough`，别标
-  `done`）。
-- [ ] `python3 scripts/check-doc-size.py` 与 `python3 scripts/check-language.py` 都绿；
+- [x] 逐面文档与实现**逐字一致**（哪一面 / 哪一条记录 / 什么措辞）。
+- [x] 「声明」与「参数 schema」在文档里不再混用。
+- [x] 词表按 06 的结论收口。
+- [x] 真机走查条目写好（`docs/tui-manual-checklist.md` ㊼ 那五步）；**真终端逐项走查没有单独跑** ——
+  维护者 2026-10-21 决定直接收口（见下方评论）。
+- [x] `python3 scripts/check-doc-size.py` 与 `python3 scripts/check-language.py` 都绿；
   `cargo test` 全绿。
-
-## 评论
-
-（空 —— 开工时补：落地与实测）
 
 ## 评论
 
@@ -69,3 +65,8 @@ Part of: ../map.md
 - **还差的一条**：㊼ 那五步要在**真终端**里走一遍（这正是本票收在 `ready-for-walkthrough` 而
   不是 `done` 的原因）。走查时最值得盯的两条是第 3 步（那条记录只占一行、点开能滚到底）与第 4 步
   （它不进模型上下文 —— `sessions show` 与请求里的 `messages` 里都没有那张表）。
+- **收口（2026-10-21，维护者决定）**：㊼ 的真终端逐项走查**没有单独跑** —— 维护者确认「没什么
+  问题」，票直接走到 `done`，不留在 `ready-for-walkthrough`。留下的事实：走查条目本身已写好并留在
+  [`docs/tui-manual-checklist.md`](../../../docs/tui-manual-checklist.md)，下次开 TUI 时可随时补跑；
+  渲染行为这次以 `cargo test` 的 1944 条与上面那次复核为准。**这不是已知缺陷，只是没有逐项记录的
+  一次走查**。同一笔改动顺带合并了本票原先重复的两节 `## 评论`。
