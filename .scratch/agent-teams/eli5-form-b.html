@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>形态 B：平级 agent + 共享板 · 图解</title>
+<style>
+  :root{
+    --ink:#1a365d; --body:#2d3748; --muted:#718096;
+    --blue:#4299e1; --blue-bg:#ebf8ff; --blue-line:#90cdf4;
+    --orange:#dd6b20; --orange-bg:#fffaf0;
+    --green:#38a169; --green-bg:#f0fff4;
+    --red:#e53e3e; --red-bg:#fff5f5;
+    --purple:#805ad5; --purple-bg:#faf5ff;
+    --paper:#fff8f0; --card:#ffffff;
+    --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:0 16px 72px;
+    background:var(--paper); color:var(--body);
+    font-family:system-ui,-apple-system,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px; margin:0 auto}
+  header{text-align:center; padding:56px 0 4px}
+  h1{
+    font-size:clamp(30px,6.4vw,54px); color:var(--ink);
+    margin:0 0 10px; letter-spacing:.02em; line-height:1.25;
+  }
+  .sub{color:var(--muted); font-size:clamp(15px,2.4vw,19px); margin:0}
+  .card{
+    background:var(--card); border-radius:30px;
+    padding:24px 20px 30px; margin:20px 0;
+    box-shadow:0 8px 30px rgba(26,54,93,.09);
+  }
+  .card h2{
+    font-size:clamp(21px,3.6vw,30px); color:var(--ink);
+    margin:12px 0 0; text-align:center; line-height:1.35;
+  }
+  .lead{
+    font-size:clamp(18px,2.9vw,25px); text-align:center;
+    margin:10px 0 0; font-weight:700; color:var(--ink);
+  }
+  .small{
+    font-size:clamp(14px,2.2vw,17px); text-align:center;
+    color:var(--muted); margin:8px 0 0;
+  }
+  .fig{margin:0}
+  svg{display:block; width:100%; height:auto}
+  .kicker{
+    display:inline-block; padding:4px 14px; border-radius:999px;
+    font-size:13px; font-weight:700; letter-spacing:.06em;
+    background:var(--blue-bg); color:var(--blue);
+  }
+  .center{text-align:center}
+
+  /* 卡片格 */
+  .grid{display:grid; gap:14px; margin-top:22px}
+  @media (min-width:720px){ .grid{grid-template-columns:1fr 1fr} }
+  .tile{
+    display:flex; gap:14px; align-items:flex-start;
+    padding:16px 18px; border-radius:20px;
+    background:var(--blue-bg); border:2px solid var(--blue-line);
+  }
+  .tile .icon{font-size:40px; line-height:1.1; flex:0 0 auto}
+  .tile h3{margin:0; font-size:clamp(17px,2.6vw,21px); color:var(--ink)}
+  .tile p{margin:4px 0 0; font-size:clamp(13px,2vw,15.5px); color:var(--body)}
+  .tile .who{display:block; margin-top:6px; font-size:clamp(12px,1.9vw,14px); color:var(--muted)}
+  .tile.o{background:var(--orange-bg); border-color:#fbd38d}
+  .tile.g{background:var(--green-bg); border-color:#9ae6b4}
+  .tile.r{background:var(--red-bg); border-color:#feb2b2}
+  .tile.p{background:var(--purple-bg); border-color:#d6bcfa}
+
+  /* 对照行 */
+  .rows{margin-top:20px; border:2px solid var(--line); border-radius:20px; overflow:hidden}
+  .row{display:flex; flex-wrap:wrap; gap:6px 14px; padding:13px 18px; border-top:2px solid var(--line)}
+  .row:first-child{border-top:0}
+  .row .k{flex:1 1 150px; font-weight:700; color:var(--ink)}
+  .row .v{flex:2 1 260px; color:var(--body)}
+  .row:nth-child(odd){background:#fbfdff}
+
+  footer{text-align:center; margin:44px 0 0; color:var(--muted); font-size:14px}
+  .final{
+    background:var(--ink); color:#fff; border-radius:30px;
+    padding:34px 24px; text-align:center; margin-top:26px;
+  }
+  .final p{margin:0; font-size:clamp(19px,3.3vw,27px); font-weight:700; line-height:1.6}
+  .final p + p{margin-top:10px; font-size:clamp(14px,2.3vw,18px); font-weight:400; color:#cbd5e0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>形态 B：一群小人 + 一块公共板</h1>
+    <p class="sub">给完全不懂的人看的图解 · 全是大白话</p>
+  </header>
+
+  <!-- ① 两种玩法 -->
+  <section class="card">
+    <h2>先看两种玩法</h2>
+    <p class="lead">形态 A：老板派人，干完只向老板汇报</p>
+    <div class="fig">
+      <svg viewBox="0 0 640 300" role="img" aria-label="左边：一个人派活，下面三个人干完只把结果交回给上面那个人；右边：三个人并排，共享一块任务板，彼此之间互相发消息">
+        <rect width="320" height="300" fill="#f7fafc"/>
+        <rect x="320" width="320" height="300" fill="#f7fafc"/>
+
+        <!-- 左：形态 A -->
+        <text x="160" y="40" text-anchor="middle" font-size="21" fill="#2b6cb0" font-weight="700">形态 A</text>
+        <text x="160" y="96" text-anchor="middle" font-size="54"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">👔</text>
+        <text x="160" y="128" text-anchor="middle" font-size="17" fill="#2d3748">老板</text>
+
+        <path d="M160 140 L160 170" stroke="#a0aec0" stroke-width="5" marker-end="url(#ar)"/>
+        <path d="M60 180 L260 180" stroke="#a0aec0" stroke-width="5" marker-end="url(#ar)"/>
+        <path d="M160 196 L160 214" stroke="#a0aec0" stroke-width="5" marker-end="url(#ar)"/>
+
+        <text x="60" y="252" text-anchor="middle" font-size="44"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <text x="160" y="252" text-anchor="middle" font-size="44"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <text x="260" y="252" text-anchor="middle" font-size="44"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <text x="60" y="288" text-anchor="middle" font-size="15" fill="#718096">只回老板</text>
+        <text x="160" y="288" text-anchor="middle" font-size="15" fill="#718096">只回老板</text>
+        <text x="260" y="288" text-anchor="middle" font-size="15" fill="#718096">只回老板</text>
+        <text x="248" y="240" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🚫</text>
+
+        <!-- 右：形态 B -->
+        <text x="480" y="40" text-anchor="middle" font-size="21" fill="#2b6cb0" font-weight="700">形态 B</text>
+        <text x="480" y="96" text-anchor="middle" font-size="54"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">👔</text>
+        <text x="480" y="128" text-anchor="middle" font-size="17" fill="#2d3748">老板</text>
+
+        <path d="M480 140 L480 170" stroke="#a0aec0" stroke-width="5" marker-end="url(#ar)"/>
+
+        <rect x="392" y="196" width="176" height="52" rx="16" fill="#ebf8ff" stroke="#4299e1" stroke-width="4"/>
+        <text x="480" y="229" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📋</text>
+        <text x="480" y="272" text-anchor="middle" font-size="16" fill="#2b6cb0" font-weight="700">公共任务板</text>
+
+        <text x="386" y="176" text-anchor="middle" font-size="40"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <text x="480" y="176" text-anchor="middle" font-size="40"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <text x="574" y="176" text-anchor="middle" font-size="40"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+
+        <path d="M398 196 L398 206" stroke="#4299e1" stroke-width="4"/>
+        <path d="M562 196 L562 206" stroke="#4299e1" stroke-width="4"/>
+        <path d="M404 160 C 440 128, 520 128, 556 160" stroke="#805ad5" stroke-width="5" fill="none"
+              marker-end="url(#arp)"/>
+        <text x="480" y="126" text-anchor="middle" font-size="22"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">💬</text>
+
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#a0aec0"/>
+          </marker>
+          <marker id="arp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#805ad5"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="small">左边：下面几个人<b>彼此不通气</b>。右边：他们<b>能互相说话</b>，而且<b>共用一块板</b>。</p>
+  </section>
+
+  <!-- ② 四个零件 -->
+  <section class="card">
+    <h2>形态 B 只有四个零件</h2>
+    <div class="grid">
+      <div class="tile">
+        <div class="icon">🧑‍💻</div>
+        <div>
+          <h3>成员</h3>
+          <p>每个人有自己的窗口、自己想干的事，互相看不见对方的脑内。</p>
+          <span class="who">= 一支队伍里的几个人</span>
+        </div>
+      </div>
+      <div class="tile o">
+        <div class="icon">📮</div>
+        <div>
+          <h3>信箱</h3>
+          <p>给谁留个话，下次它醒过来就看见。</p>
+          <span class="who">= 消息</span>
+        </div>
+      </div>
+      <div class="tile g">
+        <div class="icon">📋</div>
+        <div>
+          <h3>任务板</h3>
+          <p>所有待办写在同一块板上，谁都能看、谁都能领。</p>
+          <span class="who">= 共享状态</span>
+        </div>
+      </div>
+      <div class="tile p">
+        <div class="icon">👔</div>
+        <div>
+          <h3>老板</h3>
+          <p>也是普通成员，只是多了三样权力：建人、催人、掐人。</p>
+          <span class="who">= 领队（lead）</span>
+        </div>
+      </div>
+    </div>
+    <p class="small">真正的规矩只有一条：<b>机器不替人分工</b>，分工是老板（模型）自己调工具决定的。</p>
+  </section>
+
+  <!-- ③ 流程 -->
+  <section class="card">
+    <h2>一次完整的工作流程</h2>
+    <div class="fig">
+      <svg viewBox="0 0 640 470" role="img" aria-label="六步流程：人给老板一句话，老板在板上写三张卡，成员醒来各自领走一张卡，成员之间互相留言，成员干完把卡标成完成并解锁下一张，最后老板汇总">
+        <rect width="640" height="470" rx="18" fill="#f7fafc"/>
+
+        <g font-family="system-ui,'Noto Color Emoji',sans-serif" font-size="36" text-anchor="middle">
+          <!-- 1 -->
+          <circle cx="66" cy="46" r="25" fill="#4299e1"/>
+          <text x="66" y="57" font-size="24" fill="#fff">1</text>
+          <text x="120" y="54" font-size="38">🙋</text>
+          <text x="175" y="44" font-size="20" fill="#1a365d" font-weight="700">人对老板说一句话</text>
+          <text x="175" y="68" font-size="16" fill="#718096" font-family="system-ui,sans-serif">「这活拆三块，谁爱干谁干」</text>
+
+          <path d="M66 78 L66 104" stroke="#cbd5e0" stroke-width="5" marker-end="url(#ar2)"/>
+
+          <!-- 2 -->
+          <circle cx="66" cy="130" r="25" fill="#4299e1"/>
+          <text x="66" y="141" font-size="24" fill="#fff">2</text>
+          <text x="120" y="138" font-size="38">👔</text>
+          <text x="175" y="128" font-size="20" fill="#1a365d" font-weight="700">老板在板上写三张卡</text>
+          <text x="175" y="152" font-size="16" fill="#718096" font-family="system-ui,sans-serif">板子只写标题，谁做还没定</text>
+
+          <path d="M66 162 L66 188" stroke="#cbd5e0" stroke-width="5" marker-end="url(#ar2)"/>
+
+          <!-- 3 -->
+          <circle cx="66" cy="214" r="25" fill="#38a169"/>
+          <text x="66" y="225" font-size="24" fill="#fff">3</text>
+          <text x="120" y="222" font-size="38">🧑‍💻</text>
+          <text x="175" y="212" font-size="20" fill="#1a365d" font-weight="700">成员醒了，自己去领卡</text>
+          <text x="175" y="236" font-size="16" fill="#718096" font-family="system-ui,sans-serif">锁着的卡先不碰，等前面的做完</text>
+
+          <path d="M66 246 L66 272" stroke="#cbd5e0" stroke-width="5" marker-end="url(#ar2)"/>
+
+          <!-- 4 -->
+          <circle cx="66" cy="298" r="25" fill="#805ad5"/>
+          <text x="66" y="309" font-size="24" fill="#fff">4</text>
+          <text x="120" y="306" font-size="38">💬</text>
+          <text x="175" y="296" font-size="20" fill="#1a365d" font-weight="700">他们互相留言</text>
+          <text x="175" y="320" font-size="16" fill="#718096" font-family="system-ui,sans-serif">「你改的那行我也要改」</text>
+
+          <path d="M66 330 L66 356" stroke="#cbd5e0" stroke-width="5" marker-end="url(#ar2)"/>
+
+          <!-- 5 -->
+          <circle cx="66" cy="382" r="25" fill="#38a169"/>
+          <text x="66" y="393" font-size="24" fill="#fff">5</text>
+          <text x="120" y="390" font-size="38">✅</text>
+          <text x="175" y="380" font-size="20" fill="#1a365d" font-weight="700">干完，把卡标成完成</text>
+          <text x="175" y="404" font-size="16" fill="#718096" font-family="system-ui,sans-serif">后面那张锁着的卡自动解锁</text>
+
+          <path d="M66 414 L66 440" stroke="#cbd5e0" stroke-width="5" marker-end="url(#ar2)"/>
+
+          <!-- 6 -->
+          <text x="120" y="446" font-size="38">👔</text>
+          <text x="175" y="442" font-size="20" fill="#1a365d" font-weight="700">老板汇总，交回给人</text>
+        </g>
+
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#cbd5e0"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="small">人只在<b>开头说一句话</b>、<b>结尾收一份结果</b>；中间谁跟谁说话、板子怎么变，机器不管。</p>
+  </section>
+
+  <!-- ④ 板子长什么样 -->
+  <section class="card">
+    <h2>板子长什么样</h2>
+    <div class="fig">
+      <svg viewBox="0 0 640 280" role="img" aria-label="一块任务板，上面有三张卡：一张进行中并标了负责人，一张被锁住依赖前一张，一张已完成打勾">
+        <rect width="640" height="280" rx="18" fill="#f7fafc"/>
+        <rect x="24" y="20" width="592" height="240" rx="20" fill="#ebf8ff" stroke="#90cdf4" stroke-width="5"/>
+
+        <!-- 卡 1 -->
+        <rect x="52" y="48" width="170" height="184" rx="16" fill="#fff" stroke="#38a169" stroke-width="4"/>
+        <text x="137" y="88" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🔨</text>
+        <text x="137" y="118" text-anchor="middle" font-size="17" fill="#1a365d" font-weight="700">改登录那块</text>
+        <text x="137" y="146" text-anchor="middle" font-size="15" fill="#718096" font-family="system-ui,sans-serif">进行中</text>
+        <text x="137" y="178" text-anchor="middle" font-size="15" fill="#2d3748" font-family="system-ui,sans-serif">负责人：小 A</text>
+        <text x="137" y="206" text-anchor="middle" font-size="14" fill="#718096" font-family="system-ui,sans-serif">已领走</text>
+
+        <!-- 卡 2 -->
+        <rect x="235" y="48" width="170" height="184" rx="16" fill="#fff" stroke="#dd6b20" stroke-width="4"/>
+        <text x="320" y="88" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🔒</text>
+        <text x="320" y="118" text-anchor="middle" font-size="17" fill="#1a365d" font-weight="700">写测试</text>
+        <text x="320" y="146" text-anchor="middle" font-size="15" fill="#dd6b20" font-family="system-ui,sans-serif">等前面那块做完</text>
+        <text x="320" y="180" text-anchor="middle" font-size="14" fill="#718096" font-family="system-ui,sans-serif">还不能领</text>
+
+        <!-- 卡 3 -->
+        <rect x="418" y="48" width="170" height="184" rx="16" fill="#fff" stroke="#a0aec0" stroke-width="4"/>
+        <text x="503" y="88" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">✅</text>
+        <text x="503" y="118" text-anchor="middle" font-size="17" fill="#1a365d" font-weight="700">查日志</text>
+        <text x="503" y="146" text-anchor="middle" font-size="15" fill="#718096" font-family="system-ui,sans-serif">已完成</text>
+        <text x="503" y="180" text-anchor="middle" font-size="14" fill="#718096" font-family="system-ui,sans-serif">负责人：小 B</text>
+
+        <!-- 板子标题 -->
+        <text x="320" y="245" text-anchor="middle" font-size="18" fill="#2b6cb0" font-weight="700"
+              font-family="system-ui,sans-serif">一块板 · 谁都能看 · 谁都能领</text>
+      </svg>
+    </div>
+    <p class="small">板子存<b>在会话之外</b>，所以关掉终端也不丢；谁改了哪张卡，都要带上「我看到的是第几版」，旧了就拒。</p>
+  </section>
+
+  <!-- ⑤ 留言 vs 派活 -->
+  <section class="card">
+    <h2>说一句话有两种说法</h2>
+    <div class="fig">
+      <svg viewBox="0 0 640 240" role="img" aria-label="左边是留言：信投进信箱，成员还在睡；右边是派活：成员被立刻叫醒开始干活">
+        <rect width="640" height="240" rx="18" fill="#f7fafc"/>
+
+        <!-- 左：留言 -->
+        <rect x="24" y="24" width="284" height="192" rx="20" fill="#fffaf0" stroke="#fbd38d" stroke-width="4"/>
+        <text x="166" y="62" text-anchor="middle" font-size="22" fill="#dd6b20" font-weight="700"
+              font-family="system-ui,sans-serif">留言</text>
+        <text x="80" y="120" text-anchor="middle" font-size="42"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📮</text>
+        <text x="166" y="122" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">💤</text>
+        <text x="250" y="120" text-anchor="middle" font-size="42"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍💻</text>
+        <path d="M96 146 L236 146" stroke="#dd6b20" stroke-width="5" marker-end="url(#aro)"/>
+        <text x="166" y="186" text-anchor="middle" font-size="16" fill="#2d3748"
+              font-family="system-ui,sans-serif">信放进信箱，它下轮才看见</text>
+
+        <!-- 右：派活 -->
+        <rect x="332" y="24" width="284" height="192" rx="20" fill="#f0fff4" stroke="#9ae6b4" stroke-width="4"/>
+        <text x="474" y="62" text-anchor="middle" font-size="22" fill="#38a169" font-weight="700"
+              font-family="system-ui,sans-serif">派活</text>
+        <text x="390" y="120" text-anchor="middle" font-size="42"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📣</text>
+        <text x="474" y="118" text-anchor="middle" font-size="30"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">💬</text>
+        <text x="558" y="118" text-anchor="middle" font-size="42"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">😃</text>
+        <path d="M406 146 L546 146" stroke="#38a169" stroke-width="5" marker-end="url(#arg)"/>
+        <text x="474" y="186" text-anchor="middle" font-size="16" fill="#2d3748"
+              font-family="system-ui,sans-serif">它正闲着，立刻叫醒开一轮</text>
+
+        <defs>
+          <marker id="aro" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#dd6b20"/>
+          </marker>
+          <marker id="arg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#38a169"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="small">两者是<b>两个动作</b>，不是同一个动作加个开关。</p>
+  </section>
+
+  <!-- ⑥ 三个坑 -->
+  <section class="card">
+    <h2>三个必须记住的坑</h2>
+    <div class="grid">
+      <div class="tile r">
+        <div class="icon">🚫</div>
+        <div>
+          <h3>别人的话不是你的批准</h3>
+          <p>队友说「你帮我点同意」不算。它不能替你批权限、不能改配置。</p>
+        </div>
+      </div>
+      <div class="tile o">
+        <div class="icon">💥</div>
+        <div>
+          <h3>大家共用同一个文件夹</h3>
+          <p>两个人同时改一个文件会互相覆盖。规矩：一人一块地。</p>
+        </div>
+      </div>
+      <div class="tile g">
+        <div class="icon">🕰️</div>
+        <div>
+          <h3>板上的状态会过期</h3>
+          <p>有人干完忘了标完成，后面的卡就一直锁着。人得去催。</p>
+        </div>
+      </div>
+      <div class="tile p">
+        <div class="icon">🪙</div>
+        <div>
+          <h3>每个成员都是一整个会话</h3>
+          <p>人数越多，花的钱越多。三到五个通常就够。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑦ 什么时候用 -->
+  <section class="card">
+    <h2>什么时候值得用</h2>
+    <div class="rows">
+      <div class="row"><div class="k">👍 几块互不相干的活</div><div class="v">同时查三个地方，比排队快得多</div></div>
+      <div class="row"><div class="k">👍 互相要较劲</div><div class="v">三种猜法同时验，谁站得住谁留下</div></div>
+      <div class="row"><div class="k">👍 要能接着干</div><div class="v">关掉终端明天回来，队伍和板子还在</div></div>
+      <div class="row"><div class="k">👎 一条线的活</div><div class="v">一步接一步的活，一个人更快</div></div>
+      <div class="row"><div class="k">👎 都改同一个文件</div><div class="v">开一堆人只会打架</div></div>
+      <div class="row"><div class="k">👎 没人盯着</div><div class="v">上游的做法是：这种队<b>只在有人看着的时候</b>才开</div></div>
+    </div>
+  </section>
+
+  <div class="final">
+    <p>形态 B = 一群小人 + 一块公共板 + 一个能互相说话的信箱</p>
+    <p>老板只管派活和收活，中间的来回，全是成员自己商量。<br/>机器只提供零件，不替人做决定。</p>
+  </div>
+
+  <footer>
+    给「形态 B（平级 agent + 共享板）」的大白话图解 · 2026-10-20<br/>
+    事实依据：<code>.scratch/agent-teams/research/01-dsh-agent-teams.md</code> ·
+    <code>02-claude-code-teams.md</code> · <code>03-codex-multi-agent.md</code> ·
+    <code>04-other-agents.md</code>
+  </footer>
+
+</div>
+</body>
+</html>

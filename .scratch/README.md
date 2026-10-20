@@ -29,7 +29,7 @@
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |
 | [`sidebar-toggle/`](sidebar-toggle/spec.md) | spec | 左栏开关：`Ctrl-O` 收起与叫回 —— 意愿与宽度档**相乘**（< 80 列叫不回来）、意愿只活在进程内、提示行最末加一条 `ctrl-o 左栏`；推翻 `tui-sidebar` spec §2 与 `CONTEXT.md` 左栏词条里「去留只由宽度决定」那半句（2026-10-02，一次十问的 grilling，不建图） | 2 done + 1 ready-for-walkthrough（票 03 剩 ㉖ 的真机走查） |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
-| [`agent-teams/`](agent-teams/seed.md) | seed | 同目录的会话互相通信：信箱、共享任务板、团队成员怎么被看见（`task` 派出的执行者今天只共用同一份流） | — |
+| [`agent-teams/`](agent-teams/seed.md) | seed | 同目录的会话互相通信：信箱、共享任务板、团队成员怎么被看见（`task` 派出的执行者今天只共用同一份流）—— **2026-10-20 一手调研 + 选型初判**，材料在 [`research/`](agent-teams/research/)；**暂缓** | — |
 | [`session-panes/`](session-panes/spec.md) | map + spec | **多会话平铺与右侧栏**：顶部页签条 + 最多四会话并排 + 右栏（轨迹第一页）+ herdr 默认关左栏 —— 2026-10-17 十二张决策票折成 spec、十六张实现票全部落地 | 12/12 + 16/16 done |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示（票 11 裁决：**另开一张图**） | — |
 | [`interjection-flow/`](interjection-flow/seed.md) | seed | 运行中插入对话：排队等到边界，或立刻打断 | — |
