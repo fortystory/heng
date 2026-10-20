@@ -410,13 +410,17 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-20 新增 `wheel-routing` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
 #   15,250 / 79 → **15,500 / 80**（滚轮归属那一 feature 的 spec 索引行；见
 #   `.scratch/wheel-routing/spec.md`，七张实现票同日落地）。
+# **2026-10-21 新增 `link-emphasis` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   15,500 / 80 → **15,800 / 81**（文件链接的链接色与文件弹窗那一 feature 的 spec 索引行；见
+#   `.scratch/link-emphasis/spec.md`）。同日 `tool-declaration-visibility` 那一行从**种子**改成
+#   **决策图**（形态与票数各换一次，行数与体量都动）。
 ENTRY_BUDGET = {
     # 2026-10-19：补 ADR 0025 的索引入口，README 实测 20,031 —— 一次显式上调：
     # 19,950 → 20,100（终点 18,500 不变）。
     "README.md": {"chars": 20100, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 15500,
-        "lines": 80,
+        "chars": 15800,
+        "lines": 81,
         "target_chars": 13500,
         "target_lines": 100,
     },
