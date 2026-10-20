@@ -6303,7 +6303,7 @@ impl TuiState {
         self.close_file_viewer();
         let body = files::read(&self.cwd, path);
         let detail = Detail {
-            title: path.to_owned(),
+            title: self.file_title(path),
             // 文件不是谁说的话：标题用正文档那一档，与树里那一行同一个颜色。
             color: palette::PLAIN,
             // 文件是**单面**详情，没有概述面要这两样。
@@ -6316,6 +6316,26 @@ impl TuiState {
         let width = layout::plan(self.area, 1, self.sidebar_wanted, self.right_wanted)
             .detail_text_width() as usize;
         self.open_detail(detail, width, DetailOpener::Files, None);
+    }
+
+    /// 文件详情的标题：**工作区相对路径**。
+    ///
+    /// 从链接点进来的路径是**绝对路径**（`resolve()` 给的），照原样写进标题就是一长串；
+    /// 落在工作区里就写成相对路径。左栏文件页那一路给的是相对路径 —— 剥不掉前缀，
+    /// 行为一个字不变。
+    fn file_title(&self, path: &str) -> String {
+        let target = std::path::Path::new(path);
+        if let Ok(relative) = target.strip_prefix(&self.cwd) {
+            return relative.to_string_lossy().into_owned();
+        }
+        // 链接那一路给的是**绝对路径**，而 `resolve()` 顺手把符号链接解开了；工作区本身
+        // 也可能带着一条符号链接 —— 于是按解开后的那个根再试一次。
+        if let Ok(root) = self.cwd.canonicalize()
+            && let Ok(relative) = target.strip_prefix(&root)
+        {
+            return relative.to_string_lossy().into_owned();
+        }
+        path.to_owned()
     }
 
     /// 焦点所在的那一行。
@@ -7938,8 +7958,11 @@ impl TuiState {
     /// 那一行的列（扣掉 `lead`）落在某个候选里、候选解析得出目标。解析不出来（不存在、区外、
     /// 不可解析）就**什么都不发生、也不留回执** —— 点一段普通文字本来就该没有反应。
     ///
-    /// 只有一个副作用：把目标放进 `open_request`。起进程是运行期的事，状态机因此仍然不必
-    /// 碰终端，也不必起浏览器。
+    /// 解析出来之后**分路**（`.scratch/link-emphasis/spec.md` §3）：URL 与**目录**交给宿主
+    /// （`xdg-open`），**文件**走文件查看器那一扇门 —— 与左栏文件页同一扇（[`Self::open_file`]）。
+    ///
+    /// 这一路**不过 `bash` 工具、不过权限门、不进沙箱** —— 与 `xdg-open` 同一条纪律：
+    /// 宿主侧动作，模型触发不了它。
     fn follow_link(&mut self, column: u16, row: u16) -> bool {
         let Some(area) = self.conversation_rect else {
             return false;
@@ -7965,11 +7988,19 @@ impl TuiState {
         let Some(hot) = line.hotspots.iter().find(|hot| hot.covers(at)) else {
             return false;
         };
-        let Some(target) = hot.target.resolve(&self.cwd) else {
-            return false;
-        };
-        self.open_request = Some(target);
-        self.mark_dirty();
+        match link_route(&hot.target, &self.cwd) {
+            // 交给宿主：URL 与目录都是这一条。起进程是运行期的事，状态机因此仍然不必
+            // 碰终端，也不必起浏览器。
+            LinkRoute::Host(target) => {
+                self.open_request = Some(target);
+                self.mark_dirty();
+            }
+            // 文件走文件查看器那一扇门。**不给提示行打回执** —— 浮层本身就是回执，
+            // 与左栏文件页同一纪律。
+            LinkRoute::File(path) => self.open_file(&path),
+            // 解析不出来（不存在、区外）：什么都不发生、也不留回执 —— 今天一样。
+            LinkRoute::Nothing => return false,
+        }
         true
     }
 
@@ -9356,6 +9387,38 @@ impl TuiState {
                 self.right_wanted,
             )),
         }
+    }
+}
+
+/// 一条链接点下去之后走哪条路（`.scratch/link-emphasis/spec.md` §3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LinkRoute {
+    /// 交给宿主（`xdg-open`）：**URL** 与**目录**都是这一条。
+    Host(String),
+    /// 走文件查看器那一扇门（与左栏文件页同一扇）：这是一个工作区里的**普通文件**。
+    File(String),
+    /// 什么都不发生：路径解析不出来（不存在、在区外）。
+    Nothing,
+}
+
+/// 一个候选该走哪条路。
+///
+/// **URL** 原样交给宿主；**路径**照 [`links::Target::resolve`] 的判据解析 —— 真存在、且落在
+/// 工作区里 —— 判据一个字不动。解析不出来就什么都不发生（连回执也不留）。
+///
+/// 解析出来的是**普通文件**就走文件查看器那一扇门；是**目录**就仍旧交给宿主（内置预览读不了
+/// 目录）。别的（管道、设备）也交给宿主：读它会**卡住**整个界面，而弹窗那一档是「看文件」的。
+fn link_route(target: &links::Target, cwd: &std::path::Path) -> LinkRoute {
+    if let links::Target::Url(url) = target {
+        return LinkRoute::Host(url.clone());
+    }
+    let Some(resolved) = target.resolve(cwd) else {
+        return LinkRoute::Nothing;
+    };
+    if std::path::Path::new(&resolved).is_file() {
+        LinkRoute::File(resolved)
+    } else {
+        LinkRoute::Host(resolved)
     }
 }
 
@@ -15990,7 +16053,7 @@ fn file_body_lines(path: &str, text: &str, width: usize) -> Vec<DetailLine> {
 /// 续行顶格 —— 与 [`file_body_lines`] 同形。没有行号的行（hunk 头、`\ No newline`）在那一列
 /// 留白。
 ///
-/// 上色是**两层合成**（与 markdown 代码块、文件弹窗同一套）：剥掉 diff 标记之后，剩下的代码
+/// 上色是**两层合成**（与 markdown 代码块、文件查看器同一套）：剥掉 diff 标记之后，剩下的代码
 /// 按这个文件的**扩展名**认语言做语法高亮，再把 diff 那一档铺上去 —— 新增给背景、删除给另一
 /// 种背景、hunk 头给前景。于是一行既是「新增」又是「字符串」，谁也不用让位。
 fn diff_body_lines(path: &str, patch: &[changes::PatchLine], width: usize) -> Vec<DetailLine> {
@@ -17508,11 +17571,192 @@ mod tests {
         assert!(state.file_viewer.is_none());
     }
 
+    // --- 链接热区：点一条文件链接走文件查看器（`.scratch/link-emphasis/spec.md` §3） --------
+
+    /// 工作目录就是**仓库根**的状态。
+    ///
+    /// 链接热区里的路径要真存在、真在区内才解析得出目标
+    /// （`.scratch/clickable-links/spec.md` §3），而那个判据正是这几条测试要问的。
+    fn state_at_repo() -> TuiState {
+        let mut state = state();
+        state.cwd = std::env::current_dir()
+            .expect("测试的工作目录")
+            .canonicalize()
+            .expect("仓库根");
+        state
+    }
+
+    /// 一条给讨论者的 `MessageCompleted`：正文进对话视图。
+    fn said(text: &str) -> RenderEvent {
+        RenderEvent::Logged {
+            session: crate::events::SessionId::new("s-1"),
+            event: crate::events::Event::new(
+                1,
+                crate::events::SpeakerId::Debater("kimi".into()),
+                crate::events::EventPayload::MessageCompleted {
+                    role: crate::events::Role::Assistant,
+                    text: text.to_owned(),
+                    reasoning: None,
+                    first_token_ms: None,
+                },
+            ),
+        }
+    }
+
+    /// 那一块里那段文字的左端列与它所在的那一行（**屏幕**坐标）。
+    fn cell_of(frame: &ratatui::buffer::Buffer, area: Rect, needle: &str) -> Option<(u16, u16)> {
+        for y in area.y..area.bottom() {
+            // 一个宽字素占两格：按它的显示宽度往前走，别把后半格读成另一个空格。
+            let mut line = String::new();
+            let mut x = area.x;
+            while x < area.right() {
+                let symbol = frame[(x, y)].symbol();
+                line.push_str(symbol);
+                x += text_columns(symbol).max(1) as u16;
+            }
+            if let Some(at) = line.find(needle) {
+                return Some((area.x + text_columns(&line[..at]) as u16, y));
+            }
+        }
+        None
+    }
+
+    /// 画一帧，点**对话视图里**那段文字所在的那一格。
+    fn click_text(state: &mut TuiState, width: u16, height: u16, needle: &str) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
+        let frame = terminal
+            .draw(|frame| draw_frame(frame, state))
+            .expect("画一帧");
+        let area = state.conversation_rect.expect("对话视图占了一块");
+        let (column, row) = cell_of(frame.buffer, area, needle)
+            .unwrap_or_else(|| panic!("对话视图里没有 {needle:?}"));
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            state.mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    }
+
+    #[test]
+    fn clicking_a_workspace_file_opens_it_in_the_file_popup() {
+        // 点一条工作区文件链接 → 走**文件查看器**那一扇门（与左栏文件页同一扇），
+        // 而不是交给宿主的 `xdg-open`（`.scratch/link-emphasis/spec.md` §3）。
+        let mut state = state_at_repo();
+        state.apply(said("跑完了：Cargo.toml"));
+        click_text(&mut state, 120, 24, "Cargo.toml");
+
+        assert!(state.detail.is_some(), "内置预览那一档：详情覆盖层立着");
+        assert!(state.file_viewer.is_none(), "没起外来屏幕");
+        assert_eq!(
+            state.take_open_request(),
+            None,
+            "文件链接不交给宿主：浮层本身就是回执"
+        );
+        assert!(state.opened.is_none(), "也不给提示行打回执");
+    }
+
+    #[test]
+    fn the_file_detail_title_is_the_workspace_relative_path() {
+        // 链接那一路给的是**绝对路径**（`resolve()` 给的），照原样写进标题就是一长串 ——
+        // 标题该说的是**工作区相对路径**（`.scratch/link-emphasis/spec.md` §3）。
+        let mut state = state_at_repo();
+        state.apply(said("跑完了：Cargo.toml"));
+        click_text(&mut state, 120, 24, "Cargo.toml");
+
+        let title = &state.detail.as_ref().expect("详情覆盖层立着").detail.title;
+        assert_eq!(title, "Cargo.toml", "标题是工作区相对路径");
+    }
+
+    #[test]
+    fn clicking_a_url_still_asks_the_host_to_open_it() {
+        // URL 仍走 `xdg-open`（`.scratch/link-emphasis/spec.md` §3）：它不是工作区里的文件。
+        let mut state = state_at_repo();
+        state.apply(said("见 https://example.com/x 那一页"));
+        click_text(&mut state, 120, 24, "https://example.com/x");
+
+        assert_eq!(
+            state.take_open_request(),
+            Some("https://example.com/x".to_owned()),
+            "URL 原样交给宿主"
+        );
+        assert!(state.detail.is_none(), "不开详情覆盖层");
+        assert!(state.file_viewer.is_none(), "不起外来屏幕");
+    }
+
+    #[test]
+    fn clicking_a_directory_still_asks_the_host_to_open_it() {
+        // 目录仍旧走 `xdg-open`：内置预览读不了目录，这一档是「看文件」的。
+        let mut state = state_at_repo();
+        state.apply(said("看这个 src/render"));
+        click_text(&mut state, 120, 24, "src/render");
+
+        let root = std::env::current_dir()
+            .expect("测试的工作目录")
+            .canonicalize()
+            .expect("仓库根");
+        assert_eq!(
+            state.take_open_request(),
+            Some(root.join("src/render").to_string_lossy().into_owned()),
+            "目录交给宿主去开"
+        );
+        assert!(state.detail.is_none(), "不开详情覆盖层");
+    }
+
+    #[test]
+    fn a_missing_or_outside_path_does_nothing() {
+        // 解析不出来（不存在、在区外）：**什么都不发生、也不留回执** —— 今天一样。
+        for text in ["没有这个文件.html", "/etc/hostname"] {
+            let mut state = state_at_repo();
+            state.apply(said(text));
+            click_text(&mut state, 120, 24, text);
+
+            assert_eq!(state.take_open_request(), None, "{text} 不该被打开");
+            assert!(state.detail.is_none(), "{text} 不该开出详情覆盖层");
+            assert!(state.opened.is_none(), "{text} 不该留下回执");
+        }
+    }
+
+    #[test]
+    fn clicking_a_workspace_file_with_the_nvim_viewer_takes_the_file_door() {
+        // `[ui] file_viewer = "nvim"` 那一档：文件链接走**同一扇门**的另一档
+        // （`.scratch/link-emphasis/spec.md` §3）。
+        //
+        // 这一条**不要求真 nvim**：那一档的判定住在 `open_file` 里（`FileViewer::kind` →
+        // 那一扇门），仓库里既有的文件页用例已经钉住它。而 `NvimViewer::spawn` 起不来
+        // （PATH 上没有 nvim、pty 开不出来）会**回退内置预览** —— 那是**环境**决定的，
+        // 拿它当断言就是拿环境当实现。
+        //
+        // 这里要钉的是两件事：文件链接**不交给宿主**，而是走文件那一扇门 —— 外来屏幕，
+        // 或者它起不来时回退的内置预览。
+        let mut state = state_at_repo();
+        state.view.facts.file_viewer.kind = crate::config::FileViewer::Nvim;
+        state.apply(said("跑完了：Cargo.toml"));
+        click_text(&mut state, 120, 24, "Cargo.toml");
+
+        assert_eq!(state.take_open_request(), None, "文件链接不交给宿主");
+        assert!(
+            state.file_viewer.is_some() || state.detail.is_some(),
+            "走的是文件那一扇门：外来屏幕，或它起不来时回退的内置预览"
+        );
+        state.close_file_viewer(); // 别把一个进程留在后台
+    }
+
     #[test]
     fn note_rows_keeps_the_hotspots_it_just_marked() {
         // 两件事出自**同一次**识别：下划线铺在这一行上，候选跟着进屏幕文本层
-        // （`.scratch/clickable-links/spec.md` §2）。命中那一半要等点击那条路（票 02），
-        // 这一条钉住的是记下来的账本身 —— 列区间与画出来的文本对齐。
+        // （`.scratch/clickable-links/spec.md` §2）。命中那一半在点击那条路上
+        // （`.scratch/link-emphasis/spec.md` §3），这一条钉住的是记下来的账本身 ——
+        // 列区间与画出来的文本对齐。
         let mut state = state();
         let mut rows = vec![Line::from("见 x.html 与 https://a.example/b")];
         let folded = [false];

@@ -9305,7 +9305,10 @@ fn clicking_a_url_in_the_conversation_asks_to_open_it() {
 }
 
 #[test]
-fn clicking_a_workspace_file_asks_to_open_its_absolute_path() {
+fn clicking_a_workspace_file_opens_it_in_the_file_popup() {
+    // 文件链接走**文件弹窗**那一扇门（`.scratch/link-emphasis/spec.md` §3）——
+    // 它取代了「文件传绝对路径，交给系统去挑程序」：那一扇门已经在界面里
+    // （与左栏文件页同一扇）。
     let mut state = state_at_repo();
     state.apply(message(1, "跑完了：Cargo.toml", None));
     let frame = buffer(120, 24, &mut state);
@@ -9313,14 +9316,16 @@ fn clicking_a_workspace_file_asks_to_open_its_absolute_path() {
 
     click(&mut state, column + 2, row);
 
-    let root = std::env::current_dir()
-        .expect("测试的工作目录")
-        .canonicalize()
-        .expect("仓库根");
     assert_eq!(
         state.take_open_request(),
-        Some(root.join("Cargo.toml").to_string_lossy().into_owned()),
-        "文件传绝对路径，交给系统去挑程序"
+        None,
+        "文件不交给宿主：浮层本身就是回执"
+    );
+    assert!(
+        screen_lines(120, 24, &mut state)
+            .join("\n")
+            .contains("[package]"),
+        "弹窗里是文件的内容"
     );
 }
 
