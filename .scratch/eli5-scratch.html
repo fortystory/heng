@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>.scratch/ 是什么：工单台 · 图解</title>
+<style>
+  :root{
+    --ink:#1a365d; --body:#2d3748; --muted:#718096;
+    --blue:#4299e1; --blue-bg:#ebf8ff; --blue-line:#90cdf4;
+    --orange:#dd6b20; --orange-bg:#fffaf0; --orange-line:#f6ad55;
+    --green:#38a169; --green-bg:#f0fff4; --green-line:#68d391;
+    --red:#e53e3e;   --red-bg:#fff5f5;   --red-line:#fc8181;
+    --purple:#805ad5;--purple-bg:#faf5ff;--purple-line:#b794f4;
+    --gray:#718096;  --gray-bg:#f7fafc;  --gray-line:#cbd5e0;
+    --paper:#fff8f0; --card:#ffffff; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:0 16px 72px;
+    background:var(--paper); color:var(--body);
+    font-family:system-ui,-apple-system,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:960px; margin:0 auto}
+  header{text-align:center; padding:52px 0 4px}
+  h1{font-size:clamp(30px,6.2vw,52px); color:var(--ink); margin:0 0 10px; line-height:1.22; letter-spacing:.01em}
+  .sub{color:var(--muted); font-size:clamp(15px,2.4vw,19px); margin:0 auto; max-width:40em}
+  .card{
+    background:var(--card); border-radius:28px;
+    padding:26px 22px 30px; margin:22px 0;
+    box-shadow:0 8px 30px rgba(26,54,93,.09);
+  }
+  .card h2{
+    font-size:clamp(21px,3.4vw,29px); color:var(--ink);
+    margin:4px 0 0; text-align:center; line-height:1.35;
+  }
+  .lead{font-size:clamp(17px,2.7vw,23px); text-align:center; margin:10px 0 0; font-weight:700; color:var(--ink)}
+  .small{font-size:clamp(13px,2.1vw,16px); text-align:center; color:var(--muted); margin:8px 0 0}
+  .kicker{display:inline-block; padding:4px 14px; border-radius:999px; font-size:13px; font-weight:700; letter-spacing:.06em; background:var(--blue-bg); color:var(--blue)}
+  .center{text-align:center}
+  svg{display:block; width:100%; height:auto}
+  .svgbox{margin:18px 0 6px}
+
+  /* 目录树 */
+  .tree{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Noto Sans Mono CJK SC",monospace;
+    font-size:clamp(12px,1.85vw,16px); line-height:2.05;
+    background:var(--gray-bg); border:1px solid var(--line); border-radius:16px;
+    padding:18px 16px; margin:18px 0 8px; overflow-x:auto;
+  }
+  .tree .row{display:block; white-space:pre}
+  .f{display:inline-block; padding:1px 8px; border-radius:7px; font-weight:700}
+  .f.idx{background:var(--gray-bg); color:var(--gray); border:1px solid var(--gray-line)}
+  .f.dir{background:var(--blue-bg); color:var(--blue); border:1px solid var(--blue-line)}
+  .f.seed{background:var(--gray-bg); color:var(--gray); border:1px solid var(--gray-line)}
+  .f.map{background:var(--purple-bg); color:var(--purple); border:1px solid var(--purple-line)}
+  .f.spec{background:var(--blue-bg); color:var(--blue); border:1px solid var(--blue-line)}
+  .f.ticket{background:var(--orange-bg); color:var(--orange); border:1px solid var(--orange-line)}
+  .f.res{background:var(--green-bg); color:var(--green); border:1px solid var(--green-line)}
+  .f.proto{background:var(--red-bg); color:var(--red); border:1px solid var(--red-line)}
+  .note{color:var(--muted); font-weight:400}
+
+  /* 四种角色 */
+  .roles{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-top:18px}
+  .role{border-radius:18px; padding:16px 16px 18px; border:2px solid var(--line); background:#fff}
+  .role h3{margin:0 0 6px; font-size:19px; color:var(--ink); display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .role p{margin:6px 0 0; font-size:15px}
+  .role .badge{display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; background:var(--gray-bg); color:var(--gray); border:1px solid var(--gray-line)}
+  .role.seed{border-color:var(--gray-line); background:var(--gray-bg)}
+  .role.map{border-color:var(--purple-line); background:var(--purple-bg)}
+  .role.spec{border-color:var(--blue-line); background:var(--blue-bg)}
+  .role.ticket{border-color:var(--orange-line); background:var(--orange-bg)}
+  .role code{background:rgba(26,54,93,.07); padding:1px 6px; border-radius:6px; font-size:13px}
+
+  /* 流水线 */
+  .pipe{display:flex; align-items:stretch; gap:6px; flex-wrap:wrap; justify-content:center; margin:20px 0 6px}
+  .pbox{border-radius:16px; padding:14px 14px 16px; border:2px solid; min-width:150px; flex:1 1 150px; max-width:230px; background:#fff}
+  .pbox .t{font-weight:800; font-size:16px; color:var(--ink); margin:0 0 4px}
+  .pbox .f2{font-size:13px; color:var(--muted); margin:0}
+  .pbox.g{background:var(--green-bg); border-color:var(--green-line)}
+  .pbox.b{background:var(--blue-bg); border-color:var(--blue-line)}
+  .pbox.o{background:var(--orange-bg); border-color:var(--orange-line)}
+  .pbox.p{background:var(--purple-bg); border-color:var(--purple-line)}
+  .pbox.y{background:var(--gray-bg); border-color:var(--gray-line)}
+  .parrow{align-self:center; font-size:26px; color:var(--blue); font-weight:800; padding:0 2px}
+  .skill{font-size:12px; color:var(--muted); text-align:center; margin:2px 0 0}
+  .flowline{display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:center}
+  .flowline .pbox{min-width:130px; flex:1 1 130px; max-width:190px; padding:11px 12px 13px}
+  .flowline .pbox .t{font-size:14px}
+  .flowline .pbox .f2{font-size:12px}
+
+  /* 数字条 */
+  .bars{margin:18px 0 4px}
+  .bar{display:flex; align-items:center; gap:10px; margin:7px 0}
+  .bar .lab{width:150px; font-size:14px; font-weight:700; color:var(--ink); flex:0 0 auto}
+  .bar .track{flex:1; background:var(--gray-bg); border-radius:999px; height:26px; overflow:hidden; border:1px solid var(--line)}
+  .bar .fill{height:100%; border-radius:999px}
+  .bar .num{width:92px; text-align:right; font-size:14px; color:var(--muted); flex:0 0 auto}
+  @media (max-width:560px){ .bar .lab{width:110px; font-size:13px} .bar .num{width:70px; font-size:13px} }
+
+  table{width:100%; border-collapse:collapse; margin-top:16px; font-size:15px}
+  th,td{border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top}
+  th{color:var(--ink); font-size:14px}
+  td code{background:var(--gray-bg); padding:1px 6px; border-radius:6px; font-size:13px; white-space:nowrap}
+  .pill{display:inline-block; padding:2px 10px; border-radius:999px; font-size:13px; font-weight:700; white-space:nowrap}
+  .p-blue{background:var(--blue-bg); color:var(--blue); border:1px solid var(--blue-line)}
+  .p-orange{background:var(--orange-bg); color:var(--orange); border:1px solid var(--orange-line)}
+  .p-green{background:var(--green-bg); color:var(--green); border:1px solid var(--green-line)}
+  .p-purple{background:var(--purple-bg); color:var(--purple); border:1px solid var(--purple-line)}
+  .p-red{background:var(--red-bg); color:var(--red); border:1px solid var(--red-line)}
+  .p-gray{background:var(--gray-bg); color:var(--gray); border:1px solid var(--gray-line)}
+
+  ul.tight{margin:10px 0 0; padding-left:22px}
+  ul.tight li{margin:6px 0; font-size:15px}
+  .grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:16px; margin-top:18px}
+  .mini{border:1px solid var(--line); border-radius:16px; padding:14px 16px; background:#fff}
+  .mini h4{margin:0 0 6px; font-size:16px; color:var(--ink)}
+  .mini p{margin:4px 0 0; font-size:14px}
+  .foot{text-align:center; color:var(--muted); font-size:13px; margin-top:26px}
+  .glow{display:inline-block; background:linear-gradient(90deg,var(--blue-bg),var(--green-bg)); border-radius:999px; padding:2px 12px; font-weight:700; color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="kicker">ELI5 · 图解</span>
+  <h1><code style="font-size:.62em">.scratch/</code> 是什么</h1>
+  <p class="sub">它不是「临时草稿夹」。它<strong>就是</strong>这个仓库的计划、决定和任务本身 —— 只不过全部写成 Markdown 文件，放在一个看不见的文件夹里。</p>
+</header>
+
+<!-- ══════════════ 1 · 目录地图 ══════════════ -->
+<section class="card">
+  <h2>先看地图：一个 feature 一个抽屉</h2>
+  <p class="lead">`.scratch/` 就是一个<strong>工单台</strong>。每个 feature 一个抽屉，抽屉里放着这个 feature 的全部纸。</p>
+  <p class="small">抽屉之间不共享文件；所有抽屉的清单写在最上面那份 <code>.scratch/README.md</code>。</p>
+
+  <div class="tree">
+<span class="row"><span class="f dir">.scratch/</span></span>
+<span class="row">├── <span class="f idx">README.md</span>                  <span class="note">← 索引：一行一个 feature</span></span>
+<span class="row">│</span>
+<span class="row">└── <span class="f dir">tool-declaration-visibility/</span>  <span class="note">← 一个 feature 一个抽屉</span></span>
+<span class="row">    ├── <span class="f seed">seed.md</span>                  <span class="note">← 种子：还没成形的一个想法</span></span>
+<span class="row">    ├── <span class="f map">map.md</span>                   <span class="note">← 决策图：一张迷雾里的路线图</span></span>
+<span class="row">    ├── <span class="f spec">spec.md</span>                  <span class="note">← 构建计划：定下来的「怎么做」</span></span>
+<span class="row">    ├── <span class="f ticket">issues/</span>                   <span class="note">← 票：<strong>一票一个文件</strong></span></span>
+<span class="row">    │   ├── <span class="f res">01-research-tool-table-shape.md</span></span>
+<span class="row">    │   ├── <span class="f ticket">04-grilling-visible-shape.md</span></span>
+<span class="row">    │   └── <span class="f ticket">10-docs-glossary-and-walkthrough.md</span></span>
+<span class="row">    ├── <span class="f res">research/</span>                <span class="note">← 一手调研（对源码/官方文档查出来的事实）</span></span>
+<span class="row">    └── <span class="f proto">prototype/</span>               <span class="note">← 一次性原型（画出来看看长什么样）</span></span>
+  </div>
+</section>
+
+<!-- ══════════════ 2 · 四种角色 ══════════════ -->
+<section class="card">
+  <h2>抽屉里的纸，只有四种角色</h2>
+  <p class="lead">seed 是「还没成形」，map 是「在决定」，spec 是「定了」，票是「在做」。</p>
+
+  <div class="roles">
+    <div class="role seed">
+      <h3>🌱 seed.md <span class="badge">想法</span></h3>
+      <p>一个想法、一份意向、一段对话的折叠。</p>
+      <p><strong>里面没有票</strong> —— 只有 seed，说明这件事还没被访谈过。</p>
+      <p>抬头<strong>没有</strong> <code>Status:</code> 行。</p>
+      <p>本仓库：33 份。</p>
+    </div>
+    <div class="role map">
+      <h3>🗺️ map.md <span class="badge">决策图</span></h3>
+      <p>一件事太大、单个会话装不下时画的路线图。</p>
+      <p>几节正文：<strong>目的地 / 笔记 / 已定的决定 / 尚未明确 / 任务清单</strong>。</p>
+      <p>它<strong>只产决定</strong>，不产代码。</p>
+      <p>本仓库：19 张图。</p>
+    </div>
+    <div class="role spec">
+      <h3>📐 spec.md <span class="badge">构建计划</span></h3>
+      <p>一次追问访谈折出来的那几节决定：问题陈述、用户故事、实现与测试决定、<strong>明确的「明确不做」</strong>。</p>
+      <p>它是实现票的<strong>来源</strong>，票只指回它、不重述理由。</p>
+      <p>本仓库：59 份。</p>
+    </div>
+    <div class="role ticket">
+      <h3>🎫 issues/NN-slug.md <span class="badge">票</span></h3>
+      <p>最小单位。<strong>一票一个文件</strong>，从 <code>01</code> 编号，永不合成一个文件。</p>
+      <p>每票<strong>自包含</strong>：做完一票就能把它那份上下文扔掉。</p>
+      <p>本仓库：511 张。</p>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4>research/ —— 事实</h4>
+      <p>去源码、去官方文档查出来的事实，一个 claim 一条出处（<code>文件:行号</code>）。</p>
+      <p>本仓库：26 个目录。</p>
+    </div>
+    <div class="mini">
+      <h4>prototype/ —— 形状</h4>
+      <p>一次性的、看完就扔的原型，用来回答「长什么样」这种画出来才说得清的问题。</p>
+      <p>本仓库：14 个目录。</p>
+    </div>
+    <div class="mini">
+      <h4>spec / map 抬头的 Status</h4>
+      <p>那<strong>不是状态</strong>，是完成度计数：<code>35/35 done</code>、<code>9 resolved + 7 done</code>。</p>
+      <p>票全部落地后必须改成实际完成度 —— 停在 <code>ready-for-agent</code> 会让下一个人以为还没开工。</p>
+    </div>
+    <div class="mini">
+      <h4>parity.md / report-*.md</h4>
+      <p>某张图的附属账：一张对照表、一份 HTML 报告。给图当证据，不参与状态流转。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 3 · 票的解剖 ══════════════ -->
+<section class="card">
+  <h2>一张票长什么样</h2>
+  <p class="lead">开头那几行，就是它的全部身份证。</p>
+  <div class="svgbox">
+  <svg viewBox="0 0 900 560" role="img" aria-label="一张票的解剖图">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#90cdf4"/>
+      </marker>
+    </defs>
+
+    <!-- 文件外框 -->
+    <rect x="24" y="24" width="440" height="512" rx="16" fill="#fff" stroke="#cbd5e0" stroke-width="2"/>
+    <rect x="24" y="24" width="440" height="16" rx="8" fill="#e2e8f0"/>
+
+    <!-- 抬头四行 + 标题 -->
+    <rect x="42" y="52" width="404" height="44" rx="9" fill="#edf2f7"/>
+    <text x="58" y="80" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="15" fill="#1a365d" font-weight="700"># 08: 工具详情里能读到用法说明</text>
+
+    <rect x="42" y="106" width="404" height="34" rx="8" fill="#ebf8ff" stroke="#90cdf4"/>
+    <text x="58" y="129" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#2b6cb0" font-weight="700">Type: implement</text>
+
+    <rect x="42" y="148" width="404" height="34" rx="8" fill="#f0fff4" stroke="#68d391"/>
+    <text x="58" y="171" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#276749" font-weight="700">Status: done</text>
+
+    <rect x="42" y="190" width="404" height="34" rx="8" fill="#fff5f5" stroke="#fc8181"/>
+    <text x="58" y="213" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#9b2c2c" font-weight="700">Blocked by: 07, 04, 05</text>
+
+    <rect x="42" y="232" width="404" height="34" rx="8" fill="#faf5ff" stroke="#b794f4"/>
+    <text x="58" y="255" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#6b46c1" font-weight="700">Part of: ../map.md</text>
+
+    <!-- 正文四段 -->
+    <rect x="42" y="286" width="404" height="46" rx="8" fill="#f7fafc" stroke="#e2e8f0"/>
+    <text x="58" y="315" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#2d3748">## 目标</text>
+
+    <rect x="42" y="338" width="404" height="46" rx="8" fill="#f7fafc" stroke="#e2e8f0"/>
+    <text x="58" y="367" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#2d3748">## 现状（开工前先复核）</text>
+
+    <rect x="42" y="390" width="404" height="46" rx="8" fill="#f7fafc" stroke="#e2e8f0"/>
+    <text x="58" y="419" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#2d3748">## 具体行为</text>
+
+    <rect x="42" y="442" width="404" height="46" rx="8" fill="#f7fafc" stroke="#e2e8f0"/>
+    <text x="58" y="471" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#2d3748">## 验收</text>
+
+    <rect x="42" y="494" width="404" height="30" rx="8" fill="#fffaf0" stroke="#f6ad55"/>
+    <text x="58" y="514" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13" fill="#9c4221">## 评论　　## 作答</text>
+
+    <!-- 右侧注解 + 引线 -->
+    <g stroke="#90cdf4" stroke-width="1.5" marker-end="url(#ar)" fill="none">
+      <path d="M 446 74 L 512 74"/>
+      <path d="M 446 123 L 512 123"/>
+      <path d="M 446 165 L 512 165"/>
+      <path d="M 446 207 L 512 207"/>
+      <path d="M 446 249 L 512 249"/>
+      <path d="M 446 309 L 512 309"/>
+      <path d="M 446 509 L 512 509"/>
+    </g>
+    <g font-size="15" fill="#2d3748" font-weight="600">
+      <text x="520" y="79">票名：一句话说清要解决什么</text>
+      <text x="520" y="128">Type：这是<tspan fill="#2b6cb0">哪一类活</tspan></text>
+      <text x="520" y="170">Status：这张票<tspan fill="#276749">走到哪一步</tspan></text>
+      <text x="520" y="212">Blocked by：要先等哪几张票</text>
+      <text x="520" y="254">Part of：我属于哪张图</text>
+      <text x="520" y="314">正文四段：干什么 / 现状 / 怎么做 / 验收</text>
+      <text x="520" y="514">讨论追加在「评论」下；决策票的答案写在「作答」下</text>
+    </g>
+  </svg>
+  </div>
+</section>
+
+<!-- ══════════════ 4 · Type ══════════════ -->
+<section class="card">
+  <h2><code style="font-size:.72em">Type:</code> 这张票是「哪一类活」</h2>
+  <p class="lead">前三类产<strong>决定</strong>，后两类产<strong>东西</strong>。</p>
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="pill p-green">research</span> 找事实</h4>
+      <p>去源码和官方文档查事实，产出 <code>research/NN-*.md</code>。</p>
+      <p><strong>AFK</strong>：不需要人在场，后台跑完就交回来。</p>
+    </div>
+    <div class="mini">
+      <h4><span class="pill p-red">prototype</span> 出形状</h4>
+      <p>画一帧、做一次性原型，回答「长什么样」。</p>
+      <p><strong>HITL</strong>：维护者要过目。</p>
+    </div>
+    <div class="mini">
+      <h4><span class="pill p-purple">grilling</span> 问到底</h4>
+      <p>一轮轮追问，逼近真正要拍的那个决定。</p>
+      <p><strong>HITL</strong>：不许 agent 自问自答。</p>
+    </div>
+    <div class="mini">
+      <h4><span class="pill p-gray">task</span> 要动手的决定</h4>
+      <p>前面几类之外、需要动手才能定下来的决定。</p>
+    </div>
+    <div class="mini">
+      <h4><span class="pill p-orange">implement</span> 动手实现</h4>
+      <p>图走完之后由 <code>/to-tickets</code> 拆出的构建切片。</p>
+      <p>它<strong>不是图的一部分</strong>：由 <code>/implement</code> 认领。</p>
+    </div>
+    <div class="mini">
+      <h4>本仓库实际用量</h4>
+      <p><code>implement</code> 303 · <code>grilling</code> 92 · <code>research</code> 32 · <code>prototype</code> 25 · <code>task</code> 8。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 5 · 状态机 ══════════════ -->
+<section class="card">
+  <h2>状态怎么流转</h2>
+  <p class="lead">这里有<strong>三条</strong>状态机。认错了词，就以为票走错了路。</p>
+  <div class="svgbox">
+  <svg viewBox="0 0 920 620" role="img" aria-label="三条状态机">
+    <defs>
+      <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#718096"/>
+      </marker>
+      <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#90cdf4"/>
+      </marker>
+    </defs>
+
+    <!-- ── 泳道 1：决策票 ── -->
+    <rect x="16" y="20" width="888" height="130" rx="18" fill="#faf5ff" stroke="#b794f4" stroke-width="1.5"/>
+    <text x="36" y="52" font-size="17" font-weight="800" fill="#6b46c1">① 决策票 · 回答「该怎么做」</text>
+    <text x="36" y="76" font-size="13" fill="#718096">Type: research / prototype / grilling / task　·　产出是决定，不是交付物</text>
+
+    <rect x="300" y="92" width="170" height="44" rx="10" fill="#ebf8ff" stroke="#4299e1" stroke-width="2"/>
+    <text x="385" y="120" font-size="15" font-weight="700" text-anchor="middle" fill="#2b6cb0" font-family="ui-monospace,Menlo,monospace">ready-for-agent</text>
+    <line x1="470" y1="114" x2="520" y2="114" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <text x="495" y="106" font-size="12" text-anchor="middle" fill="#718096">开工</text>
+
+    <rect x="525" y="92" width="140" height="44" rx="10" fill="#fffaf0" stroke="#dd6b20" stroke-width="2"/>
+    <text x="595" y="120" font-size="15" font-weight="700" text-anchor="middle" fill="#9c4221" font-family="ui-monospace,Menlo,monospace">claimed</text>
+    <line x1="665" y1="114" x2="715" y2="114" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <text x="690" y="106" font-size="12" text-anchor="middle" fill="#718096">写下答案</text>
+
+    <rect x="720" y="92" width="160" height="44" rx="10" fill="#f0fff4" stroke="#38a169" stroke-width="2"/>
+    <text x="800" y="120" font-size="15" font-weight="700" text-anchor="middle" fill="#276749" font-family="ui-monospace,Menlo,monospace">resolved</text>
+
+    <!-- ── 泳道 2：实现票 ── -->
+    <rect x="16" y="168" width="888" height="196" rx="18" fill="#fffaf0" stroke="#f6ad55" stroke-width="1.5"/>
+    <text x="36" y="200" font-size="17" font-weight="800" fill="#9c4221">② 实现票 · 真正做出来</text>
+    <text x="36" y="224" font-size="13" fill="#718096">Type: implement　·　由 /implement 认领，跟决策图不是同一批</text>
+
+    <rect x="300" y="240" width="170" height="44" rx="10" fill="#ebf8ff" stroke="#4299e1" stroke-width="2"/>
+    <text x="385" y="268" font-size="15" font-weight="700" text-anchor="middle" fill="#2b6cb0" font-family="ui-monospace,Menlo,monospace">ready-for-agent</text>
+    <line x1="470" y1="262" x2="520" y2="262" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+
+    <rect x="525" y="240" width="140" height="44" rx="10" fill="#fffaf0" stroke="#dd6b20" stroke-width="2"/>
+    <text x="595" y="268" font-size="15" font-weight="700" text-anchor="middle" fill="#9c4221" font-family="ui-monospace,Menlo,monospace">claimed</text>
+    <line x1="665" y1="262" x2="715" y2="262" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <text x="690" y="254" font-size="12" text-anchor="middle" fill="#718096">写完代码</text>
+
+    <rect x="720" y="240" width="160" height="44" rx="10" fill="#f0fff4" stroke="#38a169" stroke-width="2"/>
+    <text x="800" y="268" font-size="15" font-weight="700" text-anchor="middle" fill="#276749" font-family="ui-monospace,Menlo,monospace">done</text>
+
+    <line x1="800" y1="284" x2="800" y2="312" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <rect x="700" y="316" width="180" height="44" rx="10" fill="#faf5ff" stroke="#805ad5" stroke-width="2"/>
+    <text x="790" y="344" font-size="14" font-weight="700" text-anchor="middle" fill="#6b46c1" font-family="ui-monospace,Menlo,monospace">ready-for-walkthrough</text>
+    <text x="286" y="332" font-size="13" text-anchor="end" fill="#718096">自动化那半全做完，只剩人</text>
+    <text x="286" y="352" font-size="13" text-anchor="end" fill="#718096">在真终端里逐项走查</text>
+
+    <!-- ── 泳道 3：分诊 ── -->
+    <rect x="16" y="368" width="888" height="236" rx="18" fill="#f7fafc" stroke="#cbd5e0" stroke-width="1.5"/>
+    <text x="36" y="400" font-size="17" font-weight="800" fill="#4a5568">③ 分诊 · 这张票该谁接</text>
+    <text x="36" y="424" font-size="13" fill="#718096">另一套角色词，装在同一个 Status: 行里　·　本仓库目前实际没在用</text>
+
+    <rect x="150" y="446" width="160" height="44" rx="10" fill="#edf2f7" stroke="#718096" stroke-width="2"/>
+    <text x="230" y="474" font-size="14" font-weight="700" text-anchor="middle" fill="#4a5568" font-family="ui-monospace,Menlo,monospace">needs-triage</text>
+
+    <line x1="310" y1="468" x2="356" y2="468" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <rect x="360" y="446" width="150" height="44" rx="10" fill="#edf2f7" stroke="#718096" stroke-width="2"/>
+    <text x="435" y="474" font-size="14" font-weight="700" text-anchor="middle" fill="#4a5568" font-family="ui-monospace,Menlo,monospace">needs-info</text>
+    <path d="M 435 446 C 435 424, 320 424, 300 446" fill="none" stroke="#cbd5e0" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
+    <text x="368" y="418" font-size="12" fill="#718096">报告者补完料就回来</text>
+
+    <line x1="230" y1="490" x2="230" y2="516" stroke="#718096" stroke-width="2.5"/>
+    <line x1="150" y1="516" x2="690" y2="516" stroke="#718096" stroke-width="2.5"/>
+    <line x1="150" y1="516" x2="150" y2="536" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <line x1="430" y1="516" x2="430" y2="536" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+    <line x1="690" y1="516" x2="690" y2="536" stroke="#718096" stroke-width="2.5" marker-end="url(#ar2)"/>
+
+    <rect x="60" y="540" width="180" height="44" rx="10" fill="#f0fff4" stroke="#38a169" stroke-width="2"/>
+    <text x="150" y="568" font-size="13" font-weight="700" text-anchor="middle" fill="#276749" font-family="ui-monospace,Menlo,monospace">ready-for-agent</text>
+    <rect x="340" y="540" width="180" height="44" rx="10" fill="#faf5ff" stroke="#805ad5" stroke-width="2"/>
+    <text x="430" y="568" font-size="13" font-weight="700" text-anchor="middle" fill="#6b46c1" font-family="ui-monospace,Menlo,monospace">ready-for-human</text>
+    <rect x="600" y="540" width="160" height="44" rx="10" fill="#fff5f5" stroke="#e53e3e" stroke-width="2"/>
+    <text x="680" y="568" font-size="13" font-weight="700" text-anchor="middle" fill="#9b2c2c" font-family="ui-monospace,Menlo,monospace">wontfix</text>
+  </svg>
+  </div>
+
+  <table>
+    <thead><tr><th>状态值</th><th>什么意思</th><th>谁写</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p-blue">ready-for-agent</span></td><td>票写全了，可以交给一个<strong>不用人在场</strong>的 agent 去跑。</td><td>拆票时写死；实现票的<strong>起点</strong>。</td></tr>
+      <tr><td><span class="pill p-orange">claimed</span></td><td>有人<strong>占下了</strong>这张票，正在做。这是并发会话之间的「我不碰」。</td><td>开工前写。是 <strong>中途</strong>状态，不算完成。</td></tr>
+      <tr><td><span class="pill p-green">resolved</span></td><td>决策票有答案了 —— 答案在票底的 <code>## 作答</code> 里。</td><td>决策票的<strong>终点</strong>。</td></tr>
+      <tr><td><span class="pill p-green">done</span></td><td>实现票做完了，验收项都过了。</td><td>实现票的<strong>终点</strong>。</td></tr>
+      <tr><td><span class="pill p-purple">ready-for-walkthrough</span></td><td>能自动化的部分全做完了，<strong>只等人</strong>在真终端里逐项走查。</td><td>它<strong>不是</strong> <code>ready-for-human</code> —— 那是「必须人来实现」，这是「人来看一眼」。</td></tr>
+      <tr><td><span class="pill p-gray">needs-triage</span> <span class="pill p-gray">needs-info</span> <span class="pill p-gray">ready-for-human</span> <span class="pill p-gray">wontfix</span></td><td>分诊那套：等人评估 / 等人补料 / 必须人来做 / 不处理。</td><td>照 <code>/triage</code> 技能走。本仓库目前实际只用了实现/决策那两套。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 6 · 流水线 ══════════════ -->
+<section class="card">
+  <h2>一整条流水线</h2>
+  <p class="lead">从一句话，到代码落地。</p>
+
+  <div class="pipe">
+    <div class="pbox y"><p class="t">🌱 seed.md</p><p class="f2">一个想法</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox b"><p class="t">📐 spec.md</p><p class="f2">构建计划</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox o"><p class="t">🎫 票 NN.md</p><p class="f2">一票一个文件</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox g"><p class="t">✅ done</p><p class="f2">代码落地</p></div>
+  </div>
+  <div class="flowline" style="margin-top:-2px">
+    <div class="skill" style="flex:1 1 150px; max-width:230px">/grill-with-docs<br><span style="color:#2d3748">追问到定下来</span></div>
+    <div class="skill" style="flex:1 1 150px; max-width:230px">/to-tickets<br><span style="color:#2d3748">拆成纵切票</span></div>
+    <div class="skill" style="flex:1 1 150px; max-width:230px">/implement<br><span style="color:#2d3748">写代码 + 跑测试</span></div>
+  </div>
+
+  <h2 style="margin-top:34px; font-size:clamp(19px,2.9vw,24px)">另一条路：迷雾里的大题目</h2>
+  <p class="lead" style="font-size:clamp(16px,2.4vw,19px)">一件事太大、单个会话装不下 → 先画图，别急着写代码。</p>
+
+  <div class="pipe">
+    <div class="pbox y"><p class="t">🌀 迷雾</p><p class="f2">太大，装不下</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox p"><p class="t">🗺️ map.md</p><p class="f2">决策图</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox o"><p class="t">🎫 决策票</p><p class="f2">claimed → resolved</p></div>
+    <div class="parrow">→</div>
+    <div class="pbox b"><p class="t">📐 spec.md</p><p class="f2">交棒：折成构建计划</p></div>
+  </div>
+  <div class="flowline" style="margin-top:-2px">
+    <div class="skill" style="flex:1 1 150px; max-width:230px">/wayfinder<br><span style="color:#2d3748">画图、逐张推进</span></div>
+    <div class="skill" style="flex:1 1 150px; max-width:230px">/research · /prototype · /grilling</div>
+    <div class="skill" style="flex:1 1 150px; max-width:230px">handoff 交棒</div>
+  </div>
+
+  <ul class="tight">
+    <li><strong>图走完 ≠ 全部做完。</strong> 设计票全关掉，图就算走完，哪怕实现票还开着。</li>
+    <li><strong>图留着当决策记录。</strong> 所以 <code>map.md</code> 和 <code>spec.md</code> 可以同时存在。</li>
+    <li><strong>交棒不能绕开。</strong> 直接开实现票，会丢掉决定之间的那些链接。</li>
+    <li><strong>被排掉的方向要关掉，不实现。</strong> 决策票一改形状，对应的票就改或关。</li>
+  </ul>
+</section>
+
+<!-- ══════════════ 7 · 面板怎么读 ══════════════ -->
+<section class="card">
+  <h2>右侧面板里看到的是什么</h2>
+  <p class="lead">面板读的<strong>就是这些 Markdown 文件</strong>，不是另一份数据库。</p>
+  <p class="center" style="font-size:16px">本地 markdown 后端只有一条折叠规则：</p>
+  <p class="center" style="font-size:clamp(16px,2.5vw,20px); font-weight:800; color:var(--ink)">
+    <code>resolved</code> / <code>done</code> / <code>closed</code> / <code>completed</code> → <span class="pill p-green">关闭</span><br>
+    <span style="font-weight:400; color:var(--muted)">其它一切</span> → <span class="pill p-blue">打开</span>
+  </p>
+  <ul class="tight">
+    <li><code>map.md</code> 是编号 <code>00</code> 的那张票，<strong>永远置顶</strong>；子票是 <code>01</code>、<code>02</code>……</li>
+    <li>面板的「被挡住」= 票顶的 <code>Blocked by:</code> 那几行。</li>
+    <li>面板的「已认领」= <code>Assignees:</code> 那行 / <code>claimed</code> 状态。</li>
+    <li>新写的票会带上 <code>## Comments</code> 与 <code>## Answer</code> 两段骨架 —— 那是面板认得的位置。</li>
+  </ul>
+</section>
+
+<!-- ══════════════ 8 · 真实数字 ══════════════ -->
+<section class="card">
+  <h2>这台工单台现在有多满</h2>
+  <p class="lead">511 张票，60 个抽屉。</p>
+  <div class="bars">
+    <div class="bar"><span class="lab">done（做完）</span><span class="track"><span class="fill" style="width:66.7%; background:var(--green)"></span></span><span class="num">341 张</span></div>
+    <div class="bar"><span class="lab">resolved（定了）</span><span class="track"><span class="fill" style="width:30.9%; background:var(--purple)"></span></span><span class="num">158 张</span></div>
+    <div class="bar"><span class="lab">ready-for-walkthrough</span><span class="track"><span class="fill" style="width:2.2%; background:var(--orange)"></span></span><span class="num">11 张</span></div>
+    <div class="bar"><span class="lab">ready-for-agent</span><span class="track"><span class="fill" style="width:0.6%; background:var(--blue)"></span></span><span class="num">1 张</span></div>
+  </div>
+  <div class="grid2">
+    <div class="mini"><h4>形态分布</h4><p>spec 59 · map 19 · seed 33 · parity 1</p><p>research 目录 26 · prototype 目录 14 · issues 目录 60</p></div>
+    <div class="mini"><h4>票的类型分布</h4><p>implement 303 · grilling 92 · research 32 · prototype 25 · task 8</p></div>
+  </div>
+</section>
+
+<!-- ══════════════ 9 · 护栏 ══════════════ -->
+<section class="card">
+  <h2>三条护栏脚本</h2>
+  <p class="lead">纸多了会烂，所以有脚本盯着。</p>
+  <div class="grid2">
+    <div class="mini">
+      <h4><code>scripts/wayfinder-check.py</code></h4>
+      <p>拿图的「任务清单」跟 <code>issues/</code> 里的文件<strong>对账</strong>：条目数必须相等，每张子票都要有 <code>Type:</code> / <code>Status:</code> / <code>Part of:</code> / <code>Blocked by:</code>。</p>
+      <p>对不上就<strong>非零退出</strong> —— 不许把「被拒」读成「通过」。</p>
+    </div>
+    <div class="mini">
+      <h4><code>scripts/check-language.py</code></h4>
+      <p>中文只许上升：翻过的段落不许被改回英文。</p>
+      <p>一份 tracker 文件都没有也会报错。</p>
+    </div>
+    <div class="mini">
+      <h4><code>scripts/check-doc-size.py</code></h4>
+      <p>给活文档定「压表达」规则：单元 ≤500 字符，只删「别处已有一份的复述」。</p>
+      <p><strong>不删任何文件。</strong></p>
+    </div>
+    <div class="mini">
+      <h4>数票的两条命令</h4>
+      <p><code>ls .scratch/*/issues/*.md | wc -l</code></p>
+      <p><code>grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c</code></p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 10 · 术语 ══════════════ -->
+<section class="card">
+  <h2>六个绕口的词</h2>
+  <div class="grid2">
+    <div class="mini"><h4>slug</h4><p>文件名的短标识：<code>issues/04-grilling-visible-shape.md</code> 里那截。磁盘上的定位符，叙述里要写名字。</p></div>
+    <div class="mini"><h4>feature 目录</h4><p>tracker 的存放单位。一个 feature 一个目录，feature 之间不共享文件。</p></div>
+    <div class="mini"><h4>交棒 handoff</h4><p>图走完那一刻，把图上互相链接的决定<strong>收束成 spec</strong>。绕开它直接开票，会丢掉那些链接。</p></div>
+    <div class="mini"><h4>认领 claim</h4><p>开工前把票<strong>占下来</strong>。叙述说「认领」，磁盘上写 <code>claimed</code>。</p></div>
+    <div class="mini"><h4>阻塞边 <code>Blocked by</code></h4><p>票顶一行记的依赖边。列出的每张票都到终态，这张票才解阻塞。</p></div>
+    <div class="mini"><h4>frontier</h4><p>下一批可以动的票：open、没被阻塞、也没被认领，<strong>编号最小</strong>的当选；<code>Type: implement</code> 一律跳过。</p></div>
+  </div>
+</section>
+
+<!-- ══════════════ 11 · 收尾 ══════════════ -->
+<section class="card">
+  <h2>一句话记住</h2>
+  <p class="lead" style="font-size:clamp(18px,3vw,26px)">
+    <span class="glow">seed 是想法，map 是决定，spec 是计划，票是干活</span>
+  </p>
+  <p class="center" style="font-size:17px; margin-top:14px">
+    状态就三句：<strong>决策票</strong> claimed → resolved；<strong>实现票</strong> ready-for-agent → done（只等人看就停在 ready-for-walkthrough）；<strong>分诊</strong> 另有一套五个词。
+  </p>
+  <p class="center" style="font-size:15px; margin-top:10px; color:var(--muted)">
+    这套流程来自 <code>mattpocock/skills</code>（本机装的是中文 fork <code>vinvcn/mattpocock-skills-zh-CN</code>）：<code>/wayfinder</code> 画图 · <code>/research</code> 找事实 · <code>/prototype</code> 出形状 · <code>/grilling</code> 问到底 · <code>/to-spec</code> 折计划 · <code>/to-tickets</code> 拆票 · <code>/implement</code> 干活。
+  </p>
+</section>
+
+<p class="foot">图解 · 2026-10-21 · 数据取自 <code>.scratch/</code> 与 <code>docs/agents/issue-tracker.md</code> · 规范见 <code>CONTEXT.md</code> 的「流程」一节</p>
+
+</div>
+</body>
+</html>
